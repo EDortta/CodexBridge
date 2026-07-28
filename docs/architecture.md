@@ -4,10 +4,10 @@
 
 O sistema tem dois componentes independentes:
 
-1. `gateway` no `frida.inovacaosistemas.com.br:8443`
-2. `codex-bridge-agent` no executor `T610`
+1. `gateway` no `frida`
+2. `codex-bridge-agent` no executor com os repositórios locais, preferencialmente `devel3`
 
-O ChatGPT conversa apenas com o `gateway`, através de um servidor MCP remoto exposto em `HTTPS /mcp`. O `gateway` não acessa o `T610` por SSH. O `T610` abre uma conexão reversa `wss://frida.inovacaosistemas.com.br:8443/agent/ws` e fica escutando tarefas.
+O ChatGPT conversa apenas com o `gateway`, através de um servidor MCP remoto exposto em `HTTPS /mcp` no `frida`. O `gateway` não acessa o executor por SSH. O executor abre uma conexão reversa `wss://frida.inovacaosistemas.com.br/agent/ws` e fica escutando tarefas.
 
 ## Decisões arquiteturais
 
@@ -22,6 +22,13 @@ O ChatGPT conversa apenas com o `gateway`, através de um servidor MCP remoto ex
 * Protocolo: WebSocket seguro em `/agent/ws`
 * Justificativa: canal full-duplex simples para heartbeat, despacho, ACK, logs incrementais e cancelamento
 * Trade-off: exige controle de reconexão e deduplicação; em troca, elimina SSH de entrada e simplifica entrega em tempo real
+
+### Topologia operacional recomendada
+
+* `frida` é o hub público 24x7 e deve hospedar o gateway MCP.
+* `devel3` é o executor 24x7 mais adequado quando os repositórios locais são necessários.
+* `dom1` pode continuar servindo workloads adjacentes, mas não é o runtime principal do bridge.
+* A ponte reversa já existente em `devel3 -> frida` nas portas `2200/2204` continua útil para acesso administrativo.
 
 ### Persistência
 
@@ -40,13 +47,13 @@ O ChatGPT conversa apenas com o `gateway`, através de um servidor MCP remoto ex
 
 ## Fluxo de comunicação
 
-1. O ChatGPT conecta o MCP remoto em `https://frida.inovacaosistemas.com.br:8443/mcp`.
+1. O ChatGPT conecta o MCP remoto em um hostname dedicado no `frida`, por exemplo `https://codexbridge.inovacaosistemas.com.br/mcp`.
 2. O ChatGPT chama `list_executors`, `executor_status` e `list_projects`.
 3. Ao chamar `submit_codex_task`, o gateway valida autenticação, executor, projeto, política e prazo.
 4. Se o executor estiver offline:
    * `run_when_available=false` -> rejeita.
    * `run_when_available=true` -> persiste em fila.
-5. O agente do `T610` mantém `wss` com heartbeat.
+5. O agente do executor, idealmente no `devel3`, mantém `wss` com heartbeat.
 6. Quando o executor está disponível, o gateway envia `task.dispatch`.
 7. O agente confirma `ACK`, executa `codex exec` localmente e transmite `task.log`, `task.progress`, `task.result`.
 8. O gateway persiste tudo e responde aos tools MCP.
@@ -75,7 +82,14 @@ Contra:
 * PostgreSQL já cobre persistência, fila simples e recuperação.
 * Menos componentes para operar no Frida.
 
+## Ambiente real levantado em 2026-07-28
+
+* `frida` é acessível por `ssh -p 2200 esteban@frida.inovacaosistemas.com.br`.
+* `frida` já roda `nginx` em `80/443`.
+* `frida` já tem `mosquitto` ocupando `*:8080`.
+* Portanto, o gateway deve escutar em outra porta local, por exemplo `127.0.0.1:18080`, com proxy reverso no `nginx`.
+* `devel3` é a máquina com os repositórios locais e deve ser tratada como executor primário.
+
 ## Observação sobre autenticação ChatGPT
 
 O MCP do ChatGPT suporta `OAuth`, `No Authentication` e `Mixed Authentication` segundo a documentação oficial consultada em `2026-07-28`. O MVP deste repositório implementa autenticação por bearer token no servidor MCP e deixa o adaptador OAuth isolado para a fase de endurecimento, porque o foco inicial é fechar o plano de controle, o canal reverso e a execução segura do `codex exec`.
-

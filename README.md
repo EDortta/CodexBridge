@@ -2,10 +2,16 @@
 
 CodexBridge conecta o ChatGPT a executores remotos que rodam `codex exec` sem expor SSH público nem permitir caminhos arbitrários.
 
+Topologia recomendada neste ambiente:
+
+* `frida` publica o gateway MCP.
+* `devel3` executa o agente e acessa os repositórios locais.
+* `dom1` pode continuar servindo outros workloads, sem ser o runtime principal do bridge.
+
 O repositório implementa:
 
 * `gateway/`: servidor MCP remoto e plano de controle.
-* `agent/`: executor reverso `codex-bridge-agent` para máquinas como a `T610`.
+* `agent/`: executor reverso `codex-bridge-agent` para máquinas como o `devel3`.
 * `shared/`: contratos, schemas e utilitários compartilhados.
 * `deploy/`: exemplos de `systemd`, `nginx` e instalação.
 * `docs/`: arquitetura, ameaça, protocolo, operação e segurança.
@@ -37,4 +43,3 @@ O projeto usa apenas capacidades verificadas localmente em `2026-07-28`:
 * `codex exec resume`
 
 Nenhuma flag fora dessa lista é presumida pela implementação.
-
