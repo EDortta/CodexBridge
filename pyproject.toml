@@ -8,11 +8,11 @@ version = "0.1.0"
 description = "Secure MCP gateway and reverse executor bridge for Codex CLI"
 requires-python = ">=3.10"
 dependencies = [
+  "aiomysql>=0.2.0",
   "aiosqlite>=0.20.0",
   "fastapi>=0.116.0",
   "httpx>=0.28.0",
   "prometheus-client>=0.22.0",
-  "PyMySQL>=1.1.1",
   "pydantic>=2.9.0",
   "pydantic-settings>=2.6.0",
   "python-dateutil>=2.9.0",
