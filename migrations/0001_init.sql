@@ -35,7 +35,9 @@ create table if not exists tasks (
   last_error text null,
   command_json text null,
   session_id varchar(255) null,
-  result_json text null
+  result_json text null,
+  approval_state varchar(64) null,
+  approval_reason text null
 );
 
 create table if not exists task_logs (
