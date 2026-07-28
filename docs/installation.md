@@ -32,3 +32,5 @@
 ## DNS e hostname
 
 Prefira um subdomínio dedicado para o gateway, por exemplo `codexbridge.inovacaosistemas.com.br`, apontando para o mesmo IP público já usado pelo `frida`.
+
+No ambiente atual, o endpoint público do bridge é `https://codexbridge.inovacaosistemas.com.br:8443`. O agente deve usar `wss://codexbridge.inovacaosistemas.com.br:8443/agent/ws`.
