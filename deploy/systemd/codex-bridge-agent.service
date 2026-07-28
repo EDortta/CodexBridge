@@ -9,7 +9,7 @@ User=codexbridge
 Group=codexbridge
 WorkingDirectory=/opt/codex-bridge
 EnvironmentFile=/etc/codex-bridge-agent/env
-ExecStart=/usr/bin/python3 -m agent.codex_bridge_agent.service
+ExecStart=/opt/codex-bridge/.venv/bin/python -m agent.codex_bridge_agent.service
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
@@ -23,4 +23,3 @@ LimitNOFILE=8192
 
 [Install]
 WantedBy=multi-user.target
-

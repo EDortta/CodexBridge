@@ -9,7 +9,7 @@ User=codexbridge
 Group=codexbridge
 WorkingDirectory=/opt/codex-bridge
 EnvironmentFile=/etc/codex-bridge/env
-ExecStart=/usr/local/bin/uvicorn gateway.app.main:app --host 127.0.0.1 --port 8080
+ExecStart=/opt/codex-bridge/.venv/bin/uvicorn gateway.app.main:app --host 127.0.0.1 --port 8080
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
@@ -22,4 +22,3 @@ TasksMax=256
 
 [Install]
 WantedBy=multi-user.target
-

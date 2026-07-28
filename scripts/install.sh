@@ -10,8 +10,9 @@ rsync -a --delete \
   --exclude '__pycache__' \
   "$ROOT_DIR"/ "$TARGET_DIR"/
 
-python3 -m pip install "$TARGET_DIR"
+python3 -m venv "$TARGET_DIR/.venv"
+"$TARGET_DIR/.venv/bin/pip" install --upgrade pip
+"$TARGET_DIR/.venv/bin/pip" install "$TARGET_DIR"
 
 echo "Projeto sincronizado em $TARGET_DIR"
 echo "Ajuste /etc/codex-bridge/env e /etc/codex-bridge-agent/env antes de habilitar os servicos."
-

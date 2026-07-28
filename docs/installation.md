@@ -5,8 +5,8 @@
 1. Criar usuário:
    `sudo useradd --system --create-home --home-dir /var/lib/codex-bridge codexbridge`
 2. Copiar o projeto para `/opt/codex-bridge`.
-3. Instalar dependências:
-   `python3 -m pip install /opt/codex-bridge`
+3. Instalar dependências no `venv`:
+   `python3 -m venv /opt/codex-bridge/.venv && /opt/codex-bridge/.venv/bin/pip install /opt/codex-bridge`
 4. Criar `/etc/codex-bridge/env` a partir de `.env.example`.
 5. Ajustar `/etc/codex-bridge/registry.json`.
 6. Instalar `deploy/systemd/codex-bridge-gateway.service`.
@@ -25,4 +25,3 @@
 6. Instalar `deploy/systemd/codex-bridge-agent.service`.
 7. Habilitar:
    `sudo systemctl enable --now codex-bridge-agent`
-
