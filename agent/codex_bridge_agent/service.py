@@ -119,14 +119,35 @@ class AgentService:
                 ).model_dump_json()
             )
 
-        result = await self.runner.run_task(
-            task_id=task_id,
-            project_root=Path(root),
-            instruction=f"{BASE_PROMPT}\n\nUser task:\n{envelope.payload['instruction']}",
-            timeout_seconds=int(envelope.payload["timeout_seconds"]),
-            continue_session_id=envelope.payload.get("continue_session_id"),
-            send_log=send_log,
-        )
+        try:
+            result = await self.runner.run_task(
+                task_id=task_id,
+                project_root=Path(root),
+                instruction=f"{BASE_PROMPT}\n\nUser task:\n{envelope.payload['instruction']}",
+                timeout_seconds=int(envelope.payload["timeout_seconds"]),
+                continue_session_id=envelope.payload.get("continue_session_id"),
+                send_log=send_log,
+            )
+        except Exception as exc:
+            await send_log("stderr", f"Codex execution failed before completion: {exc}")
+            result = {
+                "task_id": task_id,
+                "final_state": TaskState.FAILED.value,
+                "error": str(exc),
+                "return_code": -1,
+                "duration_seconds": 0,
+                "command": [],
+                "command_redacted": [],
+                "codex_session_id": None,
+                "codex_version": "",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "last_message": "",
+                "pre_git": {},
+                "post_git": {},
+                "tests_ran": [],
+                "no_changes": True,
+                "raw_events": [],
+            }
         await websocket.send(self._envelope(AgentMessageType.TASK_RESULT, result).model_dump_json())
 
     def _envelope(self, message_type: AgentMessageType, payload: dict) -> AgentEnvelope:
