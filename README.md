@@ -43,3 +43,4 @@ O projeto usa apenas capacidades verificadas localmente em `2026-07-28`:
 * `codex exec resume`
 
 Nenhuma flag fora dessa lista é presumida pela implementação.
+# CodexBridge
