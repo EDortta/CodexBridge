@@ -1,0 +1,26 @@
+[Unit]
+Description=Codex Bridge Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codexbridge
+Group=codexbridge
+WorkingDirectory=/opt/codex-bridge
+EnvironmentFile=/etc/codex-bridge-agent/env
+ExecStart=/usr/bin/python3 -m agent.codex_bridge_agent.service
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/projects /var/lib/codex-bridge-agent /home/codexbridge/.codex
+MemoryMax=2G
+TasksMax=256
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target
+

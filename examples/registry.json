@@ -1,0 +1,39 @@
+{
+  "executors": [
+    {
+      "executor_id": "T610",
+      "display_name": "T610",
+      "machine_token": "replace-with-long-random-token",
+      "max_concurrent_tasks": 1,
+      "allowed_projects": [
+        "codexbridge-demo"
+      ],
+      "enabled": true,
+      "expected_timezone": "America/Sao_Paulo",
+      "expected_online_windows": [
+        "05:05-20:40"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "project_id": "codexbridge-demo",
+      "name": "CodexBridge Demo",
+      "path": "/srv/projects/codexbridge-demo",
+      "allowed_modes": [
+        "analyze",
+        "review",
+        "edit",
+        "test",
+        "implement"
+      ],
+      "max_timeout_seconds": 3600,
+      "sensitive_patterns": [
+        "deploy",
+        "migration",
+        "push"
+      ],
+      "enabled": true
+    }
+  ]
+}

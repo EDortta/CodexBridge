@@ -1,0 +1,23 @@
+{
+  "projects": [
+    {
+      "project_id": "codexbridge-demo",
+      "name": "CodexBridge Demo",
+      "path": "/srv/projects/codexbridge-demo",
+      "allowed_modes": [
+        "analyze",
+        "review",
+        "edit",
+        "test",
+        "implement"
+      ],
+      "max_timeout_seconds": 3600,
+      "sensitive_patterns": [
+        "deploy",
+        "migration",
+        "push"
+      ],
+      "enabled": true
+    }
+  ]
+}
