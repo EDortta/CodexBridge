@@ -2,7 +2,8 @@
 
 ## Verificações básicas
 
-* `curl -H "Authorization: Bearer ... " https://codexbridge.inovacaosistemas.com.br/healthz`
+* `curl -sk https://codexbridge.inovacaosistemas.com.br:8443/healthz`
+* `curl -sk https://codexbridge.inovacaosistemas.com.br:8443/.well-known/oauth-authorization-server`
 * `systemctl status codex-bridge-gateway`
 * `systemctl status codex-bridge-agent`
 

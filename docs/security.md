@@ -15,7 +15,6 @@
 
 ## Lacunas assumidas para endurecimento
 
-* OAuth/Mixed Authentication no MCP do ChatGPT ainda não está concluído.
 * rate limiting ainda não foi ligado no middleware HTTP.
 * rotação automatizada de tokens ainda não foi implementada.
 * cgroups finos por subprocesso do `codex exec` ainda dependem do host do agente.
@@ -27,6 +26,5 @@
 * colocar o gateway atrás de `nginx` com TLS válido;
 * executar o agente em conta dedicada `codexbridge`;
 * limitar os diretórios liberados em `ReadWritePaths`;
-* usar um bearer token MCP longo e trocado regularmente;
-* evoluir o MCP para OAuth antes de expor o conector a mais de um operador.
-
+* manter o modo bearer apenas para compatibilidade administrativa;
+* operar o uso humano do ChatGPT exclusivamente via OAuth.

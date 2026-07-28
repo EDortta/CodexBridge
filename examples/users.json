@@ -1,0 +1,20 @@
+{
+  "users": [
+    {
+      "user_id": "admin",
+      "email": "admin@example.com",
+      "password_hash": "pbkdf2_sha256$600000$i5bjWyIkeqmiK7hOrL0g2Q$_sGD6Ia_tKwSQcCj8sLn4DvA5PbmGGCyilYzklVV4lo",
+      "roles": ["admin"],
+      "allowed_projects": ["codexbridge"],
+      "scopes": [
+        "codexbridge.read",
+        "codexbridge.task.submit",
+        "codexbridge.task.cancel",
+        "codexbridge.task.approve",
+        "codexbridge.admin"
+      ],
+      "enabled": true,
+      "can_approve_sensitive": true
+    }
+  ]
+}

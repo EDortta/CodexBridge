@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
+
+from gateway.app.core.config import settings
+
+
+def generate_authorization_code() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def generate_access_token() -> str:
+    return secrets.token_urlsafe(48)
+
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def expires_in(seconds: int) -> datetime:
+    return now_utc() + timedelta(seconds=seconds)
+
+
+def pkce_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def issuer_metadata() -> dict:
+    issuer = settings.effective_oauth_issuer()
+    return {
+        "issuer": issuer,
+        "authorization_endpoint": f"{issuer}/oauth/authorize",
+        "token_endpoint": f"{issuer}/oauth/token",
+        "scopes_supported": sorted(settings.oauth_scopes()),
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "token_endpoint_auth_methods_supported": ["none"],
+        "code_challenge_methods_supported": ["S256"],
+    }
+
+
+def protected_resource_metadata() -> dict:
+    issuer = settings.effective_oauth_issuer()
+    return {
+        "resource": f"{issuer}/mcp",
+        "authorization_servers": [issuer],
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": sorted(settings.oauth_scopes()),
+    }
+
+
+def error_redirect(redirect_uri: str, error: str, state: str | None = None, description: str | None = None) -> str:
+    params = {"error": error}
+    if state:
+        params["state"] = state
+    if description:
+        params["error_description"] = description
+    return f"{redirect_uri}?{urlencode(params)}"

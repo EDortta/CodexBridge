@@ -27,6 +27,8 @@ create table if not exists tasks (
   expires_at timestamptz not null,
   timeout_seconds integer not null,
   created_at timestamptz not null,
+  requested_by_user_id varchar(255) null,
+  requested_by_email varchar(255) null,
   started_at timestamptz null,
   completed_at timestamptz null,
   correlation_id varchar(128) not null,
@@ -58,5 +60,29 @@ create table if not exists message_receipts (
   message_id varchar(128) primary key,
   executor_id varchar(128) not null,
   message_type varchar(128) not null,
+  created_at timestamptz not null
+);
+
+create table if not exists oauth_authorization_codes (
+  code_hash varchar(128) primary key,
+  client_id varchar(255) not null,
+  redirect_uri varchar(2048) not null,
+  user_id varchar(255) not null,
+  user_email varchar(255) not null,
+  scopes_json text not null default '[]',
+  code_challenge varchar(255) not null,
+  code_challenge_method varchar(32) not null default 'S256',
+  expires_at timestamptz not null,
+  consumed_at timestamptz null,
+  created_at timestamptz not null
+);
+
+create table if not exists oauth_access_tokens (
+  token_hash varchar(128) primary key,
+  client_id varchar(255) not null,
+  user_id varchar(255) not null,
+  user_email varchar(255) not null,
+  scopes_json text not null default '[]',
+  expires_at timestamptz not null,
   created_at timestamptz not null
 );

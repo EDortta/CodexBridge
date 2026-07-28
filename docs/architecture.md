@@ -92,4 +92,4 @@ Contra:
 
 ## Observação sobre autenticação ChatGPT
 
-O MCP do ChatGPT suporta `OAuth`, `No Authentication` e `Mixed Authentication` segundo a documentação oficial consultada em `2026-07-28`. O MVP deste repositório implementa autenticação por bearer token no servidor MCP e deixa o adaptador OAuth isolado para a fase de endurecimento, porque o foco inicial é fechar o plano de controle, o canal reverso e a execução segura do `codex exec`.
+O MCP do ChatGPT suporta `OAuth`, `No Authentication` e `Mixed Authentication` segundo a documentação oficial consultada em `2026-07-28`. O estado atual deste repositório já inclui o fluxo `OAuth Authorization Code + PKCE` no gateway, mantendo bearer estático apenas como modo opcional de compatibilidade administrativa.

@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.app.models.entities import (
     ExecutorModel,
     MessageReceiptModel,
+    OAuthAccessTokenModel,
+    OAuthAuthorizationCodeModel,
     ProjectModel,
     TaskLogModel,
     TaskModel,
@@ -23,6 +25,7 @@ from shared.protocol import (
     SubmitTaskRequest,
     TaskState,
 )
+from shared.security import hash_token
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -110,6 +113,8 @@ async def create_task(
     request: SubmitTaskRequest,
     executor_online: bool,
     continue_session_id: str | None = None,
+    requested_by_user_id: str | None = None,
+    requested_by_email: str | None = None,
 ) -> TaskModel:
     executor = await session.get(ExecutorModel, request.executor_id)
     if executor is None or not executor.enabled:
@@ -145,12 +150,25 @@ async def create_task(
         expires_at=request.expires_at,
         timeout_seconds=request.timeout_seconds,
         created_at=datetime.now(timezone.utc),
+        requested_by_user_id=requested_by_user_id,
+        requested_by_email=requested_by_email,
         correlation_id=str(uuid4()),
         session_id=continue_session_id,
         approval_state=policy.level.value if state == TaskState.AWAITING_APPROVAL else None,
     )
     session.add(task)
-    await record_event(session, "task", task.id, "task.created", {"state": task.state, "policy_level": policy.level.value})
+    await record_event(
+        session,
+        "task",
+        task.id,
+        "task.created",
+        {
+            "state": task.state,
+            "policy_level": policy.level.value,
+            "requested_by_user_id": requested_by_user_id,
+            "requested_by_email": requested_by_email,
+        },
+    )
     await session.commit()
     await session.refresh(task)
     return task
@@ -281,6 +299,83 @@ async def store_result(session: AsyncSession, task_id: str, result: dict, final_
     await session.commit()
     await session.refresh(task)
     return task
+
+
+async def create_oauth_authorization_code(
+    session: AsyncSession,
+    *,
+    code: str,
+    client_id: str,
+    redirect_uri: str,
+    user_id: str,
+    user_email: str,
+    scopes: list[str],
+    code_challenge: str,
+    code_challenge_method: str,
+    expires_at: datetime,
+) -> None:
+    session.add(
+        OAuthAuthorizationCodeModel(
+            code_hash=hash_token(code),
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            user_id=user_id,
+            user_email=user_email,
+            scopes_json=json.dumps(scopes, ensure_ascii=True),
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+            expires_at=expires_at,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    await session.commit()
+
+
+async def consume_oauth_authorization_code(session: AsyncSession, code: str) -> OAuthAuthorizationCodeModel | None:
+    item = await session.get(OAuthAuthorizationCodeModel, hash_token(code))
+    if item is None:
+        return None
+    if item.consumed_at is not None:
+        return None
+    if _as_utc(item.expires_at) <= datetime.now(timezone.utc):
+        return None
+    item.consumed_at = datetime.now(timezone.utc)
+    await session.commit()
+    await session.refresh(item)
+    return item
+
+
+async def create_oauth_access_token(
+    session: AsyncSession,
+    *,
+    token: str,
+    client_id: str,
+    user_id: str,
+    user_email: str,
+    scopes: list[str],
+    expires_at: datetime,
+) -> None:
+    session.add(
+        OAuthAccessTokenModel(
+            token_hash=hash_token(token),
+            client_id=client_id,
+            user_id=user_id,
+            user_email=user_email,
+            scopes_json=json.dumps(scopes, ensure_ascii=True),
+            expires_at=expires_at,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    await session.commit()
+
+
+async def get_oauth_access_token(session: AsyncSession, token: str) -> OAuthAccessTokenModel | None:
+    item = await session.get(OAuthAccessTokenModel, hash_token(token))
+    if item is None:
+        return None
+    if _as_utc(item.expires_at) <= datetime.now(timezone.utc):
+        return None
+    return item
 
 
 async def store_message_receipt(session: AsyncSession, message_id: str, executor_id: str, message_type: str) -> bool:

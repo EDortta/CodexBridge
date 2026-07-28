@@ -43,6 +43,8 @@ class TaskModel(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     timeout_seconds: Mapped[int]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    requested_by_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    requested_by_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     correlation_id: Mapped[str] = mapped_column(String(128))
@@ -82,4 +84,32 @@ class MessageReceiptModel(Base):
     message_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     executor_id: Mapped[str] = mapped_column(String(128))
     message_type: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OAuthAuthorizationCodeModel(Base):
+    __tablename__ = "oauth_authorization_codes"
+
+    code_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(255))
+    redirect_uri: Mapped[str] = mapped_column(String(2048))
+    user_id: Mapped[str] = mapped_column(String(255))
+    user_email: Mapped[str] = mapped_column(String(255))
+    scopes_json: Mapped[str] = mapped_column(Text, default="[]")
+    code_challenge: Mapped[str] = mapped_column(String(255))
+    code_challenge_method: Mapped[str] = mapped_column(String(32), default="S256")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OAuthAccessTokenModel(Base):
+    __tablename__ = "oauth_access_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(255))
+    user_id: Mapped[str] = mapped_column(String(255))
+    user_email: Mapped[str] = mapped_column(String(255))
+    scopes_json: Mapped[str] = mapped_column(Text, default="[]")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
