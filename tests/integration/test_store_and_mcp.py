@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from gateway.app.db.base import Base
 from gateway.app.mcp.server import handle_mcp_call
 from gateway.app.services import store
-from shared.protocol import ExecutorRegistration, ProjectRegistration, SubmitTaskRequest, TaskMode, TaskPriority, TaskState
+from shared.protocol import ApprovalDecision, ExecutorRegistration, ProjectRegistration, SubmitTaskRequest, TaskMode, TaskPriority, TaskState
 
 
 class DummyHub:
@@ -102,3 +102,34 @@ async def test_mcp_list_projects_filters_by_executor(db_session: AsyncSession):
     )
     projects = response["result"]["structuredContent"]["projects"]
     assert [project["project_id"] for project in projects] == ["p1"]
+
+
+@pytest.mark.asyncio
+async def test_approval_moves_task_back_to_queue(db_session: AsyncSession):
+    task = await store.create_task(
+        db_session,
+        SubmitTaskRequest(
+            executor_id="T610",
+            project_id="p1",
+            instruction="fazer deploy em production",
+            mode=TaskMode.IMPLEMENT,
+            timeout_seconds=300,
+            priority=TaskPriority.NORMAL,
+            run_when_available=True,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        ),
+        executor_online=False,
+    )
+    assert task.state == TaskState.AWAITING_APPROVAL.value
+    task = await store.decide_task_approval(db_session, task.id, ApprovalDecision.APPROVED, "manual approval")
+    assert task.state == TaskState.WAITING_EXECUTOR.value
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_marks_running_as_lost(db_session: AsyncSession):
+    task = await store.create_task(db_session, _submit(run_when_available=True), executor_online=True)
+    task = await store.update_task_state(db_session, task.id, TaskState.RUNNING)
+    recovered = await store.recover_tasks_after_startup(db_session)
+    assert recovered["lost"] == 1
+    reloaded = await store.get_task(db_session, task.id)
+    assert reloaded.state == TaskState.LOST.value

@@ -17,11 +17,18 @@ from gateway.app.models.entities import (
 from gateway.app.services.audit import record_event
 from shared.policy import evaluate_task_policy
 from shared.protocol import (
+    ApprovalDecision,
     ExecutorRegistration,
     ProjectRegistration,
     SubmitTaskRequest,
     TaskState,
 )
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 async def upsert_registry(
@@ -140,6 +147,7 @@ async def create_task(
         created_at=datetime.now(timezone.utc),
         correlation_id=str(uuid4()),
         session_id=continue_session_id,
+        approval_state=policy.level.value if state == TaskState.AWAITING_APPROVAL else None,
     )
     session.add(task)
     await record_event(session, "task", task.id, "task.created", {"state": task.state, "policy_level": policy.level.value})
@@ -198,6 +206,55 @@ async def append_log(session: AsyncSession, task_id: str, offset: int, stream: s
         )
     )
     await session.commit()
+
+
+async def decide_task_approval(
+    session: AsyncSession,
+    task_id: str,
+    decision: ApprovalDecision,
+    reason: str | None = None,
+) -> TaskModel:
+    task = await session.get(TaskModel, task_id)
+    if task is None:
+        raise ValueError("unknown_task")
+    if task.state != TaskState.AWAITING_APPROVAL.value:
+        raise ValueError("task_not_awaiting_approval")
+    task.approval_state = decision.value
+    task.approval_reason = reason
+    if decision == ApprovalDecision.APPROVED:
+        task.state = TaskState.WAITING_EXECUTOR.value
+    else:
+        task.state = TaskState.CANCELLED.value
+        task.completed_at = datetime.now(timezone.utc)
+    await record_event(
+        session,
+        "task",
+        task.id,
+        "task.approval_decision",
+        {"decision": decision.value, "reason": reason, "state": task.state},
+    )
+    await session.commit()
+    await session.refresh(task)
+    return task
+
+
+async def recover_tasks_after_startup(session: AsyncSession) -> dict[str, int]:
+    now = datetime.now(timezone.utc)
+    recovered = {"expired": 0, "lost": 0}
+    result = await session.execute(select(TaskModel))
+    for task in result.scalars():
+        if task.state in {TaskState.COMPLETED.value, TaskState.FAILED.value, TaskState.CANCELLED.value, TaskState.EXPIRED.value}:
+            continue
+        if _as_utc(task.expires_at) <= now:
+            task.state = TaskState.EXPIRED.value
+            task.completed_at = now
+            recovered["expired"] += 1
+        elif task.state == TaskState.RUNNING.value:
+            task.state = TaskState.LOST.value
+            task.completed_at = now
+            recovered["lost"] += 1
+    await session.commit()
+    return recovered
 
 
 async def get_logs(session: AsyncSession, task_id: str, offset: int = 0, limit: int = 500) -> list[TaskLogModel]:

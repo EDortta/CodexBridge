@@ -50,6 +50,8 @@ class TaskModel(Base):
     command_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     session_id: Mapped[str | None] = mapped_column(nullable=True)
     result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approval_state: Mapped[str | None] = mapped_column(nullable=True)
+    approval_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class TaskLogModel(Base):
@@ -81,4 +83,3 @@ class MessageReceiptModel(Base):
     executor_id: Mapped[str]
     message_type: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-

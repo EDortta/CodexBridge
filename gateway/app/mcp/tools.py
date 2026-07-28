@@ -125,6 +125,21 @@ def tool_definitions() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "approve_codex_task",
+            "title": "Approve Codex task",
+            "description": "Aprovar ou rejeitar uma tarefa sensivel em aguardando aprovacao.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "decision": {"type": "string", "enum": ["approved", "rejected"]},
+                    "reason": {"type": "string"},
+                },
+                "required": ["task_id", "decision"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "list_recent_tasks",
             "title": "List recent tasks",
             "description": "Listar tarefas recentes para auditoria e acompanhamento.",
@@ -135,4 +150,3 @@ def tool_definitions() -> list[dict[str, Any]]:
             },
         },
     ]
-

@@ -14,6 +14,7 @@ from gateway.app.mcp.tools import tool_definitions
 from shared.protocol import (
     AgentEnvelope,
     AgentMessageType,
+    ApprovalDecision,
     SubmitTaskRequest,
     TaskMode,
     TaskPriority,
@@ -164,6 +165,19 @@ async def handle_mcp_call(body: dict, session: AsyncSession, hub: AgentHub) -> d
             await hub.send(task.executor_id, hub_envelope(task.executor_id, "task.cancel", {"task_id": task.id}))
         payload = {"task_id": task.id, "state": task.state}
         result = _text_result(f"Cancellation requested for task {task.id}.", payload)
+    elif tool_name == "approve_codex_task":
+        task = await store.decide_task_approval(
+            session,
+            arguments["task_id"],
+            ApprovalDecision(arguments["decision"]),
+            arguments.get("reason"),
+        )
+        if task.state in {TaskState.QUEUED.value, TaskState.WAITING_EXECUTOR.value} and hub.is_connected(task.executor_id):
+            dispatch_payload = await hub.dispatch_next(task.executor_id)
+            if dispatch_payload is not None:
+                await hub.send(task.executor_id, hub_envelope(task.executor_id, "task.dispatch", dispatch_payload))
+        payload = {"task_id": task.id, "state": task.state, "approval_state": task.approval_state}
+        result = _text_result(f"Approval decision recorded for task {task.id}.", payload)
     elif tool_name == "list_recent_tasks":
         tasks = await store.list_recent_tasks(session, arguments.get("limit", 20))
         payload = {
@@ -173,6 +187,7 @@ async def handle_mcp_call(body: dict, session: AsyncSession, hub: AgentHub) -> d
                     "executor_id": item.executor_id,
                     "project_id": item.project_id,
                     "state": item.state,
+                    "approval_state": item.approval_state,
                     "created_at": item.created_at.isoformat(),
                 }
                 for item in tasks

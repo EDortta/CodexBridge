@@ -52,6 +52,11 @@ class AgentMessageType(str, Enum):
     ERROR = "error"
 
 
+class ApprovalDecision(str, Enum):
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
 class ProjectRegistration(BaseModel):
     project_id: str
     name: str
@@ -103,4 +108,3 @@ class ToolResponse(BaseModel):
     ok: bool = True
     message: str
     data: dict[str, Any] = Field(default_factory=dict)
-

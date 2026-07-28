@@ -7,8 +7,8 @@ TASKS_BY_STATE = Gauge("codex_bridge_tasks_by_state", "Tasks by state", ["state"
 CONNECTED_EXECUTORS = Gauge("codex_bridge_connected_executors", "Connected executors")
 TASK_DURATION_SECONDS = Histogram("codex_bridge_task_duration_seconds", "Task duration seconds")
 TASK_ERRORS = Counter("codex_bridge_task_errors_total", "Codex task errors", ["reason"])
+RATE_LIMIT_REJECTIONS = Counter("codex_bridge_rate_limit_rejections_total", "Rate limit rejections")
 
 
 def render_metrics() -> bytes:
     return generate_latest()
-
