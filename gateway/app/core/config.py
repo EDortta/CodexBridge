@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     reconnect_grace_seconds: int = 120
     rate_limit_window_seconds: int = 60
     rate_limit_requests_per_window: int = 120
+    # Signs mobile-API pagination cursors. Unset means a random per-process
+    # secret: cursors then stop working across a restart or a second replica,
+    # which fails safe (the client restarts pagination) instead of trusting a
+    # cursor this process never issued. Set it when running more than one.
+    api_cursor_secret: str | None = None
 
     def accepted_mcp_tokens(self) -> set[str]:
         tokens = {self.mcp_bearer_token}

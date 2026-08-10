@@ -187,6 +187,171 @@ returns log content owes its own redaction; there is no existing net under it.
 
 ---
 
+## Cross-cutting rules every endpoint inherits
+
+Implemented in `gateway/app/api/` (issue #12). An endpoint does not re-invent
+any of this; it uses the helper, and the helper is what the contract describes.
+
+### One error envelope
+
+Every non-2xx response under `/api` is an `Error`: `code`, `message`,
+`requestId`, `retryable`, and `details` on validation failures. This holds for
+the failures no handler writes by hand — request validation, `HTTPException`
+raised inside a dependency, and unhandled exceptions — because
+`install_error_handlers` converts them.
+
+Handlers are registered application-wide, since FastAPI has no per-router hook,
+and each one checks `gateway/app/api/scope.py:is_contract_path` first. Anything
+outside `/api` is re-delegated to the framework default, which is what keeps
+`POST /mcp` speaking JSON-RPC to the ChatGPT client that exists today.
+
+The handler is keyed on **`starlette.exceptions.HTTPException`**, not FastAPI's
+subclass. Starlette resolves handlers by walking the raised class's MRO, so a
+handler keyed on the subclass never catches the parent — and the parent is what
+the router raises for an unmatched path or a wrong method. Keyed on the
+subclass, every mistyped `/api/...` URL returned `{"detail": "Not Found"}`.
+
+Install it with **`install_api_conventions(app)`** and nothing else. The
+middleware must be handed `render_unhandled`; wiring the two separately is
+possible and the only symptom is on the 500 path, which nobody exercises by
+hand.
+
+An `internal_error` body carries a `requestId` and nothing else. Raw driver
+errors name hosts, ports and schema; the detail belongs in the server log.
+
+### `requestId`, and what it is not
+
+Assigned per request by `RequestContextMiddleware`, echoed in the
+`X-Request-Id` response header and included in every error body, so an operator
+handed a screenshot can find the one failing request.
+
+Unhandled exceptions are rendered **inside that middleware**, not by an
+`@app.exception_handler(Exception)`. Starlette invokes those from
+`ServerErrorMiddleware`, which sits outside every user middleware — after the
+request-id context is gone. Installed there, a 500 carried one fresh UUID in the
+body, a different one in the log, no `X-Request-Id` header at all, and discarded
+the client's value: unlinkable on exactly the failure most worth tracing.
+
+A client-supplied `X-Request-Id` is honoured only when it matches the `Id`
+pattern. The value is written into response headers and log lines, so echoing
+arbitrary client bytes there is a header-injection and log-forging primitive.
+
+It is **not** `TaskModel.correlation_id`, which is per-task, persisted, and
+shared with the executor protocol. See the `requestId` description in the
+contract for why merging them would silently defeat the field.
+
+### Pagination
+
+Collections use `PageInfo`. A cursor is opaque and single-purpose: it carries a
+digest of the endpoint and its filters, so one issued elsewhere is rejected
+rather than reinterpreted — silently paging through the wrong rows is worse than
+an error. Every rejection returns the same message, because distinguishing
+"malformed" from "valid but issued elsewhere" describes server state to someone
+holding a token they were never given.
+
+Cursors are **HMAC-signed**, and callers pass `expect={...}` naming the keys and
+types they will read. Both are load-bearing: the scope digest is computed from
+public inputs (the path, and the filters the client itself sent), so on its own
+it catches typos and authenticates nothing — a forged position went straight
+into the caller's query, and `{"after": "3"}` was an unauthenticated remote 500.
+The signing secret defaults to a per-process random value, so cursors do not
+survive a restart or span replicas; that fails safe. Deployments running more
+than one gateway process set `CODEX_BRIDGE_API_CURSOR_SECRET`.
+
+Callers fetch `limit + 1` rows and hand the result to `pagination.paginate`.
+That extra row is what makes `hasMore` authoritative without a second count
+query — and authoritative is what the contract promises, since a page can be
+short simply because authorization filtered rows out.
+
+`limit` above the maximum is clamped, not rejected: a client that guessed the
+ceiling wrong should get a smaller page, not a failure.
+
+### Idempotency
+
+`Idempotency-Key` on a write makes the request safe to repeat, which is what
+lets a mobile client that lost the network mid-request retry without risking a
+double approval.
+
+Records are keyed by **(key, endpoint, actor)**. The same key from a different
+actor is a different operation; collapsing them would let one client's retry be
+answered with another client's response. The same key with a *different* body is
+a client bug and returns `409` — answering it with the stored response would
+silently drop the second write.
+
+The flow is **reserve, then complete**: `reserve()` claims the key before the
+work, `complete()` attaches the response, `release()` frees the claim if the
+write failed. Writing the record only afterwards left a window where two
+concurrent retries both saw "no record", both performed the side effect — the
+double approval this exists to prevent — and the loser then died on the primary
+key with a 500 marked `retryable`, inviting a third attempt. A retry arriving
+while the first is still in flight gets `409` with `retryable: true`.
+
+Expired records are swept at startup. There is no scheduler in this deployment
+and adding one is a larger change than this issue owns; without the sweep the
+table grows without bound, each row holding a full response body.
+
+### Rate limiting — vocabulary only, so far
+
+The contract defines `rate_limited`, the `RateLimited` response and the
+`Retry-After` header, and `errors.py` maps `429` to the code. **No middleware
+applies a limit to `/api`.** `MemoryRateLimiter` exists and guards `POST /mcp`
+only. Nothing is promised to a client yet — there are no `/api` endpoints — but
+do not read the contract's `429` as implemented: wiring it belongs with the
+first endpoints, in issue #3.
+
+### Optimistic concurrency
+
+Reads return an `ETag` derived from a monotonic `revision`; writes require
+`If-Match`. A mismatch is `412 stale_write` and carries the current `ETag`.
+
+A missing `If-Match` is `428`, not a pass. A client that never sends the header
+is a client with no concurrency protection at all, and treating absence as "no
+opinion" would make the protection opt-in on exactly the requests likeliest to
+forget it. Weak validators (`W/"7"`) never match: RFC 9110 requires strong
+comparison for `If-Match`, and a weak tag asserts semantic equivalence — which
+is precisely what a second operator approving the same decision is.
+
+The validator is `tasks.revision` (`migrations/0002_api_foundation.sql`), bumped
+by all four mutators in `gateway/app/services/store.py` — including
+`recover_tasks_after_startup`, which runs unattended on every restart and moves
+tasks to `lost` or `expired`. That one was missed at first, and a test asserting
+"every mutation" while checking two of four is what let the omission through.
+The pre-existing timestamps
+could not serve: none of `started_at` / `completed_at` moves when
+`approval_state`, `approval_reason` or `last_error` changes, so an ETag built
+from them would be identical on both sides of a concurrent approval and no stale
+write would ever be caught. That is why issue #2 refused to publish
+`stale_write` until this column existed.
+
+### Schema changes are not automatic
+
+`Base.metadata.create_all` runs at startup and issues `CREATE TABLE IF NOT
+EXISTS`. It builds a fresh database and **never alters an existing one**, so an
+upgraded deployment starts cleanly, creates any brand-new table, and then fails
+on the first read touching a new column — an error that reads like a code bug.
+
+Two things close that:
+
+- `gateway/app/db/schema_guard.py` refuses to start when a required table or
+  column is missing, naming the object and the migration that adds it;
+- `python3 scripts/apply_migrations.py` applies `migrations/*.sql` once each,
+  tracked in `schema_migrations`. **Startup never calls it**: applying schema
+  changes to a live database is an operator decision, not a side effect of a
+  restart.
+
+A database created before that script existed needs one explicit adopt step
+first. `0001_init.sql` is Postgres-only — `generated always as identity` is a
+syntax error on SQLite — and the databases here were built by `create_all`
+rather than by that file, so recording it as applied states the truth instead of
+re-running something that never ran:
+
+```bash
+python3 scripts/apply_migrations.py --mark-applied 0001_init.sql
+python3 scripts/apply_migrations.py
+```
+
+---
+
 ## Getting the contract to the mobile repository
 
 Today there is none: the document lives in this repository and a consumer copies

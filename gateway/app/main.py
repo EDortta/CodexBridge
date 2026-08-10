@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.app.api.idempotency import purge_expired
+from gateway.app.api.setup import install_api_conventions
 from gateway.app.core.config import settings
 from gateway.app.core.logging import configure_logging
 from gateway.app.core.oauth import (
@@ -23,6 +26,7 @@ from gateway.app.core.rate_limit import MemoryRateLimiter
 from gateway.app.core.registry import load_registry
 from gateway.app.core.users import AuthenticatedPrincipal, lookup_user, verify_password
 from gateway.app.db.base import Base
+from gateway.app.db.schema_guard import check_schema
 from gateway.app.db.session import SessionLocal, engine, get_session
 from gateway.app.mcp.server import handle_mcp_call
 from gateway.app.services import metrics, store
@@ -50,6 +54,12 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
 )
+
+# Cross-cutting behaviour for the contract surface (issue #12). One call on
+# purpose: the middleware and the handlers must be wired together, and the
+# only symptom of wiring one without the other is on the 500 path.
+install_api_conventions(app)
+
 hub = AgentHub(SessionLocal)
 rate_limiter = MemoryRateLimiter(settings.rate_limit_requests_per_window, settings.rate_limit_window_seconds)
 
@@ -160,11 +170,39 @@ async def authenticate_mcp_request(
 @app.on_event("startup")
 async def startup() -> None:
     async with engine.begin() as connection:
+        # `create_all` builds a fresh database but never alters an existing one,
+        # so an upgraded deployment starts fine and then fails on the first read
+        # that touches a new column. check_schema turns that into a startup
+        # failure naming the missing object and the command that adds it.
         await connection.run_sync(Base.metadata.create_all)
+        await connection.run_sync(check_schema)
     registry = load_registry(settings.registry_file)
     async with SessionLocal() as session:
         await store.upsert_registry(session, registry.executors, registry.projects)
         await store.recover_tasks_after_startup(session)
+        # Idempotency records are client-keyed and would otherwise accumulate
+        # forever, each holding a full response body. Startup is the sweep this
+        # deployment has: there is no scheduler, and adding one is a bigger
+        # change than this issue owns.
+        #
+        # Housekeeping must not decide whether the gateway serves. A failure here
+        # leaves rows to be collected next time; refusing to start over it would
+        # give a cleanup the same weight as the schema check.
+        try:
+            purged = await purge_expired(session)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "idempotency_purge_failed",
+                exc_info=True,
+                extra={"correlation_id": None, "task_id": None, "executor_id": None},
+            )
+        else:
+            if purged:
+                logging.getLogger(__name__).info(
+                    "purged %s expired idempotency record(s)",
+                    purged,
+                    extra={"correlation_id": None, "task_id": None, "executor_id": None},
+                )
 
 
 @app.get("/healthz")

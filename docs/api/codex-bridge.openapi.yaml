@@ -151,6 +151,212 @@ x-contract-excluded-paths:
 
 components:
 
+  headers:
+
+    XRequestId:
+      description: |
+        Identifier for this one request, echoed on every response including
+        errors. A client may send it to tie its own log to the server's; a value
+        that is not a valid `Id` is replaced rather than echoed, because this
+        header is written into response headers and log lines.
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+
+    RetryAfter:
+      description: |
+        Seconds to wait before repeating the request. Sent with `429` and with
+        `503`. A client that ignores it and retries immediately will be limited
+        again — treat it as the earliest useful retry, not a suggestion.
+      schema:
+        type: integer
+        minimum: 0
+
+    ETag:
+      description: |
+        Entity tag for the returned representation, quoted per RFC 9110. Send it
+        back as `If-Match` on any write to this entity. It is derived from a
+        monotonic revision, so it changes on every mutation — including ones
+        that leave every timestamp untouched.
+      schema:
+        type: string
+      example: '"7"'
+
+  parameters:
+
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: |
+        Opaque position from a previous `page.nextCursor`. Cursors are
+        single-purpose: one issued by a different endpoint, or by this endpoint
+        under different filters, is rejected rather than reinterpreted, because
+        silently paging through the wrong rows is worse than an error.
+      schema:
+        type: string
+        maxLength: 512
+
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: |
+        Maximum items to return. Values above the server maximum are clamped,
+        not rejected — a client that guessed the ceiling wrong should get a
+        smaller page, not a failure. Always read `page.hasMore` rather than
+        comparing the item count to `limit`.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: |
+        The `ETag` from the read that produced the value being changed. Required
+        on every write that mutates an existing entity: absent, the request is
+        refused with `428`. Treating a missing header as "no opinion" would make
+        concurrency protection opt-in on exactly the requests likeliest to
+        forget it.
+      schema:
+        type: string
+      example: '"7"'
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Client-generated key making a write safe to repeat. A retry carrying the
+        same key returns the first response and changes nothing, which is what
+        lets a mobile client retry after losing the network mid-request without
+        risking a double approval.
+
+        The key is scoped to the endpoint and the authenticated actor, so the
+        same key from a different actor is a different operation. Reusing one
+        key for a *different* body is a client bug and is refused with `409`
+        rather than answered with the earlier response, which would silently
+        drop the second write.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+
+  responses:
+
+    ValidationFailed:
+      description: The request was malformed or failed validation.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Unauthenticated:
+      description: No valid credential was presented.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    PermissionDenied:
+      description: |
+        The actor is authenticated but not permitted. Returned in preference to
+        `404` only when the resource's existence is already known to the caller.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    NotFound:
+      description: |
+        No such resource — or the actor may not know whether it exists. Hidden
+        resources return this rather than `403`, so that probing cannot map what
+        the caller cannot see.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Conflict:
+      description: |
+        The request cannot be applied to the resource's current state — an
+        invalid transition, or an `Idempotency-Key` reused for a different body.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    PreconditionRequired:
+      description: |
+        The write needs an `If-Match` header and none was sent. Re-read the
+        entity, then retry with the `ETag` it returned.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    StaleWrite:
+      description: |
+        The entity changed since the client read it, so the write was refused.
+        The response carries the current `ETag`; re-read, show the current state,
+        and let the operator decide again — never retry automatically.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        ETag:
+          $ref: '#/components/headers/ETag'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    RateLimited:
+      description: Too many requests. `retryable` is true; honour `Retry-After`.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    InternalError:
+      description: |
+        Unexpected server failure. The body carries only a `requestId`; the
+        detail stays in the server log, because raw driver errors and stack
+        traces leak schema, filesystem paths and sometimes credentials.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
   securitySchemes:
 
     bearerAuth:
@@ -307,19 +513,18 @@ components:
         - permission_denied
         - not_found
         - conflict
+        - stale_write
         - rate_limited
         - dependency_unavailable
         - internal_error
-      # `stale_write` is deliberately absent. Optimistic concurrency needs a
-      # monotonic revision to compare against, and no persisted entity has one:
-      # TaskModel carries created_at/started_at/completed_at/expires_at and no
-      # version column, and none of those move when approval_state or last_error
-      # changes — so an ETag derived from them would match on both sides of a
-      # concurrent approval and the code would never fire. Adding an ErrorCode
-      # is non-breaking (see docs/api/README.md, "What is not breaking"), so
-      # issue #12 introduces `stale_write` together with the migration that
-      # makes it real. Publishing it here first would put a promise in v1 that
-      # v1 cannot keep and cannot withdraw.
+      # `stale_write` was deliberately withheld by issue #2 and added here by
+      # issue #12, together with the `tasks.revision` column
+      # (migrations/0002_api_foundation.sql) that makes it possible to detect.
+      # Before that column there was nothing to compare against — the existing
+      # timestamps do not move when approval_state or last_error changes, so an
+      # ETag derived from them would match on both sides of a concurrent
+      # approval and the code could never fire. Publishing it first would have
+      # put a promise in v1 that v1 could not keep and could not withdraw.
 
     ErrorDetail:
       type: object

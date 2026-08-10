@@ -207,6 +207,7 @@ async def update_task_state(session: AsyncSession, task_id: str, state: TaskStat
         task.completed_at = datetime.now(timezone.utc)
     if error:
         task.last_error = error
+    task.revision += 1
     await record_event(session, "task", task.id, "task.state_changed", {"state": task.state, "error": error})
     await session.commit()
     await session.refresh(task)
@@ -244,6 +245,7 @@ async def decide_task_approval(
     else:
         task.state = TaskState.CANCELLED.value
         task.completed_at = datetime.now(timezone.utc)
+    task.revision += 1
     await record_event(
         session,
         "task",
@@ -266,10 +268,14 @@ async def recover_tasks_after_startup(session: AsyncSession) -> dict[str, int]:
         if _as_utc(task.expires_at) <= now:
             task.state = TaskState.EXPIRED.value
             task.completed_at = now
+            task.revision += 1
+            await record_event(session, "task", task.id, "task.recovered", {"state": task.state})
             recovered["expired"] += 1
         elif task.state == TaskState.RUNNING.value:
             task.state = TaskState.LOST.value
             task.completed_at = now
+            task.revision += 1
+            await record_event(session, "task", task.id, "task.recovered", {"state": task.state})
             recovered["lost"] += 1
     await session.commit()
     return recovered
@@ -295,6 +301,7 @@ async def store_result(session: AsyncSession, task_id: str, result: dict, final_
     task.session_id = result.get("codex_session_id")
     task.state = final_state.value
     task.completed_at = datetime.now(timezone.utc)
+    task.revision += 1
     await record_event(session, "task", task.id, "task.result", {"state": task.state})
     await session.commit()
     await session.refresh(task)

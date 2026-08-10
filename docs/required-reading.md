@@ -57,3 +57,9 @@ Leitura escopada: só quem for mexer na área precisa.
 - `docs/api/codex-bridge.openapi.yaml` — o contrato canônico da API móvel. Mudar
   endpoint significa mudar este arquivo **primeiro**; `tests/contract/` reprova a
   divergência.
+- `migrations/` + `scripts/apply_migrations.py` — **obrigatório** ao alterar
+  `gateway/app/models/entities.py`. Uma mudança de schema não está pronta quando o
+  modelo muda: o `create_all` do startup só cria tabela nova, nunca adiciona coluna
+  a tabela existente, então sem a migration a instalação limpa funciona e toda
+  instalação existente quebra na primeira leitura. Registre o objeto novo em
+  `gateway/app/db/schema_guard.py` para que a falha apareça no startup.

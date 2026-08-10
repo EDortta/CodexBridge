@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 43 file(s) · 161 symbol(s) indexed
-- Languages: config (2), python (39), shell (2)
+- 56 file(s) · 260 symbol(s) indexed
+- Languages: config (2), python (52), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -47,6 +47,15 @@ gateway/
   __init__.py  — "Gateway package."
   app/
     __init__.py  — "Gateway app package."
+    api/
+      __init__.py  — "Cross-cutting HTTP behaviour for the mobile API (issue #12)."
+      concurrency.py  — "Optimistic concurrency: two operators, two devices, one decision."
+      errors.py  — "The one error envelope every contract endpoint returns."
+      idempotency.py  — "Replay-safe writes for a client that goes offline mid-request."
+      pagination.py  — "Cursor pagination for collections, and the offset scheme logs keep."
+      request_context.py  — "Per-request identifier, carried from the middleware to the error envelope."
+      scope.py  — "Which requests the API's cross-cutting rules apply to."
+      setup.py  — "One call that installs every cross-cutting API behaviour."
     core/
       config.py
       logging.py
@@ -56,6 +65,7 @@ gateway/
       users.py
     db/
       base.py
+      schema_guard.py  — "Refuse to start on a database that is behind the code."
       session.py
     main.py
     mcp/
@@ -71,6 +81,7 @@ gateway/
       store.py
 pyproject.toml
 scripts/
+  apply_migrations.py  — "Apply the SQL files in `migrations/`, once each, in filename order."
   diagnose.sh
   install.sh
 shared/
@@ -83,11 +94,14 @@ tests/
   contract/
     test_openapi_document.py  — "Contract tests for the canonical OpenAPI document."
   integration/
+    test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_store_and_mcp.py
   unit/
     test_agent_service.py
+    test_apply_migrations.py  — "The migration runner, exercised against real throwaway databases."
     test_main_import.py
     test_policy.py
+    test_schema_guard.py  — "The guard that refuses to serve a database the code has outgrown."
     test_security.py
     test_users.py
 ```
@@ -121,6 +135,72 @@ tests/
 ### `deploy/incus/codexbridge_edge_proxy.py`
 
 - `proxy(path, request)` *(async function)*
+
+### `gateway/app/api/concurrency.py`
+
+> Optimistic concurrency: two operators, two devices, one decision.
+
+- `etag_for(revision)` — "The entity tag for a given revision, quoted as RFC 9110 requires."
+- `require_if_match(header, revision)` — "Reject a write whose `If-Match` does not name the current revision."
+
+### `gateway/app/api/errors.py`
+
+> The one error envelope every contract endpoint returns.
+
+- `code_for_status(status_code)`
+- **`ApiError`** *(class)* — "A failure that already knows its contract representation."
+  - `__init__(self)` *(method)*
+- `error_body()` — "Build the `Error` envelope. The single place its shape is decided."
+- `error_response()`
+- `render_unhandled(request, exc)` — "Log an unhandled exception and render it as `internal_error`."
+- `install_error_handlers(app)` — "Route contract-path failures through the envelope, leave the rest alone."
+
+### `gateway/app/api/idempotency.py`
+
+> Replay-safe writes for a client that goes offline mid-request.
+
+- `fingerprint(body)`
+- **`ReplayedResponse`** *(class)* — "A stored response being returned again, never re-executed."
+  - `__init__(self, status_code, body)` *(method)*
+- `lookup(session)` *(async function)* — "Read-only: the stored response for this key, or None. Does not reserve."
+- `reserve(session)` *(async function)* — "Claim this key before doing the work."
+- `complete(session)` *(async function)* — "Attach the finished response to a reservation this caller won."
+- `release(session)` *(async function)* — "Drop a reservation whose write failed, so the client may try again."
+- `remember(session)` *(async function)* — "Reserve and complete in one step. For a write already known to be done."
+- `purge_expired(session)` *(async function)* — "Drop records past their TTL. Returns how many were removed."
+
+### `gateway/app/api/pagination.py`
+
+> Cursor pagination for collections, and the offset scheme logs keep.
+
+- `scope_digest(endpoint, filters)` — "Identity of "this endpoint under these filters", for cursor binding."
+- `encode_cursor(scope, position)`
+- `decode_cursor(scope, cursor, expect)` — "Decode a cursor this server issued for `scope`, or fail with a typed error."
+- `parse_limit(value)`
+- `page_info()` — "Build `PageInfo`, keeping its one invariant true by construction."
+- `paginate(items)` — "Trim an over-fetched list to `limit` and describe the page."
+
+### `gateway/app/api/request_context.py`
+
+> Per-request identifier, carried from the middleware to the error envelope.
+
+- `current_request_id()` — "The current request's identifier, or a fresh one outside a request."
+- `set_request_id(value)`
+- **`RequestContextMiddleware`** *(class)* — "Assign a request id, expose it in the context, echo it in the response."
+  - `__init__(self, app, on_unhandled)` *(method)*
+  - `dispatch(self, request, call_next)` *(async method)*
+
+### `gateway/app/api/scope.py`
+
+> Which requests the API's cross-cutting rules apply to.
+
+- `is_contract_path(path)` — "Whether `path` is governed by docs/api/codex-bridge.openapi.yaml."
+
+### `gateway/app/api/setup.py`
+
+> One call that installs every cross-cutting API behaviour.
+
+- `install_api_conventions(app)` — "Install the error envelope, the request id, and their shared plumbing."
 
 ### `gateway/app/core/config.py`
 
@@ -173,6 +253,13 @@ tests/
 
 - **`Base`** *(class)*
 
+### `gateway/app/db/schema_guard.py`
+
+> Refuse to start on a database that is behind the code.
+
+- **`SchemaOutOfDate`** *(class)* — "The database is missing something a migration was supposed to add."
+- `check_schema(connection)`
+
 ### `gateway/app/db/session.py`
 
 - `get_session()` *(async function)*
@@ -211,6 +298,7 @@ tests/
 - **`TaskLogModel`** *(class)*
 - **`AuditEventModel`** *(class)*
 - **`MessageReceiptModel`** *(class)*
+- **`IdempotencyRecordModel`** *(class)* — "A completed write, keyed so an offline retry replays instead of repeating."
 - **`OAuthAuthorizationCodeModel`** *(class)*
 - **`OAuthAccessTokenModel`** *(class)*
 
@@ -256,6 +344,12 @@ tests/
 - `create_oauth_access_token(session)` *(async function)*
 - `get_oauth_access_token(session, token)` *(async function)*
 - `store_message_receipt(session, message_id, executor_id, message_type)` *(async function)*
+
+### `scripts/apply_migrations.py`
+
+> Apply the SQL files in `migrations/`, once each, in filename order.
+
+- `main()`
 
 ### `shared/policy.py`
 
@@ -304,6 +398,63 @@ tests/
 - `test_route_paths_are_well_formed(spec)` — "An unbalanced brace is a typo the router accepts and serves literally."
 - `test_normalize_matches_names_but_not_converters(served, documented, equivalent)` — "snake_case vs camelCase is not drift; a converter difference is."
 
+### `tests/integration/test_api_conventions.py`
+
+> Representative-endpoint compliance for the cross-cutting API rules (issue #12).
+
+- **`ApproveBody`** *(class)*
+- `build_app()`
+- `client()`
+- `db_session()` *(async function)*
+- `test_request_id_is_generated_and_echoed(client)`
+- `test_client_request_id_is_honoured(client)`
+- `test_hostile_request_id_is_replaced_not_echoed(client)` — "The header is written into response headers and log lines."
+- `test_request_ids_differ_between_requests(client)`
+- `test_validation_failure_uses_the_envelope(client)`
+- `test_http_exception_inside_contract_path_uses_the_envelope(client)`
+- `test_unhandled_exception_returns_envelope_without_leaking_detail(client)` — "A raw driver error names hosts, ports and schema. It stays in the log."
+- `test_rate_limited_carries_retry_after(client)`
+- `test_non_contract_path_keeps_framework_error_shape(client)` — "`POST /mcp` speaks JSON-RPC; reshaping it would break the live client."
+- `test_real_gateway_leaves_mcp_error_shape_untouched()`
+- `test_pagination_walks_every_item_exactly_once(client)`
+- `test_next_cursor_is_null_exactly_when_there_is_no_more(client)`
+- `test_cursor_from_another_scope_is_rejected(client)` — "A cursor is single-purpose; reinterpreting one pages through wrong rows."
+- `test_malformed_cursor_is_rejected(client, cursor, expected)` — "Every rejection collapses to one message on purpose."
+- `test_limit_above_maximum_is_clamped_not_rejected()`
+- `test_limit_below_one_is_rejected()`
+- `test_page_info_never_advertises_a_cursor_without_more()` — "The contract binds these two fields; building them apart lets them drift."
+- `test_write_without_if_match_is_refused(client)`
+- `test_write_with_stale_if_match_reports_stale_write(client)`
+- `test_second_of_two_concurrent_approvals_loses(client)` — "The scenario the feature exists for: two operators, two devices."
+- `test_if_match_star_is_accepted(client)`
+- `test_strong_validator_matches_and_wrong_revision_does_not()`
+- `test_weak_validator_never_matches()` — "RFC 9110 requires strong comparison for If-Match."
+- `test_if_match_list_matches_when_any_member_is_current()`
+- `test_task_revision_advances_on_every_mutation(db_session)` *(async function)* — "Every mutator, not a sample of them."
+- `test_first_request_has_nothing_to_replay(db_session)` *(async function)*
+- `test_retry_replays_the_stored_response(db_session)` *(async function)*
+- `test_same_key_different_body_is_a_conflict(db_session)` *(async function)* — "Answering with the earlier response would silently drop the second write."
+- `test_same_key_from_another_actor_is_a_different_operation(db_session)` *(async function)* — "Otherwise one client's retry could be answered with another's response."
+- `test_same_key_at_another_endpoint_is_a_different_operation(db_session)` *(async function)*
+- `test_expired_record_does_not_replay(db_session)` *(async function)*
+- `test_purge_expired_removes_only_expired(db_session)` *(async function)*
+- `test_fingerprint_distinguishes_bodies()`
+- `test_five_hundred_reports_the_same_id_in_body_and_header(client)` — "The screenshot and the log must name the same request."
+- `test_unmatched_api_path_returns_the_envelope(client)` — "A typo'd URL is the commonest client mistake, and it missed the envelope."
+- `test_non_contract_unhandled_error_keeps_a_body(client)` — "Re-raising from inside the exception handler produced a bodyless 500."
+- `test_control_characters_never_reach_the_response_header(hostile)` — "`re.match` with `$` also matches before a trailing newline."
+- `test_forged_cursor_is_rejected_not_executed(client)` — "The scope digest is computed from public inputs, so it authenticates nothing."
+- `test_signed_cursor_with_a_wrong_position_is_a_400_not_a_500(client, position)` — "Even a genuine cursor must not hand unchecked JSON to the caller."
+- `test_oversized_cursor_is_rejected_before_decoding(client)`
+- `test_quoted_asterisk_is_an_entity_tag_not_the_wildcard()` — "`"*"` is a legitimate tag value; only the bare token `*` is the wildcard."
+- `test_concurrent_retries_do_not_both_execute(db_session)` *(async function)* — "The window between "no record" and "record written" was a double approval."
+- `test_release_lets_a_failed_write_be_retried(db_session)` *(async function)* — "Otherwise one transient failure locks the key for its whole TTL."
+- `test_release_does_not_discard_a_completed_response(db_session)` *(async function)*
+- `test_abandoned_reservation_does_not_lock_the_key_for_a_day(db_session)` *(async function)* — "A worker killed between reserve and complete must not strand the client."
+- `test_completing_a_lost_reservation_still_records_the_write(db_session)` *(async function)* — "Otherwise the next identical request executes the side effect again."
+- `test_a_completed_record_is_final(db_session)` *(async function)* — "Replacing a recorded 200 with a later 500 defeats the whole mechanism."
+- `test_non_contract_unhandled_error_is_logged_once(client, caplog)` — "Two full tracebacks for one failure, on the highest-volume transport."
+
 ### `tests/integration/test_store_and_mcp.py`
 
 - **`DummyHub`** *(class)*
@@ -330,6 +481,20 @@ tests/
   - `run_task(self, **_)` *(async method)*
 - `test_dispatch_failure_returns_task_result(tmp_path)` *(async function)*
 
+### `tests/unit/test_apply_migrations.py`
+
+> The migration runner, exercised against real throwaway databases.
+
+- `run(db, *args)`
+- `legacy_db(tmp_path)` — "A database as `create_all` would have left it before issue #12."
+- `columns(db, table)`
+- `tables(db)`
+- `test_adopting_then_upgrading_adds_the_column_to_existing_rows(legacy_db)`
+- `test_reapplying_is_a_no_op(legacy_db)`
+- `test_failure_names_the_way_forward(legacy_db)` — "The operator arrives here from a startup message naming this command."
+- `test_dry_run_changes_nothing(legacy_db)`
+- `test_unknown_migration_name_is_refused(legacy_db)`
+
 ### `tests/unit/test_main_import.py`
 
 - `test_main_app_imports()`
@@ -338,6 +503,14 @@ tests/
 
 - `test_policy_level_for_mode()`
 - `test_sensitive_instruction_requires_approval()`
+
+### `tests/unit/test_schema_guard.py`
+
+> The guard that refuses to serve a database the code has outgrown.
+
+- `test_fresh_database_passes(tmp_path)`
+- `test_missing_column_is_named_with_its_migration(tmp_path)` — "The message has to be actionable: what is missing, and what adds it."
+- `test_create_all_does_not_repair_an_existing_table(tmp_path)` — "The premise of the guard, asserted rather than assumed."
 
 ### `tests/unit/test_security.py`
 
