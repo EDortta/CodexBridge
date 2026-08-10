@@ -12,6 +12,7 @@ from gateway.app.services import store
 from gateway.app.services.agent_hub import AgentHub
 from gateway.app.mcp.tools import tool_definitions
 from gateway.app.core.users import AuthenticatedPrincipal
+from gateway.app.version import APP_VERSION
 from shared.protocol import (
     AgentEnvelope,
     AgentMessageType,
@@ -44,7 +45,7 @@ async def handle_mcp_call(
             "id": rpc_id,
             "result": {
                 "protocolVersion": "2025-06-18",
-                "serverInfo": {"name": "codex-bridge", "version": "0.1.0"},
+                "serverInfo": {"name": "codex-bridge", "version": APP_VERSION},
                 "instructions": (
                     "Use apenas project_id e executor_id retornados por este servidor. "
                     "Nao presuma caminhos e trate tarefas sensiveis como aprovacao pendente."

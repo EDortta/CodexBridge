@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -70,11 +70,218 @@ servers:
           Hostname and port of the deployment. Override it when developing
           against a local gateway — the default is production.
 
-# No public endpoints are defined yet. Paths are added by the issues that
-# implement them (#3 health/version, #9 sessions, ...). An empty object is
-# deliberate: it keeps `tests/contract/test_openapi_document.py` honest, because
-# that test fails when the application exposes a public route this file omits.
-paths: {}
+paths:
+
+  /health:
+    get:
+      operationId: getHealth
+      tags: [probes]
+      summary: Liveness probe
+      description: |
+        Reports that the process is running. Touches no dependency, so it stays
+        `ok` even when the database is down — a liveness probe that queries the
+        database restarts a healthy process because the database blinked.
+
+        Unauthenticated, and safe to poll.
+      security: []
+      responses:
+        '200':
+          description: The process is running.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, time]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                  time:
+                    $ref: '#/components/schemas/Timestamp'
+              example:
+                status: ok
+                time: '2026-08-10T14:32:07Z'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /ready:
+    get:
+      operationId: getReady
+      tags: [probes]
+      summary: Readiness probe
+      description: |
+        Reports whether the server can actually serve requests, and names the
+        dependency when it cannot.
+
+        **Degraded is not unready.** With no executor connected, new tasks cannot
+        run but every read still works, so this returns `200` with
+        `status: degraded`. Returning `503` there would take the API offline
+        exactly when an operator needs it to see why nothing is executing.
+
+        A `503` carries the standard `Error` envelope plus the same `checks`
+        array, so one parser handles both outcomes.
+      security: []
+      responses:
+        '200':
+          description: Ready to serve, possibly with non-required dependencies degraded.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, time, checks]
+                properties:
+                  status:
+                    type: string
+                    enum: [ready, degraded]
+                  time:
+                    $ref: '#/components/schemas/Timestamp'
+                  checks:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DependencyCheck'
+              examples:
+                ready:
+                  value:
+                    status: ready
+                    time: '2026-08-10T14:32:07Z'
+                    checks:
+                      - name: database
+                        status: ok
+                        required: true
+                      - name: executors
+                        status: ok
+                        required: false
+                degraded:
+                  value:
+                    status: degraded
+                    time: '2026-08-10T14:32:07Z'
+                    checks:
+                      - name: database
+                        status: ok
+                        required: true
+                      - name: executors
+                        status: degraded
+                        required: false
+        '503':
+          description: |
+            A required dependency is unavailable. The body is the standard
+            `Error` envelope with an added `checks` array naming what failed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Error'
+                  - type: object
+                    properties:
+                      checks:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/DependencyCheck'
+              example:
+                code: dependency_unavailable
+                message: A required dependency is unavailable.
+                requestId: 5a3f1c88-90b1-4e2a-8a6f-2f9c0d1e7b43
+                retryable: true
+                details:
+                  - field: database
+                    code: unavailable
+                    message: Dependency is not reachable.
+                checks:
+                  - name: database
+                    status: unavailable
+                    required: true
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/version:
+    get:
+      operationId: getApiVersion
+      tags: [probes]
+      summary: Server and contract versions, and capability flags
+      description: |
+        Lets a client decide whether it can talk to this server *before* it
+        commits to a namespace — which is why this path sits outside `/api/v1`.
+        It reports every namespace served, not the one it is nested in, and that
+        obligation is what keeps it from being a versioning hole.
+
+        `contractVersion` is the version of this document the build implements;
+        a contract test asserts the two are equal, so a client that pinned a
+        contract version can tell what the server actually speaks.
+
+        `capabilities` states what is true in this build. A flag is `true` only
+        when a **served endpoint** honours it — never because the server has the
+        code for it. Reporting `idempotencyKeys: true` while no endpoint accepts
+        the header produces exactly the 404 these flags exist to prevent, so a
+        test binds them to the served route table.
+
+        A `false` flag is an honest report of work not yet done, and lets a
+        client degrade instead of meeting a 404. Unknown flags must be ignored:
+        new ones may be added within a major version.
+      security: []
+      responses:
+        '200':
+          description: Version and capability report.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [application, applicationVersion, apiVersions, contractVersion, capabilities, time]
+                properties:
+                  application:
+                    type: string
+                  applicationVersion:
+                    type: string
+                  apiVersions:
+                    type: array
+                    description: Every namespace this server serves, e.g. `["v1"]`.
+                    items:
+                      type: string
+                  contractVersion:
+                    type: string
+                    description: Version of this OpenAPI document the build implements.
+                  buildRevision:
+                    type: string
+                    description: |
+                      Build or commit identifier. Absent when the deployment did
+                      not inject one; absence means "not reported", never "no build".
+                  capabilities:
+                    type: object
+                    additionalProperties:
+                      type: boolean
+                  time:
+                    $ref: '#/components/schemas/Timestamp'
+              example:
+                application: codex-bridge-gateway
+                applicationVersion: '0.1.0'
+                apiVersions: [v1]
+                contractVersion: '1.1.0'
+                buildRevision: b76a391
+                capabilities:
+                  errorEnvelope: true
+                  cursorPagination: false
+                  idempotencyKeys: false
+                  optimisticConcurrency: false
+                  eventStream: false
+                  artifactDownloads: false
+                time: '2026-08-10T14:32:07Z'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
 # Public HTTP routes the gateway serves that are deliberately NOT part of this
 # contract. Every entry needs a reason: `tests/contract/test_openapi_document.py`
@@ -148,6 +355,46 @@ x-contract-excluded-paths:
   # does not serve would be caught by test_no_exclusion_outlives_its_route, which
   # is the correct behaviour: this list describes served surfaces, and a surface
   # that no longer exists needs no exclusion.
+
+# Components that exist in this document but are not referenced by any endpoint
+# yet, each with the issue that will use it. `tests/contract/test_openapi_document.py`
+# rejects an unreferenced component that is not listed here, and rejects an entry
+# with no issue — the same rule as `x-contract-excluded-paths`: a thing may be
+# unused only on purpose and in writing.
+#
+# A client must not build against these. They are published so that #9 and #5 add
+# endpoints rather than re-litigating shapes, not as a promise of behaviour.
+x-pending-components:
+  - pointer: '#/components/parameters/Cursor'
+    issue: 9
+  - pointer: '#/components/parameters/Limit'
+    issue: 9
+  - pointer: '#/components/parameters/IfMatch'
+    issue: 9
+  - pointer: '#/components/parameters/IdempotencyKey'
+    issue: 9
+  - pointer: '#/components/responses/ValidationFailed'
+    issue: 9
+  - pointer: '#/components/responses/Unauthenticated'
+    issue: 4
+  - pointer: '#/components/responses/PermissionDenied'
+    issue: 4
+  - pointer: '#/components/responses/NotFound'
+    issue: 9
+  - pointer: '#/components/responses/Conflict'
+    issue: 9
+  - pointer: '#/components/responses/PreconditionRequired'
+    issue: 9
+  - pointer: '#/components/responses/StaleWrite'
+    issue: 9
+  - pointer: '#/components/schemas/Actor'
+    issue: 6
+  - pointer: '#/components/schemas/ProjectId'
+    issue: 5
+  - pointer: '#/components/schemas/ExecutorId'
+    issue: 9
+  - pointer: '#/components/schemas/PageInfo'
+    issue: 9
 
 components:
 
@@ -498,6 +745,25 @@ components:
           nextCursor: 'eyJhZnRlciI6IjIwMjYtMDgtMTBUMTQ6MzI6MDdaIn0'
         - hasMore: false
           nextCursor: null
+
+    DependencyCheck:
+      type: object
+      description: |
+        One dependency's state, as `/ready` sees it. `required: false` means a
+        failure here degrades the service without making it unready.
+      required: [name, status, required]
+      properties:
+        name:
+          type: string
+          description: |
+            Logical dependency name — `database`, `executors`. Never a hostname,
+            port or connection string: this endpoint is unauthenticated.
+        status:
+          type: string
+          enum: [ok, degraded, unavailable]
+        required:
+          type: boolean
+          description: Whether the service is unready when this check is not `ok`.
 
     ErrorCode:
       type: string

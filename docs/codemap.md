@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 56 file(s) · 260 symbol(s) indexed
-- Languages: config (2), python (52), shell (2)
+- 63 file(s) · 310 symbol(s) indexed
+- Languages: config (2), python (59), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -53,7 +53,11 @@ gateway/
       errors.py  — "The one error envelope every contract endpoint returns."
       idempotency.py  — "Replay-safe writes for a client that goes offline mid-request."
       pagination.py  — "Cursor pagination for collections, and the offset scheme logs keep."
+      rate_limit.py  — "Rate limiting for the contract surface."
       request_context.py  — "Per-request identifier, carried from the middleware to the error envelope."
+      routes/
+        __init__.py  — "HTTP routers for the mobile contract surface."
+        probes.py  — "Liveness, readiness and version — what a client asks before anything else."
       scope.py  — "Which requests the API's cross-cutting rules apply to."
       setup.py  — "One call that installs every cross-cutting API behaviour."
     core/
@@ -79,6 +83,7 @@ gateway/
       audit.py
       metrics.py
       store.py
+    version.py  — "The single statement of this application's version."
 pyproject.toml
 scripts/
   apply_migrations.py  — "Apply the SQL files in `migrations/`, once each, in filename order."
@@ -93,8 +98,10 @@ tests/
   conftest.py
   contract/
     test_openapi_document.py  — "Contract tests for the canonical OpenAPI document."
+    test_proxy_routes.py  — "Every contracted path must be routed by the proxies in front of the gateway."
   integration/
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
+    test_probes.py  — "Health, readiness and version — issue #3."
     test_store_and_mcp.py
   unit/
     test_agent_service.py
@@ -104,6 +111,7 @@ tests/
     test_schema_guard.py  — "The guard that refuses to serve a database the code has outgrown."
     test_security.py
     test_users.py
+    test_version_is_single_sourced.py  — "Every statement of the application version must be the same statement."
 ```
 
 ## Symbol Index
@@ -180,6 +188,15 @@ tests/
 - `page_info()` — "Build `PageInfo`, keeping its one invariant true by construction."
 - `paginate(items)` — "Trim an over-fetched list to `limit` and describe the page."
 
+### `gateway/app/api/rate_limit.py`
+
+> Rate limiting for the contract surface.
+
+- `client_key(request)` — "Bucket identity for a request."
+- **`RateLimitDependency`** *(class)* — "Refuse a request that exceeds the window, in the contract's own shape."
+  - `__init__(self, limiter)` *(method)*
+  - `__call__(self, request)` *(async method)*
+
 ### `gateway/app/api/request_context.py`
 
 > Per-request identifier, carried from the middleware to the error envelope.
@@ -189,6 +206,16 @@ tests/
 - **`RequestContextMiddleware`** *(class)* — "Assign a request id, expose it in the context, echo it in the response."
   - `__init__(self, app, on_unhandled)` *(method)*
   - `dispatch(self, request, call_next)` *(async method)*
+
+### `gateway/app/api/routes/probes.py`
+
+> Liveness, readiness and version — what a client asks before anything else.
+
+- `database_reachable(now)` *(async function)* — "Cached, single-flight readiness of the database."
+- `reset_database_cache()` — "Drop the cached result. For tests and for a deliberate re-probe."
+- `health()` *(async function)* — "Liveness. Deliberately touches nothing — see the module docstring."
+- `ready(response)` *(async function)* — "Readiness, with the reason when it is not ready."
+- `api_version()` *(async function)* — "What this server speaks, so a client can refuse before it starts."
 
 ### `gateway/app/api/scope.py`
 
@@ -205,6 +232,7 @@ tests/
 ### `gateway/app/core/config.py`
 
 - **`Settings`** *(class)*
+  - `effective_ready_cache_seconds(self)` *(method)*
   - `accepted_mcp_tokens(self)` *(method)*
   - `oauth_client_ids(self)` *(method)*
   - `oauth_scopes(self)` *(method)*
@@ -397,6 +425,18 @@ tests/
 - `test_contract_declares_no_unversioned_api_path(spec)` — "The same namespace rule, applied to what the document promises."
 - `test_route_paths_are_well_formed(spec)` — "An unbalanced brace is a typo the router accepts and serves literally."
 - `test_normalize_matches_names_but_not_converters(served, documented, equivalent)` — "snake_case vs camelCase is not drift; a converter difference is."
+- `test_reported_contract_version_matches_the_document(spec)` — "`GET /api/version` must not claim a contract version the file disagrees with."
+- `test_every_declared_component_is_referenced_or_owned(spec)` — "A component nothing points at is a claim the API behaves that way."
+- `test_no_pending_component_is_stale(spec)` — "An entry whose component is now wired must be removed."
+
+### `tests/contract/test_proxy_routes.py`
+
+> Every contracted path must be routed by the proxies in front of the gateway.
+
+- `contract_paths()`
+- `test_nginx_configs_exist()` — "If the configs move, this gate must fail loudly rather than pass empty."
+- `test_every_contract_path_is_routed_by_every_terminating_vhost(contract_paths)`
+- `test_every_proxied_location_reaches_an_upstream()` — "A location block with no `proxy_pass` silently drops its path."
 
 ### `tests/integration/test_api_conventions.py`
 
@@ -454,6 +494,39 @@ tests/
 - `test_completing_a_lost_reservation_still_records_the_write(db_session)` *(async function)* — "Otherwise the next identical request executes the side effect again."
 - `test_a_completed_record_is_final(db_session)` *(async function)* — "Replacing a recorded 200 with a later 500 defeats the whole mechanism."
 - `test_non_contract_unhandled_error_is_logged_once(client, caplog)` — "Two full tracebacks for one failure, on the highest-volume transport."
+
+### `tests/integration/test_probes.py`
+
+> Health, readiness and version — issue #3.
+
+- `client()`
+- `test_health_is_ok_and_carries_a_request_id(client)`
+- `test_health_needs_no_authentication(client)` — "A probe that needs a credential cannot be used before authenticating."
+- `test_health_touches_no_dependency(client, monkeypatch)` — "Liveness must not depend on a dependency."
+- `test_ready_does_not_disclose_executor_presence_by_default(client)` — "The boolean charts when the operator's machines are online."
+- `response_text(client, path)`
+- `test_ready_reports_degraded_when_executor_state_is_exposed(client, monkeypatch)` — "With the setting on, degraded is still 200: reads work, traffic flows."
+- `test_ready_is_ready_when_an_executor_is_connected(client, monkeypatch)`
+- `test_ready_is_503_when_the_database_is_unavailable(client, monkeypatch)`
+- `test_probe_database_swallows_the_driver_error(monkeypatch)` *(async function)* — "The branch that must never leak, driven for real."
+- `test_unavailable_ready_body_contains_no_driver_text(client, monkeypatch)` — "And the response built from that `False` carries none of it."
+- `test_api_version_reports_every_namespace_it_serves(client)` — "It sits outside /api/v1 precisely so it can answer for all namespaces."
+- `test_capability_flags_match_what_the_served_routes_accept(client)` — "A `true` flag a client acts on must not produce a 404 or be ignored."
+- `test_api_version_omits_build_revision_when_the_deployment_injected_none(client)` — "Absence means "not reported", never "no build" — so no empty string."
+- `test_api_version_reports_build_revision_when_set(client, monkeypatch)`
+- `test_probe_responses_carry_no_infrastructure_detail(client)` — "The acceptance criterion "no sensitive infrastructure details", asserted."
+- `test_api_version_is_rate_limited_with_the_contract_shape(monkeypatch)` — "The contract documents 429 + Retry-After; before this it documented only."
+- `test_health_and_ready_are_never_rate_limited(monkeypatch)` — "Monitoring polls these on a timer."
+- `test_bucket_is_the_caller_not_the_nearest_proxy(monkeypatch)` — "The deployed chain has more than one appending hop."
+- `test_client_cannot_forge_a_hop_to_escape_its_bucket(monkeypatch)` — "Prepending entries must not move the caller off its bucket."
+- `test_unparseable_forwarded_for_falls_back_to_one_shared_bucket(header, monkeypatch)` — "A trailing comma produced the literal bucket `"ip:"` — keyed on nothing."
+- `test_missing_forwarded_for_behind_a_proxy_is_not_trusted(monkeypatch)` — "No header while configured for proxies means the request bypassed them."
+- `test_ready_is_cached_so_a_flood_cannot_drain_the_connection_pool(monkeypatch)` — "`/ready` is unauthenticated and unlimited, and shares the API's pool."
+- `test_readiness_cache_expires(monkeypatch)` *(async function)* — "Cached, not frozen: a recovered database must be noticed."
+- `test_a_failed_probe_is_cached_only_briefly(monkeypatch)` *(async function)* — "A blip must not pin the gateway out of rotation for the whole TTL."
+- `test_a_concurrent_burst_issues_one_probe(monkeypatch)` *(async function)* — "The cache alone does not help while the first probe is still running."
+- `test_zero_cache_seconds_is_floored(monkeypatch)` — "A TTL of 0 would restore the uncached DoS, so it is not honoured."
+- `test_every_served_api_route_carries_the_rate_limiter()` — "`main.py` claimed every future /api route inherits the limiter. It does not."
 
 ### `tests/integration/test_store_and_mcp.py`
 
@@ -522,4 +595,14 @@ tests/
 - `test_verify_password_accepts_known_hash()`
 - `test_load_user_registry_indexes_by_user_id_and_email(tmp_path)`
 - `test_authenticated_principal_checks_scopes_and_projects()`
+
+### `tests/unit/test_version_is_single_sourced.py`
+
+> Every statement of the application version must be the same statement.
+
+- `test_pyproject_and_code_agree()`
+- `test_settings_reports_the_single_source()`
+- `test_fastapi_application_reports_the_single_source()`
+- `test_mcp_server_info_reports_the_single_source()` — "The MCP client sees this one; it drifted independently of the HTTP API."
+- `test_no_stray_version_literals_in_the_gateway()` — "A new hardcoded copy is how the previous four accumulated."
 

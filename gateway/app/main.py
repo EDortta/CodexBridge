@@ -10,8 +10,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.api.idempotency import purge_expired
+from gateway.app.api.rate_limit import RateLimitDependency
+from gateway.app.api.routes import probes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.core.config import settings
+from gateway.app.version import APP_VERSION
 from gateway.app.core.logging import configure_logging
 from gateway.app.core.oauth import (
     error_redirect,
@@ -49,7 +52,7 @@ configure_logging()
 # keeps them off.
 app = FastAPI(
     title="CodexBridge Gateway",
-    version="0.1.0",
+    version=APP_VERSION,
     openapi_url=None,
     docs_url=None,
     redoc_url=None,
@@ -58,10 +61,29 @@ app = FastAPI(
 # Cross-cutting behaviour for the contract surface (issue #12). One call on
 # purpose: the middleware and the handlers must be wired together, and the
 # only symptom of wiring one without the other is on the 500 path.
+#
+# Must stay the LAST add_middleware in this module: `add_middleware` inserts at
+# index 0, so anything registered afterwards wraps it, and a failure inside that
+# outer layer would answer a contract path with plain text and no request id.
 install_api_conventions(app)
 
 hub = AgentHub(SessionLocal)
 rate_limiter = MemoryRateLimiter(settings.rate_limit_requests_per_window, settings.rate_limit_window_seconds)
+
+# `/health` and `/ready` are unauthenticated and unlimited on purpose: the
+# deployment's own monitoring polls them on a timer, and rate-limiting them makes
+# the first symptom of heavy client traffic a red health check.
+app.include_router(probes.router)
+
+# `/api/version` is unauthenticated too, but it sits in the public namespace and
+# is reachable by anyone, so it carries the limiter.
+#
+# `dependencies=` binds to THIS router's routes only — a route added later with
+# `@app.get("/api/v1/...")` would be unlimited, so this is not "every /api route
+# from here on gets it". What makes that true is a test:
+# `test_every_served_api_route_carries_the_rate_limiter` fails on any served
+# `/api` route without the dependency. Add new API routes to a router carrying it.
+app.include_router(probes.version_router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:

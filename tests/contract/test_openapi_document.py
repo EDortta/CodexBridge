@@ -394,3 +394,81 @@ def test_normalize_matches_names_but_not_converters(served: str, documented: str
     counterparts.
     """
     assert (_normalize(served) == _normalize(documented)) is equivalent
+
+
+def test_reported_contract_version_matches_the_document(spec: dict) -> None:
+    """`GET /api/version` must not claim a contract version the file disagrees with.
+
+    A client that pins a contract version has no other way to learn what the
+    server actually speaks. If these two drift, the pin is decoration: the client
+    believes it validated compatibility and did not.
+    """
+    from gateway.app.api.routes.probes import API_CONTRACT_VERSION
+
+    assert API_CONTRACT_VERSION == spec["info"]["version"], (
+        "probes.API_CONTRACT_VERSION and info.version disagree; a change to the "
+        "document must move both"
+    )
+
+
+def _without_pending(spec: dict) -> dict:
+    """The document minus its own pending-components ledger.
+
+    The ledger quotes each pointer, so counting references across the whole
+    document would find every pending entry referencing itself — a check that
+    can never fail is worse than no check.
+    """
+    return {key: value for key, value in spec.items() if key != "x-pending-components"}
+
+
+def test_every_declared_component_is_referenced_or_owned(spec: dict) -> None:
+    """A component nothing points at is a claim the API behaves that way.
+
+    `parameters` and `responses` were added by issue #12 and referenced by
+    nothing, so the document described request and response shapes no endpoint
+    produced. A client reading the contract has no way to tell the difference.
+
+    Unused is allowed — the shapes are worth settling before #9 writes endpoints
+    — but only when `x-pending-components` names the issue that will use it. Same
+    rule as `x-contract-excluded-paths`: on purpose, and in writing.
+    """
+    import json as _json
+
+    pending = {
+        entry.get("pointer"): entry.get("issue")
+        for entry in (spec.get("x-pending-components") or [])
+        if isinstance(entry, dict)
+    }
+    for pointer, issue in pending.items():
+        assert isinstance(issue, int), f"pending component {pointer!r} names no issue"
+
+    components = spec.get("components") or {}
+    document = _json.dumps(_without_pending(spec))
+    unreferenced: list[str] = []
+    for group in ("parameters", "responses", "headers", "schemas"):
+        for name in (components.get(group) or {}):
+            pointer = f"#/components/{group}/{name}"
+            if document.count(f'"{pointer}"') == 0 and pointer not in pending:
+                unreferenced.append(pointer)
+    assert not unreferenced, (
+        "declared, referenced by nothing, and not listed in `x-pending-components` "
+        f"with the issue that will use it: {unreferenced}"
+    )
+
+
+def test_no_pending_component_is_stale(spec: dict) -> None:
+    """An entry whose component is now wired must be removed.
+
+    Otherwise the pending list becomes a permanent exemption and stops meaning
+    "not yet" — the same failure `test_no_exclusion_outlives_its_route` catches
+    on the route side.
+    """
+    import json as _json
+
+    document = _json.dumps(_without_pending(spec))
+    stale = [
+        entry["pointer"]
+        for entry in (spec.get("x-pending-components") or [])
+        if document.count(f'"{entry["pointer"]}"') > 0
+    ]
+    assert not stale, f"now referenced; remove from `x-pending-components`: {stale}"

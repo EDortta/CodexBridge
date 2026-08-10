@@ -187,6 +187,137 @@ returns log content owes its own redaction; there is no existing net under it.
 
 ---
 
+## Probes: live, ready, degraded
+
+`GET /health`, `GET /ready` and `GET /api/version` (issue #3). All three are
+unauthenticated — a probe that needs a credential cannot be used before
+authenticating, which is the whole point of having them.
+
+- **`/health` touches nothing.** It stays `ok` with the database down. A liveness
+  probe that queries a dependency restarts a healthy process because the
+  dependency blinked, turning a brief outage into a restart loop.
+- **`/ready` checks what a request needs**, and names the failing dependency
+  rather than returning a bare boolean. `503` carries the standard `Error`
+  envelope plus the same `checks` array, so one parser handles both outcomes.
+- **Its result is cached and single-flighted** for
+  `CODEX_BRIDGE_READY_CACHE_SECONDS` (floored at 0.5s; a failure is cached for
+  only 1s so a blip cannot pin a recovered gateway out of rotation). The lock
+  matters as much as the cache: without it a concurrent burst all missed the
+  cold cache and all probed, which is the exhaustion the cache exists to stop. The endpoint
+  is unauthenticated and unlimited, and each uncached call took a connection from
+  the same pool that serves the API: enough concurrent callers exhausted it, real
+  requests blocked for the pool timeout, and the resulting error was reported as
+  `database: unavailable` — so a flood made the gateway ask the load balancer to
+  pull it out of rotation and blame the database.
+- **Executor connectivity is not reported by default.**
+  `CODEX_BRIDGE_READY_EXPOSE_EXECUTOR_STATE` turns it on. The boolean is a
+  presence signal about the operator's own machines and the endpoint is
+  anonymous and pollable, so it charts when they are online; `/metrics` is
+  already restricted to localhost at the proxy for the same reason.
+- **Degraded is not unready.** With executor state exposed, no executor connected
+  means new tasks cannot run while every read still works, so that is `200` with
+  `status: degraded`. A `503` there would take the API offline exactly when an
+  operator needs it to see why nothing is executing.
+- **No infrastructure detail leaves these endpoints.** The database check
+  swallows its exception: driver errors carry host, port and sometimes the
+  password, and `/ready` is unauthenticated. A test asserts the connection
+  string never appears in a response.
+
+`/api/version` reports every namespace served, the contract version this build
+implements, and capability flags. A `false` flag is an honest report of work not
+yet done — it lets a client degrade instead of meeting a 404.
+`tests/contract/` asserts the reported contract version equals the document's
+`info.version`, because a client that pinned a version has no other way to learn
+what the server actually speaks.
+
+Releases must move `gateway/app/version.py` and `pyproject.toml` together;
+`tests/unit/test_version_is_single_sourced.py` binds every copy — the settings
+default, `FastAPI(version=...)` and the MCP `serverInfo` — to that one constant,
+because there were four hand-maintained copies and the release script updated
+none of them.
+
+`/healthz` still exists and is unchanged. It is the pre-existing infrastructure
+probe, listed in `x-contract-excluded-paths`; the deployment's own checks point
+at it and were not migrated by this issue.
+
+### Reaching the API
+
+The gateway is not the front door. `deploy/nginx/frida-codex-bridge.conf` and
+`codexbridge-container.conf` are **location allowlists with no catch-all**, so a
+route they do not name answers 404 in production however well it works in the
+application and however green the suite is.
+
+That is not hypothetical: `/health`, `/ready` and the entire `/api` surface were
+implemented, contracted and fully tested while no vhost mentioned them. Every
+endpoint of this epic would have been dead at the public host.
+
+**Publishing a route is two edits: the router, and the vhost.**
+`tests/contract/test_proxy_routes.py` fails when the contract declares a path no
+terminating vhost forwards. Note it reads the configs in this repository — it
+cannot know what is installed on the host, so applying them is still a deploy
+step the operator performs.
+
+### Rate limiting
+
+`/api/version` carries the limiter and returns `429` with `Retry-After` in the
+standard envelope. `/health` and `/ready` do **not**: monitoring polls them on a
+timer, and limiting them makes the first symptom of heavy client traffic a red
+health check, which points the operator at the wrong thing. `/ready` is protected
+by caching instead — see above.
+
+It is a FastAPI dependency, not middleware, and that is mechanical rather than
+stylistic: `app.exception_handler` handlers run inside `ExceptionMiddleware`,
+which sits *inside* every user middleware, so an `ApiError` raised from
+middleware would never reach them and `429` would arrive as a bare framework
+response with no `requestId`.
+
+`dependencies=` on `include_router` binds to that router only. A route added
+with `@app.get("/api/v1/...")` would be **unlimited**, so "every `/api` route
+inherits it" is a claim a comment cannot keep:
+`test_every_served_api_route_carries_the_rate_limiter` is what keeps it.
+
+#### Which hop identifies the caller
+
+`CODEX_BRIDGE_API_TRUSTED_PROXY_HOPS` is the number of entries appended to
+`X-Forwarded-For` **after** the one naming the client; the caller is that many
+positions from the end.
+
+**Measure it, do not count proxies.** The first proxy in a chain *records* the
+client rather than adding a hop beyond it, and which vhosts sit in the path
+depends on what is installed on the hosts — `deploy/` alone cannot answer it, and
+an earlier version of this section asserted a number derived that way and was
+wrong. Send one request through the real front door, read the header this process
+receives, and:
+
+    hops = (entries in the received X-Forwarded-For) - 1
+
+Both naive choices are broken here:
+
+- trusting the **first** element lets any client pick a fresh bucket by sending
+  its own header — a limiter that limits nobody;
+- trusting the **last** element was the first cut: every element the client did
+  not author is a proxy address, so all callers collapsed into one bucket and a
+  single abuser locked out everybody.
+
+Leave the variable **unset** until it is measured. Unset is degraded-but-safe:
+every anonymous caller shares one bucket and a warning is logged once. A wrong
+value is worse than no value.
+
+Anything that does not parse as an IP address — a short header, a trailing
+comma, an empty element — falls back to that same shared bucket, and addresses
+are normalized (`2001:DB8::1` and `2001:0db8::1` are one bucket, not two).
+
+### Components declared before they are used
+
+`x-pending-components` lists every component the document declares that no
+endpoint references yet, each with the issue that will use it. A component
+nothing points at is otherwise indistinguishable from a promise, and a client
+may reasonably build against it. Two tests enforce it: an unreferenced component
+must be listed with an issue number, and an entry whose component has since been
+wired must be removed, so the list cannot become a permanent exemption.
+
+---
+
 ## Cross-cutting rules every endpoint inherits
 
 Implemented in `gateway/app/api/` (issue #12). An endpoint does not re-invent

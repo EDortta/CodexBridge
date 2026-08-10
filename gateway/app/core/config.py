@@ -5,9 +5,16 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from gateway.app.version import APP_VERSION
+
 
 class Settings(BaseSettings):
     app_name: str = "codex-bridge-gateway"
+    app_version: str = APP_VERSION
+    # Build or commit identifier, reported by GET /api/version when set. Left
+    # unset in development; the deploy pipeline is expected to inject it.
+    # Never put anything secret here: this endpoint is unauthenticated.
+    build_revision: str | None = None
     environment: str = "development"
     bind_host: str = "0.0.0.0"
     bind_port: int = 8080
@@ -37,6 +44,31 @@ class Settings(BaseSettings):
     # which fails safe (the client restarts pagination) instead of trusting a
     # cursor this process never issued. Set it when running more than one.
     api_cursor_secret: str | None = None
+    # Entries appended to X-Forwarded-For AFTER the one naming the client.
+    # Do NOT derive it by counting proxies — the first proxy records the client
+    # rather than adding a hop beyond it, and which vhosts are in the path
+    # depends on what is installed. Read one real header as this process
+    # receives it: hops = (number of entries) - 1. 0 means the gateway is
+    # reached directly. Unset means "not determined": every anonymous caller
+    # then shares one bucket and a warning is logged, which is degraded but
+    # never wrong. See gateway/app/api/rate_limit.py.
+    api_trusted_proxy_hops: int | None = None
+    # Whether GET /ready reports executor connectivity. Off by default: the
+    # endpoint is unauthenticated, and the boolean is a presence signal about the
+    # operator's machines — pollable from outside to chart when they are online.
+    # /metrics is already restricted to localhost at the proxy for the same
+    # reason. Turn on only if that exposure is acceptable.
+    ready_expose_executor_state: bool = False
+    # How long a readiness probe result is reused. /ready must stay cheap under
+    # unauthenticated load: without this, each anonymous request took a
+    # connection from the same pool that serves the API, and enough of them made
+    # the gateway report itself database-down and ask to be pulled from rotation.
+    ready_cache_seconds: float = 5.0
+
+    def effective_ready_cache_seconds(self) -> float:
+        # A zero or negative TTL disables caching and restores the DoS the cache
+        # exists to prevent, so it is floored rather than honoured.
+        return max(0.5, float(self.ready_cache_seconds))
 
     def accepted_mcp_tokens(self) -> set[str]:
         tokens = {self.mcp_bearer_token}
