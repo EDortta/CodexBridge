@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from fastapi import WebSocket
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -81,3 +82,22 @@ class AgentHub:
 
     async def mark_task_finished(self, executor_id: str, task_id: str) -> None:
         self.running_tasks.setdefault(executor_id, set()).discard(task_id)
+
+
+def hub_envelope(executor_id: str, message_type: str, payload: dict) -> AgentEnvelope:
+    """Build a message for an executor.
+
+    Lives here rather than in the MCP server because the envelope is a property
+    of the agent channel, not of the transport that happens to ask for it. The
+    HTTP sessions API sends `task.cancel` too, and a second hand-rolled
+    constructor there was already one field short — `AgentEnvelope` requires
+    `message_id`, `executor_id` and `sent_at`, and omitting them fails at
+    validation time rather than at review time.
+    """
+    return AgentEnvelope(
+        message_id=str(uuid4()),
+        executor_id=executor_id,
+        sent_at=datetime.now(timezone.utc),
+        type=AgentMessageType(message_type),
+        payload=payload,
+    )

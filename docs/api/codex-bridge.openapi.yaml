@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.1.0
+  version: 1.2.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -71,6 +71,270 @@ servers:
           against a local gateway — the default is production.
 
 paths:
+
+  /api/v1/sessions:
+    get:
+      operationId: listSessions
+      tags: [sessions]
+      summary: Sessions the caller may see, newest first
+      description: |
+        A **session** is one `codex exec` run on an executor. Only sessions in
+        projects the caller may see are returned, and the filter is applied to
+        the query — so `page.hasMore` describes what the caller can actually
+        reach, not what exists.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: state
+          in: query
+          required: false
+          description: Repeatable. Restricts to these session states.
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: A page of sessions.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Session'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}:
+    get:
+      operationId: getSession
+      tags: [sessions]
+      summary: One session
+      description: |
+        Returns an `ETag` derived from the session's revision. Send it back as
+        `If-Match` on any write to this session.
+
+        A session in a project the caller cannot see returns `404`, never `403`:
+        confirming that an identifier exists is what probing is for.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The session.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}/logs:
+    get:
+      operationId: getSessionLogs
+      tags: [sessions]
+      summary: Log lines, by offset
+      description: |
+        **Offset-paged, not cursor-paged.** Log lines are append-only and
+        addressed by a monotonic integer offset in the store, and the MCP client
+        already reads the same rows that way; giving one table two paging
+        vocabularies would be a v1-breaking mistake to undo. This is the
+        exception `PageInfo` names, not a contradiction of it.
+
+        Lines are redacted on the way out — credentials in query strings,
+        absolute filesystem paths and `host:port` pairs — on top of whatever was
+        applied when they were stored. Do not treat stored log text as safe: the
+        gateway's own logs have carried a credential (issue #15).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: offset
+          in: query
+          required: false
+          description: First log offset to return. Resume with `nextOffset`.
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        '200':
+          description: A slice of the log.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextOffset, hasMore]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LogLine'
+                  nextOffset:
+                    type: integer
+                    description: Pass as `offset` to continue. Authoritative; do not add to it yourself.
+                  hasMore:
+                    type: boolean
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}/stop:
+    post:
+      operationId: stopSession
+      tags: [sessions]
+      summary: Cancel a queued or running session
+      description: |
+        `stop` is the only lifecycle control this API offers, and that is a
+        statement about the agent protocol rather than a choice: `task.cancel`
+        is the only lifecycle message it defines. `pause`, `resume` and
+        `restart` need protocol and executor work — see issue #16 — and are
+        deliberately absent rather than present and inert.
+
+        Requires `If-Match`. With `Idempotency-Key`, a retry returns the first
+        response and stops nothing twice; the replay carries
+        `Idempotent-Replay: true`.
+
+        A disconnected executor does not fail the call: refusing would leave the
+        operator unable to stop a session exactly when the executor is
+        unreachable. But the response then carries `executorNotified: false`,
+        and that distinction is load-bearing — **nothing replays `task.cancel`
+        on reconnect** (issue #17), so the run continues while the session reads
+        as cancelled.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The session after cancellation.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}/explain-error:
+    post:
+      operationId: explainSessionError
+      tags: [sessions]
+      summary: Why this session failed, assembled server-side
+      description: |
+        Gathers the recorded state, the stored error and the last `stderr`
+        lines, all redacted, in one response.
+
+        It is **not** a generated explanation: no model runs and the executor is
+        not contacted. It is the evidence in one place, so the client does not
+        stitch together a detail call and a log call and guess which lines
+        mattered. `POST` because it is expected to grow into something that
+        does more; it changes nothing today.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The evidence.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessionId, state, reasons, generatedAt]
+                properties:
+                  sessionId:
+                    $ref: '#/components/schemas/Id'
+                  state:
+                    type: string
+                  reasons:
+                    type: array
+                    items:
+                      type: string
+                  lastError:
+                    type: [string, 'null']
+                  recentStderr:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LogLine'
+                  generatedAt:
+                    $ref: '#/components/schemas/Timestamp'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
 
   /health:
     get:
@@ -365,36 +629,8 @@ x-contract-excluded-paths:
 # A client must not build against these. They are published so that #9 and #5 add
 # endpoints rather than re-litigating shapes, not as a promise of behaviour.
 x-pending-components:
-  - pointer: '#/components/parameters/Cursor'
-    issue: 9
-  - pointer: '#/components/parameters/Limit'
-    issue: 9
-  - pointer: '#/components/parameters/IfMatch'
-    issue: 9
-  - pointer: '#/components/parameters/IdempotencyKey'
-    issue: 9
-  - pointer: '#/components/responses/ValidationFailed'
-    issue: 9
-  - pointer: '#/components/responses/Unauthenticated'
-    issue: 4
-  - pointer: '#/components/responses/PermissionDenied'
-    issue: 4
-  - pointer: '#/components/responses/NotFound'
-    issue: 9
-  - pointer: '#/components/responses/Conflict'
-    issue: 9
-  - pointer: '#/components/responses/PreconditionRequired'
-    issue: 9
-  - pointer: '#/components/responses/StaleWrite'
-    issue: 9
   - pointer: '#/components/schemas/Actor'
     issue: 6
-  - pointer: '#/components/schemas/ProjectId'
-    issue: 5
-  - pointer: '#/components/schemas/ExecutorId'
-    issue: 9
-  - pointer: '#/components/schemas/PageInfo'
-    issue: 9
 
 components:
 
@@ -745,6 +981,82 @@ components:
           nextCursor: 'eyJhZnRlciI6IjIwMjYtMDgtMTBUMTQ6MzI6MDdaIn0'
         - hasMore: false
           nextCursor: null
+
+    Session:
+      type: object
+      description: |
+        One `codex exec` run. Deliberately omits the project's filesystem path,
+        the command line and the raw result blob: the first is forbidden by
+        "Fields that must never ship", and the other two carry paths and
+        unaudited executor output.
+      required: [id, projectId, executorId, state, revision, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        executorId:
+          $ref: '#/components/schemas/ExecutorId'
+        instruction:
+          type: string
+          description: What the operator asked for.
+        mode:
+          type: string
+        state:
+          type: string
+        priority:
+          type: string
+        revision:
+          type: integer
+          description: |
+            Monotonic; the `ETag` is derived from it. Exposed so a client can
+            tell staleness without parsing the header.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        startedAt:
+          type: [string, 'null']
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+        approvalState:
+          type: [string, 'null']
+        requestedBy:
+          type: [string, 'null']
+        interventionRequired:
+          type: boolean
+          description: The session is held awaiting an approval decision.
+        lastError:
+          type: [string, 'null']
+          description: Redacted before it leaves the process.
+        executorNotified:
+          type: boolean
+          description: |
+            Present on the response to `stop`. Whether the executor was actually
+            told to cancel. `false` means the session is recorded as cancelled
+            **and the run may still be going**: nothing replays `task.cancel`
+            when an executor reconnects (issue #17), so a disconnected executor
+            finishes its `codex exec`. Show the difference; do not present a
+            `false` here as a stopped run.
+
+    LogLine:
+      type: object
+      required: [offset, stream, line]
+      properties:
+        offset:
+          type: integer
+          description: Position in the append-only stream; resume from it.
+        stream:
+          type: string
+          enum: [stdout, stderr]
+        line:
+          type: string
+          description: Redacted — credentials, filesystem paths and host:port pairs.
+        at:
+          type: [string, 'null']
+          format: date-time
 
     DependencyCheck:
       type: object

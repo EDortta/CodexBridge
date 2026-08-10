@@ -49,7 +49,7 @@ version_router = APIRouter()
 # `tests/contract/test_openapi_document.py` asserts it equals the document's
 # `info.version`, so the two cannot drift — a client that pins a contract version
 # has no other way to tell what the server actually speaks.
-API_CONTRACT_VERSION = "1.1.0"
+API_CONTRACT_VERSION = "1.2.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a
@@ -68,9 +68,9 @@ SUPPORTED_API_VERSIONS = ["v1"]
 # `tests/integration/test_probes.py` binds these to the served route table.
 CAPABILITIES = {
     "errorEnvelope": True,       # every /api response, including these probes
-    "cursorPagination": False,   # issue #9 serves the first paged collection
-    "idempotencyKeys": False,    # issue #9 serves the first write
-    "optimisticConcurrency": False,  # issue #9 serves the first guarded write
+    "cursorPagination": True,    # GET /api/v1/sessions
+    "idempotencyKeys": True,     # POST /api/v1/sessions/{id}/stop
+    "optimisticConcurrency": True,  # If-Match on the same write
     "eventStream": False,        # issue #13
     "artifactDownloads": False,  # issue #11
 }

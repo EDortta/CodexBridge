@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.models.entities import ExecutorModel
 from gateway.app.services import store
-from gateway.app.services.agent_hub import AgentHub
+from gateway.app.services.agent_hub import AgentHub, hub_envelope
 from gateway.app.mcp.tools import tool_definitions
 from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.version import APP_VERSION
@@ -254,13 +254,3 @@ async def handle_mcp_call(
     else:
         raise HTTPException(status_code=404, detail=f"unknown_tool:{tool_name}")
     return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
-
-
-def hub_envelope(executor_id: str, message_type: str, payload: dict) -> AgentEnvelope:
-    return AgentEnvelope(
-        message_id=str(uuid4()),
-        executor_id=executor_id,
-        sent_at=datetime.now(timezone.utc),
-        type=AgentMessageType(message_type),
-        payload=payload,
-    )

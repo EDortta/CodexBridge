@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.models.entities import (
@@ -399,3 +399,90 @@ async def store_message_receipt(session: AsyncSession, message_id: str, executor
     )
     await session.commit()
     return True
+
+async def list_tasks_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    states: list[str] | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[TaskModel]:
+    """Tasks the caller may see, newest first, over-fetched by one.
+
+    `project_ids` of None means unrestricted (admin); an empty list means the
+    caller sees nothing, which is a different thing and must not be collapsed
+    into the former. The visibility filter is applied to the QUERY: filtering
+    after loading is how a page count ends up describing rows the caller may not
+    see.
+
+    Returns `limit + 1` rows when more exist, which is what lets the caller
+    report `hasMore` authoritatively without a second COUNT — the contract
+    forbids inferring the end of a list from a short page, precisely because
+    authorization can shorten one.
+
+    Ordering is `(created_at DESC, id DESC)` and the cursor carries both. Time
+    alone is not unique: two tasks created in the same instant would make a
+    cursor skip one or repeat it forever.
+    """
+    statement = select(TaskModel)
+    if project_ids is not None:
+        if not project_ids:
+            return []
+        statement = statement.where(TaskModel.project_id.in_(project_ids))
+    if states:
+        statement = statement.where(TaskModel.state.in_(states))
+    if after is not None:
+        created_at, task_id = after
+        # A real datetime, never a string. SQLAlchemy demotes a string bind to
+        # a text comparison against the DateTime column: on SQLite that happens
+        # to sort correctly *except* when `str(datetime)` omits the fractional
+        # part on a whole second, which silently truncated the list; on Postgres
+        # a text bind against timestamptz is wrong far more often than not.
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                TaskModel.created_at < created_at,
+                and_(TaskModel.created_at == created_at, TaskModel.id < task_id),
+            )
+        )
+    statement = statement.order_by(TaskModel.created_at.desc(), TaskModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def get_task_for_projects(
+    session: AsyncSession, task_id: str, project_ids: list[str] | None
+) -> TaskModel | None:
+    """A task the caller may see, or None.
+
+    None covers "does not exist" and "not yours" alike. The caller turns both
+    into `not_found`, because distinguishing them confirms an identifier exists
+    to someone who was not given it.
+    """
+    task = await session.get(TaskModel, task_id)
+    if task is None:
+        return None
+    if project_ids is not None and task.project_id not in project_ids:
+        return None
+    return task
+
+
+
+async def get_recent_logs(
+    session: AsyncSession, task_id: str, *, stream: str | None = None, limit: int = 20
+) -> list[TaskLogModel]:
+    """The most recent log lines, oldest-first within the slice.
+
+    `get_logs` reads forward from an offset, which is right for a client
+    resuming a stream and wrong for "what happened just before it failed":
+    reading the first N and slicing the end of that window returns the oldest
+    lines on any long session.
+    """
+    statement = select(TaskLogModel).where(TaskLogModel.task_id == task_id)
+    if stream:
+        statement = statement.where(TaskLogModel.stream == stream)
+    statement = statement.order_by(TaskLogModel.offset.desc()).limit(limit)
+    result = await session.execute(statement)
+    return list(reversed(list(result.scalars())))

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.api.idempotency import purge_expired
 from gateway.app.api.rate_limit import RateLimitDependency, client_key
-from gateway.app.api.routes import probes
+from gateway.app.api.routes import probes, sessions
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.core.config import settings
 from gateway.app.version import APP_VERSION
@@ -84,6 +84,13 @@ app.include_router(probes.router)
 # `test_every_served_api_route_carries_the_rate_limiter` fails on any served
 # `/api` route without the dependency. Add new API routes to a router carrying it.
 app.include_router(probes.version_router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# Agent sessions (issue #9). Same limiter, and authentication per route through
+# gateway/app/api/auth.py — the OAuth tokens the MCP transport already issues.
+# Issue #4 (device flow, refresh, revocation, effective-permissions endpoint)
+# remains separate; this is the minimum that lets an authenticated endpoint
+# exist, because a session carries the operator's instruction and its logs.
+app.include_router(sessions.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:

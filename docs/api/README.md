@@ -329,6 +329,59 @@ wired must be removed, so the list cannot become a permanent exemption.
 
 ---
 
+## Sessions (issue #9)
+
+A **session** is one `codex exec` run — internally a `TaskModel`. The mobile
+vocabulary and the internal one differ on purpose: the client should not learn
+the word "task" from a URL and meet it again meaning something else in the
+issues API.
+
+`GET /api/v1/sessions`, `GET .../{id}`, `GET .../{id}/logs`,
+`POST .../{id}/stop`, `POST .../{id}/explain-error`.
+
+### What #9 asked for and did not get
+
+`pause`, `resume` and `restart` are **not** implemented. The agent protocol has
+`task.dispatch`, `task.ack`, `task.log`, `task.result`, `task.cancel`,
+`task.cancelled` and `error` — nothing else. An endpoint offering pause would be
+a button that reports success and changes nothing, which is the failure the
+capability flags exist to prevent. Issue #16 carries the protocol work and the
+decision of whether the controls should exist at all.
+
+`stop` maps to `task.cancel`, which exists and the MCP client already uses.
+
+### Authorization
+
+Project scope is enforced **on the query**, not on the response: filtering after
+loading is how `page.hasMore` ends up describing rows the caller may not see.
+
+A session in a project the caller cannot see returns **404, never 403**.
+Confirming that an identifier exists is exactly what probing is for.
+
+An empty `allowed_projects` list means the caller sees nothing; only an admin
+means "unrestricted". Collapsing the two is a one-character mistake that grants
+everything.
+
+### Logs are redacted on the way out
+
+`shared/security.py:sanitize_log_line` covers three credential patterns and
+nothing else. Issue #15 is the live proof that stored log text is not safe: the
+executor's own machine token reached the gateway log through a URL query string.
+
+So the log endpoint redacts again as it serialises — credentials in query
+strings, absolute filesystem paths, `host:port` pairs — rather than trusting
+what was written. Any future endpoint returning log or executor output owes the
+same.
+
+### A disconnected executor does not fail a stop
+
+The session is marked cancelled and the executor learns on reconnect, through
+the same recovery that already handles a gateway restart. Refusing would leave
+the operator unable to stop a session exactly when the executor is unreachable —
+which is when they most want to.
+
+---
+
 ## Cross-cutting rules every endpoint inherits
 
 Implemented in `gateway/app/api/` (issue #12). An endpoint does not re-invent

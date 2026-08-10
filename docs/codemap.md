@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 64 file(s) · 324 symbol(s) indexed
-- Languages: config (2), python (60), shell (2)
+- 67 file(s) · 371 symbol(s) indexed
+- Languages: config (2), python (63), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -41,7 +41,7 @@ agent/
     service.py
 deploy/
   incus/
-    codexbridge_edge_proxy.py
+    codexbridge_edge_proxy.py  — "RETIRED 2026-08-10 — the Incus edge proxy on the dom1 path."
 gateway/
   Dockerfile
   __init__.py  — "Gateway package."
@@ -49,6 +49,7 @@ gateway/
     __init__.py  — "Gateway app package."
     api/
       __init__.py  — "Cross-cutting HTTP behaviour for the mobile API (issue #12)."
+      auth.py  — "Authentication for the contract surface."
       concurrency.py  — "Optimistic concurrency: two operators, two devices, one decision."
       errors.py  — "The one error envelope every contract endpoint returns."
       idempotency.py  — "Replay-safe writes for a client that goes offline mid-request."
@@ -58,6 +59,7 @@ gateway/
       routes/
         __init__.py  — "HTTP routers for the mobile contract surface."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
+        sessions.py  — "Agent sessions, their logs, and the one control the protocol actually has."
       scope.py  — "Which requests the API's cross-cutting rules apply to."
       setup.py  — "One call that installs every cross-cutting API behaviour."
     core/
@@ -102,6 +104,7 @@ tests/
   integration/
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_probes.py  — "Health, readiness and version — issue #3."
+    test_sessions.py  — "Agent sessions, logs and control — issue #9."
     test_store_and_mcp.py
   unit/
     test_agent_service.py
@@ -143,7 +146,17 @@ tests/
 
 ### `deploy/incus/codexbridge_edge_proxy.py`
 
+> RETIRED 2026-08-10 — the Incus edge proxy on the dom1 path.
+
 - `proxy(path, request)` *(async function)*
+
+### `gateway/app/api/auth.py`
+
+> Authentication for the contract surface.
+
+- `current_principal(request, session)` *(async function)* — "Resolve the bearer token to a principal, or refuse the request."
+- `require_scope(scope)` — "Dependency factory refusing a principal that lacks `scope`."
+- `visible_projects(principal)` — "Project ids the principal may see, or None meaning "no restriction"."
 
 ### `gateway/app/api/concurrency.py`
 
@@ -219,6 +232,17 @@ tests/
 - `health()` *(async function)* — "Liveness. Deliberately touches nothing — see the module docstring."
 - `ready(response)` *(async function)* — "Readiness, with the reason when it is not ready."
 - `api_version()` *(async function)* — "What this server speaks, so a client can refuse before it starts."
+
+### `gateway/app/api/routes/sessions.py`
+
+> Agent sessions, their logs, and the one control the protocol actually has.
+
+- `redact(value)` — "Strip from any executor-influenced text what a response must never carry."
+- `list_sessions(response, state, cursor, limit, principal, session)` *(async function)* — "Sessions the caller may see, newest first."
+- `get_session_detail(session_id, response, principal, session)` *(async function)*
+- `get_session_logs(session_id, response, offset, limit, principal, session)` *(async function)* — "Log lines from `offset`, the append-only scheme the store already uses."
+- `stop_session(session_id, response, if_match, idempotency_key, principal, session)` *(async function)* — "Cancel a running or queued session."
+- `explain_session_error(session_id, principal, session)` *(async function)* — "A structured account of why a session failed, assembled server-side."
 
 ### `gateway/app/api/scope.py`
 
@@ -316,7 +340,6 @@ tests/
 ### `gateway/app/mcp/server.py`
 
 - `handle_mcp_call(body, session, hub, principal)` *(async function)*
-- `hub_envelope(executor_id, message_type, payload)`
 
 ### `gateway/app/mcp/tools.py`
 
@@ -345,6 +368,7 @@ tests/
   - `send(self, executor_id, envelope)` *(async method)*
   - `dispatch_next(self, executor_id)` *(async method)*
   - `mark_task_finished(self, executor_id, task_id)` *(async method)*
+- `hub_envelope(executor_id, message_type, payload)` — "Build a message for an executor."
 
 ### `gateway/app/services/audit.py`
 
@@ -376,6 +400,9 @@ tests/
 - `create_oauth_access_token(session)` *(async function)*
 - `get_oauth_access_token(session, token)` *(async function)*
 - `store_message_receipt(session, message_id, executor_id, message_type)` *(async function)*
+- `list_tasks_page(session)` *(async function)* — "Tasks the caller may see, newest first, over-fetched by one."
+- `get_task_for_projects(session, task_id, project_ids)` *(async function)* — "A task the caller may see, or None."
+- `get_recent_logs(session, task_id)` *(async function)* — "The most recent log lines, oldest-first within the slice."
 
 ### `scripts/apply_migrations.py`
 
@@ -538,6 +565,46 @@ tests/
 - `test_a_concurrent_burst_issues_one_probe(monkeypatch)` *(async function)* — "The cache alone does not help while the first probe is still running."
 - `test_zero_cache_seconds_is_floored(monkeypatch)` — "A TTL of 0 would restore the uncached DoS, so it is not honoured."
 - `test_every_served_api_route_carries_the_rate_limiter()` — "`main.py` claimed every future /api route inherits the limiter. It does not."
+
+### `tests/integration/test_sessions.py`
+
+> Agent sessions, logs and control — issue #9.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)* — "A real app over a real database, seeded with two projects."
+- `make_task(factory, project_id, instruction, state)` *(async function)*
+- `auth(token)`
+- `test_sessions_require_a_token(api)` *(async function)* — "These endpoints carry the operator's instructions and logs."
+- `test_an_expired_token_is_refused(api)` *(async function)*
+- `test_a_token_without_the_scope_cannot_stop(api)` *(async function)*
+- `test_a_session_in_an_invisible_project_is_not_found_not_forbidden(api)` *(async function)* — "403 confirms the identifier exists, which is what probing is for."
+- `test_the_list_is_filtered_before_it_is_paged(api)` *(async function)* — "Filtering after loading makes hasMore describe rows the caller cannot see."
+- `test_a_user_with_no_projects_sees_nothing(api, users_file, monkeypatch)` *(async function)* — "An empty allowlist must not be mistaken for "unrestricted"."
+- `test_the_session_body_never_carries_the_project_path(api)` *(async function)* — "`ProjectModel.path` is the canonical trap named by the contract."
+- `test_the_cursor_walks_every_session_once(api)` *(async function)*
+- `test_a_cursor_from_another_filter_is_rejected(api)` *(async function)*
+- `test_logs_page_by_offset_and_resume(api)` *(async function)*
+- `test_log_lines_are_redacted_on_the_way_out(api, stored, must_not_contain)` *(async function)* — "Stored log text is not safe: the gateway's own log carried a token (#15)."
+- `test_logs_of_an_invisible_session_are_not_found(api)` *(async function)*
+- `test_stop_requires_if_match(api)` *(async function)*
+- `test_stop_with_a_stale_etag_is_refused(api)` *(async function)*
+- `test_stop_cancels_and_tells_the_executor(api)` *(async function)*
+- `test_stopping_a_finished_session_is_a_conflict(api)` *(async function)*
+- `test_a_disconnected_executor_does_not_block_the_stop(api)` *(async function)* — "Refusing here strands the operator exactly when they most want to stop."
+- `test_a_retried_stop_replays_instead_of_acting_twice(api)` *(async function)*
+- `test_a_failed_stop_does_not_keep_the_key_claimed(api)` *(async function)* — "One transient refusal must not lock the key for its whole TTL."
+- `test_explain_error_reports_the_recorded_evidence(api)` *(async function)*
+- `test_explain_error_on_a_healthy_session_says_so(api)` *(async function)*
+- `test_explain_error_of_an_invisible_session_is_not_found(api)` *(async function)*
+- `test_stop_releases_the_executor_slot(api)` *(async function)* — "A cancelled RUNNING task must not pin the executor's concurrency slot."
+- `test_stop_reports_whether_the_executor_was_told(api)` *(async function)*
+- `test_a_cursor_on_a_whole_second_timestamp_does_not_truncate(api)` *(async function)* — "`str(datetime)` drops ".000000" on a whole second."
+- `test_a_cursor_is_not_valid_for_another_caller(api)` *(async function)* — "A cursor issued to one principal must not position another's pagination."
+- `test_the_replayed_stop_carries_an_etag(api)` *(async function)* — "The contract declares ETag on this 200, and a retrying client needs one."
+- `test_explain_error_reports_the_newest_stderr(api)` *(async function)* — "Reading the first 1000 lines and slicing the end returns the OLDEST."
+- `test_more_secret_shapes_are_redacted(api, stored, must_not_contain)` *(async function)* — "Each of these reached the client verbatim before an adversarial pass."
+- `test_terminal_escapes_are_stripped(api)` *(async function)* — "`]0;title` retitles a CLI consumer's window."
+- `test_the_instruction_is_redacted_like_everything_else(api)` *(async function)* — "It sat raw beside a redacted lastError; it is free text a human writes."
 
 ### `tests/integration/test_store_and_mcp.py`
 
