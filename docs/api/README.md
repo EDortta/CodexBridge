@@ -276,36 +276,47 @@ with `@app.get("/api/v1/...")` would be **unlimited**, so "every `/api` route
 inherits it" is a claim a comment cannot keep:
 `test_every_served_api_route_carries_the_rate_limiter` is what keeps it.
 
-#### Which hop identifies the caller
+#### Which entry identifies the caller
 
-`CODEX_BRIDGE_API_TRUSTED_PROXY_HOPS` is the number of entries appended to
-`X-Forwarded-For` **after** the one naming the client; the caller is that many
-positions from the end.
+`CODEX_BRIDGE_API_TRUSTED_PROXIES` lists the addresses or CIDRs of the proxies in
+front of the gateway. The client is the **rightmost `X-Forwarded-For` entry that
+is not one of them**.
 
-**Measure it, do not count proxies.** The first proxy in a chain *records* the
-client rather than adding a hop beyond it, and which vhosts sit in the path
-depends on what is installed on the hosts — `deploy/` alone cannot answer it, and
-an earlier version of this section asserted a number derived that way and was
-wrong. Send one request through the real front door, read the header this process
-receives, and:
+It is not a hop count, and an earlier version of this section said it was.
 
-    hops = (entries in the received X-Forwarded-For) - 1
+**Measured on frida, 2026-08-10:** the nginx access log records the caller's
+public address in `$remote_addr`, the vhost sets
+`X-Forwarded-For $proxy_add_x_forwarded_for`, and the gateway's peer is
+`127.0.0.1` — so the header arrives with **one entry** and the correct value is
+`CODEX_BRIDGE_API_TRUSTED_PROXIES=127.0.0.1`.
 
-Both naive choices are broken here:
+A count was still the wrong mechanism. `deploy/` also carries the dom1 path
+(`dom1-codexbridge.conf` → `codexbridge_edge_proxy.py` → frida), which appends
+two more entries; the operator has since retired dom1 from serving CodexBridge
+— it renews certificates only — but the two configurations remain in the tree
+and a chain of a different length is one deploy away. Walking from the right
+past the known proxies is correct for any length; a number is correct for one
+topology and silently wrong for the next.
 
-- trusting the **first** element lets any client pick a fresh bucket by sending
-  its own header — a limiter that limits nobody;
-- trusting the **last** element was the first cut: every element the client did
-  not author is a proxy address, so all callers collapsed into one bucket and a
-  single abuser locked out everybody.
+`deploy/nginx/codexbridge-container.conf` belongs to that dom1 path and is **not
+installed on frida** (its enabled vhosts are `codexbridge-http` and
+`codexbridge-https`). If it is ever put back in front of the gateway, its
+address has to join the trusted list.
 
-Leave the variable **unset** until it is measured. Unset is degraded-but-safe:
-every anonymous caller shares one bucket and a warning is logged once. A wrong
-value is worse than no value.
+Two guards, both pessimistic on purpose:
 
-Anything that does not parse as an IP address — a short header, a trailing
-comma, an empty element — falls back to that same shared bucket, and addresses
-are normalized (`2001:DB8::1` and `2001:0db8::1` are one bucket, not two).
+- **the immediate peer must itself be a trusted proxy**, or the header is ignored
+  entirely. The gateway binds `0.0.0.0`, so anything on the LAN reaches it
+  directly and would otherwise write its own identity;
+- anything unresolvable — unset configuration, a non-address where the client
+  should be, every entry trusted, no header at all from a proxy — falls back to
+  one shared bucket rather than to a key built from client-controlled bytes or
+  from a proxy's own address.
+
+Leave it **unset** until the addresses are known: the header is ignored, every
+anonymous caller shares one bucket, and a warning is logged once. A wrong value
+is worse than no value. Addresses are normalized, so `2001:DB8::1` and
+`2001:0db8::1` are one bucket rather than two.
 
 ### Components declared before they are used
 

@@ -124,27 +124,45 @@ def _cache_hit(now: float) -> bool | None:
     if _cached_database_state is None:
         return None
     stamped, reachable = _cached_database_state
-    ttl = settings.effective_ready_cache_seconds() if reachable else FAILURE_CACHE_SECONDS
+    ttl = settings.effective_ready_cache_seconds()
+    if not reachable:
+        # A failure is held for the shorter of the two, never longer than a
+        # success. Pinning a blip for longer than the good news asks the load
+        # balancer to keep a recovered gateway out of rotation — and with a
+        # small configured TTL the fixed constant inverted exactly that way.
+        ttl = min(FAILURE_CACHE_SECONDS, ttl)
     return reachable if now - stamped < ttl else None
 
 
 async def database_reachable(now: float | None = None) -> bool:
-    """Cached, single-flight readiness of the database."""
-    global _cached_database_state
-    now = time.monotonic() if now is None else now
+    """Cached, single-flight readiness of the database.
 
-    cached = _cache_hit(now)
+    `now` is for tests, which need a controllable clock. In production it is
+    None and every timestamp is read at the moment it is used — which matters
+    twice here, because a probe can take as long as the pool timeout:
+
+    - the re-check **inside** the lock must use the current time, not the
+      caller's arrival time. Re-using the arrival time made a caller that
+      waited 30s accept nothing and probe again, so the single-flight the lock
+      exists for did not hold;
+    - the cache entry must be stamped **after** the probe. Stamping with the
+      arrival time wrote an entry already past its TTL whenever the probe was
+      slower than the TTL — the cache suppressed nothing in exactly the slow
+      database condition it was added for.
+    """
+    global _cached_database_state
+    fixed_clock = now is not None
+
+    cached = _cache_hit(now if fixed_clock else time.monotonic())
     if cached is not None:
         return cached
 
     async with _probe_lock:
-        # Re-check under the lock: whoever held it may have just refreshed the
-        # cache, and probing again would defeat the single-flight entirely.
-        cached = _cache_hit(now if now is not None else time.monotonic())
+        cached = _cache_hit(now if fixed_clock else time.monotonic())
         if cached is not None:
             return cached
         reachable = await _probe_database()
-        _cached_database_state = (now, reachable)
+        _cached_database_state = (now if fixed_clock else time.monotonic(), reachable)
         return reachable
 
 

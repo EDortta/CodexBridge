@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.api.idempotency import purge_expired
-from gateway.app.api.rate_limit import RateLimitDependency
+from gateway.app.api.rate_limit import RateLimitDependency, client_key
 from gateway.app.api.routes import probes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.core.config import settings
@@ -382,8 +382,12 @@ async def mcp_endpoint(
     authorization: str | None = Header(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
-    client_ip = request.client.host if request.client else "unknown"
-    allowed = await rate_limiter.allow(client_ip)
+    # Same bucket rule as the contract surface. Keying on the raw peer address
+    # put every ChatGPT caller in one bucket, because behind nginx that address
+    # is always 127.0.0.1 — one caller exhausting the window returned 429 to
+    # every other user. Two call sites of one rule; only the new one had been
+    # converted, and docs/security.md meanwhile described /mcp as per-IP.
+    allowed = await rate_limiter.allow(client_key(request))
     if not allowed:
         metrics.RATE_LIMIT_REJECTIONS.inc()
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")

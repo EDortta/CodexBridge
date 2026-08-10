@@ -44,15 +44,25 @@ class Settings(BaseSettings):
     # which fails safe (the client restarts pagination) instead of trusting a
     # cursor this process never issued. Set it when running more than one.
     api_cursor_secret: str | None = None
-    # Entries appended to X-Forwarded-For AFTER the one naming the client.
-    # Do NOT derive it by counting proxies — the first proxy records the client
-    # rather than adding a hop beyond it, and which vhosts are in the path
-    # depends on what is installed. Read one real header as this process
-    # receives it: hops = (number of entries) - 1. 0 means the gateway is
-    # reached directly. Unset means "not determined": every anonymous caller
-    # then shares one bucket and a warning is logged, which is degraded but
-    # never wrong. See gateway/app/api/rate_limit.py.
-    api_trusted_proxy_hops: int | None = None
+    # Addresses or CIDRs of the proxies in front of this process, comma
+    # separated (e.g. "127.0.0.1,192.168.71.0/24"). The client is the rightmost
+    # X-Forwarded-For entry that is NOT one of these.
+    #
+    # Not a hop COUNT, because this deployment has two ingress paths of
+    # different lengths — direct (8443 published to nginx's internal 443, one
+    # entry) and via dom1 (dom1 nginx -> edge proxy -> frida nginx, three) — so
+    # any fixed number is wrong for one of them.
+    #
+    # Defaults to the loopback reverse proxy, which is what this deployment
+    # actually has: measured on frida, nginx is the only hop that appends and
+    # the gateway's peer is 127.0.0.1. Leaving it unset shipped every anonymous
+    # caller into one shared bucket — the defect the rewrite exists to remove,
+    # reintroduced as a default. Set to "" to disable header trust entirely.
+    #
+    # A gateway with no proxy in front is unaffected: no X-Forwarded-For arrives,
+    # so the setting is never consulted, and a forged header from a direct client
+    # is ignored because that peer is not in this list.
+    api_trusted_proxies: str | None = "127.0.0.1"
     # Whether GET /ready reports executor connectivity. Off by default: the
     # endpoint is unauthenticated, and the boolean is a presence signal about the
     # operator's machines — pollable from outside to chart when they are online.

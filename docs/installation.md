@@ -10,10 +10,23 @@
 4. Criar `/etc/codex-bridge/env` a partir de `.env.example`.
    No `frida`, prefira `CODEX_BRIDGE_BIND_HOST=127.0.0.1` e `CODEX_BRIDGE_BIND_PORT=18080`, porque `*:8080` já está ocupado por `mosquitto`.
    Para uso com ChatGPT, defina `CODEX_BRIDGE_MCP_AUTH_MODE=oauth`, `CODEX_BRIDGE_PUBLIC_BASE_URL=https://codexbridge.inovacaosistemas.com.br:8443` e `CODEX_BRIDGE_USER_REGISTRY_FILE=/etc/codex-bridge/users.json`.
+   Defina também `CODEX_BRIDGE_API_TRUSTED_PROXIES` com os endereços dos proxies
+   à frente do gateway — é o que permite ao rate limiting distinguir um chamador
+   do outro. **No `frida` o valor é `127.0.0.1`**, medido em 2026-08-10: o
+   `nginx` local é o único hop que anexa ao `X-Forwarded-For` (o log registrou o
+   IP público do cliente em `$remote_addr`, e o gateway vê o peer `127.0.0.1`),
+   de modo que o header chega com uma entrada só. Se a topologia mudar, meça de
+   novo em vez de deduzir: com o valor errado, ou todo mundo cai num bucket só,
+   ou o cliente escolhe o próprio.
 5. Ajustar `/etc/codex-bridge/registry.json`.
 6. Criar `/etc/codex-bridge/users.json` a partir de `examples/users.json` e trocar a senha inicial.
 7. Instalar `deploy/systemd/codex-bridge-gateway.service`.
 8. Ajustar `deploy/nginx/frida-codex-bridge.conf`.
+   **O arquivo instalado no `frida` chama-se `codexbridge-https`** (com um
+   `codexbridge-http` para a 80), em `/etc/nginx/sites-available/`. O nome no
+   repositório não bate com o nome instalado, então editar um não toca o outro —
+   verificado em 2026-08-10, quando o vhost em produção ainda era a versão sem
+   `/health`, `/ready` e `/api/`.
    Esse arquivo é uma **allowlist de `location` sem catch-all**: rota que não
    estiver nomeada nele responde 404 na porta da frente, por melhor que funcione
    na aplicação. Publicar rota nova são sempre duas edições — o router e este

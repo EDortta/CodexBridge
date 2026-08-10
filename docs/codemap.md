@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 63 file(s) · 310 symbol(s) indexed
-- Languages: config (2), python (59), shell (2)
+- 64 file(s) · 324 symbol(s) indexed
+- Languages: config (2), python (60), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -108,6 +108,7 @@ tests/
     test_apply_migrations.py  — "The migration runner, exercised against real throwaway databases."
     test_main_import.py
     test_policy.py
+    test_rate_limiter_bounds.py  — "The limiter's key space must be bounded, or it becomes the resource exhausted."
     test_schema_guard.py  — "The guard that refuses to serve a database the code has outgrown."
     test_security.py
     test_users.py
@@ -170,11 +171,13 @@ tests/
 - `fingerprint(body)`
 - **`ReplayedResponse`** *(class)* — "A stored response being returned again, never re-executed."
   - `__init__(self, status_code, body)` *(method)*
+- **`Claim`** *(class)* — "Proof that this caller, and not a later one, owns the reservation."
+  - `__init__(self, token)` *(method)*
 - `lookup(session)` *(async function)* — "Read-only: the stored response for this key, or None. Does not reserve."
 - `reserve(session)` *(async function)* — "Claim this key before doing the work."
-- `complete(session)` *(async function)* — "Attach the finished response to a reservation this caller won."
+- `complete(session)` *(async function)* — "Attach the finished response to a reservation this caller still owns."
 - `release(session)` *(async function)* — "Drop a reservation whose write failed, so the client may try again."
-- `remember(session)` *(async function)* — "Reserve and complete in one step. For a write already known to be done."
+- `remember(session)` *(async function)* — "Reserve and complete in one step, for a write already known to be done."
 - `purge_expired(session)` *(async function)* — "Drop records past their TTL. Returns how many were removed."
 
 ### `gateway/app/api/pagination.py`
@@ -256,9 +259,10 @@ tests/
 
 ### `gateway/app/core/rate_limit.py`
 
-- **`MemoryRateLimiter`** *(class)*
-  - `__init__(self, limit, window_seconds)` *(method)*
+- **`MemoryRateLimiter`** *(class)* — "Sliding-window limiter with a bounded key space."
+  - `__init__(self, limit, window_seconds, max_keys)` *(method)*
   - `allow(self, key)` *(async method)*
+  - `tracked_keys(self)` *(method)* — "Bucket count, for tests and diagnostics."
 
 ### `gateway/app/core/registry.py`
 
@@ -480,6 +484,7 @@ tests/
 - `test_purge_expired_removes_only_expired(db_session)` *(async function)*
 - `test_fingerprint_distinguishes_bodies()`
 - `test_five_hundred_reports_the_same_id_in_body_and_header(client)` — "The screenshot and the log must name the same request."
+- `test_generated_request_id_also_agrees_between_header_and_body(client)` — "Same equality when the server mints the id, which is the common case."
 - `test_unmatched_api_path_returns_the_envelope(client)` — "A typo'd URL is the commonest client mistake, and it missed the envelope."
 - `test_non_contract_unhandled_error_keeps_a_body(client)` — "Re-raising from inside the exception handler produced a bodyless 500."
 - `test_control_characters_never_reach_the_response_header(hostile)` — "`re.match` with `$` also matches before a trailing newline."
@@ -512,15 +517,21 @@ tests/
 - `test_unavailable_ready_body_contains_no_driver_text(client, monkeypatch)` — "And the response built from that `False` carries none of it."
 - `test_api_version_reports_every_namespace_it_serves(client)` — "It sits outside /api/v1 precisely so it can answer for all namespaces."
 - `test_capability_flags_match_what_the_served_routes_accept(client)` — "A `true` flag a client acts on must not produce a 404 or be ignored."
+- `test_error_envelope_capability_is_demonstrated_not_asserted(client)` — "`errorEnvelope: true` is the one flag with no request signature."
 - `test_api_version_omits_build_revision_when_the_deployment_injected_none(client)` — "Absence means "not reported", never "no build" — so no empty string."
 - `test_api_version_reports_build_revision_when_set(client, monkeypatch)`
 - `test_probe_responses_carry_no_infrastructure_detail(client)` — "The acceptance criterion "no sensitive infrastructure details", asserted."
 - `test_api_version_is_rate_limited_with_the_contract_shape(monkeypatch)` — "The contract documents 429 + Retry-After; before this it documented only."
 - `test_health_and_ready_are_never_rate_limited(monkeypatch)` — "Monitoring polls these on a timer."
-- `test_bucket_is_the_caller_not_the_nearest_proxy(monkeypatch)` — "The deployed chain has more than one appending hop."
-- `test_client_cannot_forge_a_hop_to_escape_its_bucket(monkeypatch)` — "Prepending entries must not move the caller off its bucket."
-- `test_unparseable_forwarded_for_falls_back_to_one_shared_bucket(header, monkeypatch)` — "A trailing comma produced the literal bucket `"ip:"` — keyed on nothing."
-- `test_missing_forwarded_for_behind_a_proxy_is_not_trusted(monkeypatch)` — "No header while configured for proxies means the request bypassed them."
+- `test_the_caller_is_found_on_both_ingress_paths(monkeypatch)` — "A fixed hop count cannot be right for both, so the rule is "which are ours"."
+- `test_two_clients_do_not_share_a_bucket(monkeypatch)` — "The round-1 defect: one abuser exhausting the window for everybody."
+- `test_a_client_cannot_forge_an_extra_hop(monkeypatch)` — "Prepending junk must not move the caller off its own bucket."
+- `test_header_from_an_untrusted_peer_is_ignored(monkeypatch)` — "The gateway binds 0.0.0.0, so anything on the LAN can reach it directly."
+- `test_unconfigured_trusted_proxies_ignores_the_header(monkeypatch)` — "A wrong value is worse than none, so none must be safe rather than a guess."
+- `test_unresolvable_forwarded_for_falls_back_to_one_shared_bucket(header, monkeypatch)` — "A trailing comma once produced the literal bucket `"ip:"` — keyed on nothing."
+- `test_no_forwarded_header_keys_on_the_peer(monkeypatch)` — "Direct access, no proxy in the path: the peer IS the client."
+- `test_no_header_from_a_trusted_proxy_is_not_keyed_on_the_proxy(monkeypatch)` — "Otherwise everyone arriving through that proxy shares its address."
+- `test_addresses_are_normalized_so_spellings_do_not_split_buckets(monkeypatch)` — "A bucket that splits on spelling is a bucket an attacker can multiply."
 - `test_ready_is_cached_so_a_flood_cannot_drain_the_connection_pool(monkeypatch)` — "`/ready` is unauthenticated and unlimited, and shares the API's pool."
 - `test_readiness_cache_expires(monkeypatch)` *(async function)* — "Cached, not frozen: a recovered database must be noticed."
 - `test_a_failed_probe_is_cached_only_briefly(monkeypatch)` *(async function)* — "A blip must not pin the gateway out of rotation for the whole TTL."
@@ -576,6 +587,15 @@ tests/
 
 - `test_policy_level_for_mode()`
 - `test_sensitive_instruction_requires_approval()`
+
+### `tests/unit/test_rate_limiter_bounds.py`
+
+> The limiter's key space must be bounded, or it becomes the resource exhausted.
+
+- `test_a_fresh_key_per_request_does_not_grow_without_bound()` *(async function)*
+- `test_idle_buckets_are_dropped()` *(async function)* — "A window that emptied leaves an entry behind unless something removes it."
+- `test_an_honest_caller_is_still_limited_while_the_table_churns()` *(async function)* — "Eviction must not become a way to escape the limit."
+- `test_the_limit_still_fires_for_a_single_key()` *(async function)*
 
 ### `tests/unit/test_schema_guard.py`
 

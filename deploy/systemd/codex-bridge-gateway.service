@@ -9,7 +9,13 @@ User=codexbridge
 Group=codexbridge
 WorkingDirectory=/opt/codex-bridge
 EnvironmentFile=/etc/codex-bridge/env
-ExecStart=/opt/codex-bridge/.venv/bin/uvicorn gateway.app.main:app --host 0.0.0.0 --port 8080
+# Honours CODEX_BRIDGE_BIND_HOST / CODEX_BRIDGE_BIND_PORT from EnvironmentFile.
+# The previous line hardcoded --port 8080 while docs/installation.md instructed
+# 18080 (8080 is taken by mosquitto on frida) and both nginx vhosts proxy to
+# 18080 — so this file, reinstalled from the repository, would have collided
+# with mosquitto, crash-looped under Restart=always, and 502'd every route. The
+# running frida unit already carries 18080: deploy/ was stale, not production.
+ExecStart=/bin/sh -c 'exec /opt/codex-bridge/.venv/bin/uvicorn gateway.app.main:app --host "${CODEX_BRIDGE_BIND_HOST:-127.0.0.1}" --port "${CODEX_BRIDGE_BIND_PORT:-18080}"'
 Restart=always
 RestartSec=5
 NoNewPrivileges=true

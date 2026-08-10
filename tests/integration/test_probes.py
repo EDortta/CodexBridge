@@ -218,30 +218,50 @@ def test_api_version_reports_every_namespace_it_serves(client: TestClient) -> No
     assert body["time"].endswith("Z")
 
 
+def _collect_params(dependant, query: set, header: set) -> None:
+    """Walk a dependant and everything it depends on.
+
+    Reading only the endpoint function's own parameters made the gate fire
+    backwards: an `Idempotency-Key` declared in a shared dependency — the
+    natural shape, since the helpers live in their own modules — would be
+    invisible, so the way to make the suite green would be to keep advertising
+    `false` for a capability the server does honour.
+    """
+    query |= {param.alias.lower() for param in dependant.query_params}
+    header |= {param.alias.lower() for param in dependant.header_params}
+    for sub in dependant.dependencies:
+        _collect_params(sub, query, header)
+
+
 def _api_route_signals() -> dict[str, bool]:
     """What the served `/api` routes actually accept.
 
-    Derived from FastAPI's resolved dependants rather than from a list someone
-    maintains: a capability flag is a promise about request handling, so the
-    evidence has to come from the handlers.
+    Derived from FastAPI's resolved dependants rather than from a hand-kept
+    list: a capability flag is a promise about request handling, so the evidence
+    has to come from the handlers.
     """
     from gateway.app.main import app
 
     query_names: set[str] = set()
     header_names: set[str] = set()
+    paths: set[str] = set()
     for route in app.routes:
         path = str(getattr(route, "path", ""))
         if not (path == "/api" or path.startswith("/api/")):
             continue
+        paths.add(path)
         dependant = getattr(route, "dependant", None)
-        if dependant is None:
-            continue
-        query_names |= {param.alias.lower() for param in dependant.query_params}
-        header_names |= {param.alias.lower() for param in dependant.header_params}
+        if dependant is not None:
+            _collect_params(dependant, query_names, header_names)
+
     return {
         "cursorPagination": "cursor" in query_names,
         "idempotencyKeys": "idempotency-key" in header_names,
         "optimisticConcurrency": "if-match" in header_names,
+        # Route-shaped capabilities: nothing to declare on a signature, so the
+        # evidence is whether a route exists to serve them at all.
+        "eventStream": any("/events" in path or "/stream" in path for path in paths),
+        "artifactDownloads": any("/artifacts" in path or "/builds" in path for path in paths),
     }
 
 
@@ -254,19 +274,37 @@ def test_capability_flags_match_what_the_served_routes_accept(client: TestClient
     `Idempotency-Key` got a 404. That is exactly the failure the flags exist to
     prevent.
 
-    The first *fix* was worse in a quiet way: it only checked the flags while no
-    `/api/v1` route existed, so the guard went silent the moment it started to
-    matter. This one is unconditional and reads the handlers.
+    The first *fix* was worse in a quiet way: it only checked while no `/api/v1`
+    route existed, so the guard went silent the moment it started to matter.
+    This one is unconditional, reads the handlers including their dependencies,
+    and covers every flag that describes a request-facing feature.
     """
     capabilities = client.get("/api/version").json()["capabilities"]
     assert all(isinstance(value, bool) for value in capabilities.values())
-    assert capabilities["errorEnvelope"] is True
 
-    for flag, served in _api_route_signals().items():
+    signals = _api_route_signals()
+    unbound = set(capabilities) - set(signals) - {"errorEnvelope"}
+    assert not unbound, (
+        f"capability flags nothing can verify: {sorted(unbound)}. Every flag needs "
+        "an observable signal, or it is a promise with no artifact behind it."
+    )
+
+    for flag, served in signals.items():
         assert capabilities[flag] is served, (
-            f"{flag} is advertised as {capabilities[flag]} but no served /api route "
-            f"accepts it ({served=}); a client acting on it is misled"
+            f"{flag} is advertised as {capabilities[flag]} but the served /api routes "
+            f"say {served}; a client acting on it is misled"
         )
+
+
+def test_error_envelope_capability_is_demonstrated_not_asserted(client: TestClient) -> None:
+    """`errorEnvelope: true` is the one flag with no request signature.
+
+    Asserting it against the constant it was read from can never fail, so it is
+    demonstrated instead: make a contract path fail and check the shape.
+    """
+    assert client.get("/api/version").json()["capabilities"]["errorEnvelope"] is True
+    body = client.get("/api/v1/definitely-not-a-route").json()
+    assert {"code", "message", "requestId", "retryable"} <= body.keys()
 
 
 def test_api_version_omits_build_revision_when_the_deployment_injected_none(client: TestClient) -> None:
@@ -342,84 +380,130 @@ def _request_with(header: str | None = None, peer: str = "10.0.0.9"):
     return Request({"type": "http", "headers": headers, "client": (peer, 1234)})
 
 
-def test_bucket_is_the_caller_not_the_nearest_proxy(monkeypatch) -> None:
-    """The deployed chain has more than one appending hop.
+TRUSTED = "127.0.0.1,192.168.71.0/24"
 
-    dom1 nginx (`$proxy_add_x_forwarded_for`) → Incus edge proxy → frida nginx.
-    Taking the LAST element therefore returned `127.0.0.1` for everyone, so one
-    caller exhausting the window locked out the whole internet. Taking the FIRST
-    is worse: the client authors it. The hop count has to be configuration.
+# The two real ingress paths, as docs/architecture.md describes them.
+DIRECT_CHAIN = "198.51.100.7"                                  # 8443 -> nginx 443 -> gateway
+DOM1_CHAIN = "198.51.100.7, 192.168.71.10, 127.0.0.1"          # dom1 -> edge proxy -> nginx
+
+
+def test_the_caller_is_found_on_both_ingress_paths(monkeypatch) -> None:
+    """A fixed hop count cannot be right for both, so the rule is "which are ours".
+
+    Direct, the port publish is NAT and appends nothing, so the header holds one
+    entry. Via dom1 it holds three. Walking from the right past the configured
+    proxies finds the client in either case.
     """
     from gateway.app.api.rate_limit import client_key
     from gateway.app.core.config import settings
 
-    monkeypatch.setattr(settings, "api_trusted_proxy_hops", 2)
-    chain = "198.51.100.7, 127.0.0.1, 203.0.113.10"
-    other = "203.0.113.44, 127.0.0.1, 203.0.113.10"
-
-    assert client_key(_request_with(chain)) == "ip:198.51.100.7"
-    assert client_key(_request_with(other)) == "ip:203.0.113.44"
-    assert client_key(_request_with(chain)) != client_key(_request_with(other))
+    monkeypatch.setattr(settings, "api_trusted_proxies", TRUSTED)
+    assert client_key(_request_with(DIRECT_CHAIN, peer="127.0.0.1")) == "ip:198.51.100.7"
+    assert client_key(_request_with(DOM1_CHAIN, peer="127.0.0.1")) == "ip:198.51.100.7"
 
 
-def test_client_cannot_forge_a_hop_to_escape_its_bucket(monkeypatch) -> None:
-    """Prepending entries must not move the caller off its bucket.
+def test_two_clients_do_not_share_a_bucket(monkeypatch) -> None:
+    """The round-1 defect: one abuser exhausting the window for everybody."""
+    from gateway.app.api.rate_limit import client_key
+    from gateway.app.core.config import settings
 
-    With the hop count fixed, an extra element the client invents shifts *its
-    own* address out of the counted position, so the forged value lands in the
-    counted slot — and the limiter still keys on one stable value per connection
-    path rather than on anything the caller can vary freely per request.
+    monkeypatch.setattr(settings, "api_trusted_proxies", TRUSTED)
+    a = client_key(_request_with("203.0.113.5, 192.168.71.10, 127.0.0.1", peer="127.0.0.1"))
+    b = client_key(_request_with("198.51.100.9, 192.168.71.10, 127.0.0.1", peer="127.0.0.1"))
+    assert a != b
+    assert {a, b} == {"ip:203.0.113.5", "ip:198.51.100.9"}
+
+
+def test_a_client_cannot_forge_an_extra_hop(monkeypatch) -> None:
+    """Prepending junk must not move the caller off its own bucket.
+
+    Whatever the client writes ends up to the LEFT of what the proxies append,
+    so walking from the right reaches the proxy-recorded address first.
+    """
+    from gateway.app.api.rate_limit import client_key
+    from gateway.app.core.config import settings
+
+    monkeypatch.setattr(settings, "api_trusted_proxies", TRUSTED)
+    keys = {
+        client_key(_request_with(f"{spoof}, 198.51.100.7, 192.168.71.10, 127.0.0.1", peer="127.0.0.1"))
+        for spoof in ("1.1.1.1", "2.2.2.2", "3.3.3.3")
+    }
+    assert keys == {"ip:198.51.100.7"}
+
+
+def test_header_from_an_untrusted_peer_is_ignored(monkeypatch) -> None:
+    """The gateway binds 0.0.0.0, so anything on the LAN can reach it directly.
+
+    Honouring a forwarded header from a peer that is not one of our proxies
+    would let that caller write its own identity.
     """
     from gateway.app.api.rate_limit import SHARED_BUCKET, client_key
     from gateway.app.core.config import settings
 
-    monkeypatch.setattr(settings, "api_trusted_proxy_hops", 2)
-    keys = {
-        client_key(_request_with(f"{spoof}, 198.51.100.7, 127.0.0.1, 203.0.113.10"))
-        for spoof in ("1.1.1.1", "2.2.2.2", "3.3.3.3")
-    }
-    assert keys == {"ip:198.51.100.7"}, (
-        "a client prepending junk must not reach a different bucket"
-    )
-    assert SHARED_BUCKET not in keys
+    monkeypatch.setattr(settings, "api_trusted_proxies", TRUSTED)
+    assert client_key(_request_with(DOM1_CHAIN, peer="10.9.9.9")) == SHARED_BUCKET
+
+
+def test_unconfigured_trusted_proxies_ignores_the_header(monkeypatch) -> None:
+    """A wrong value is worse than none, so none must be safe rather than a guess."""
+    from gateway.app.api.rate_limit import SHARED_BUCKET, client_key
+    from gateway.app.core.config import settings
+
+    monkeypatch.setattr(settings, "api_trusted_proxies", None)
+    assert client_key(_request_with(DOM1_CHAIN, peer="127.0.0.1")) == SHARED_BUCKET
 
 
 @pytest.mark.parametrize(
     "header",
     [
-        "1.2.3.4,",                                # too short for the hop count
-        ", 127.0.0.1, 203.0.113.10",               # counted element is empty
-        " , 127.0.0.1, 203.0.113.10",              # counted element is whitespace
-        "not-an-ip, 127.0.0.1, 203.0.113.10",      # counted element is not an address
-        "1.2.3.4",                                 # no proxy appended anything
-        "",                                        # header present and empty
+        "not-an-ip, 192.168.71.10, 127.0.0.1",   # client slot is not an address
+        ", 192.168.71.10, 127.0.0.1",            # client slot is empty
+        " , 192.168.71.10, 127.0.0.1",           # client slot is whitespace
+        "192.168.71.10, 127.0.0.1",              # every entry is one of ours
+        "",                                       # present and empty
+        "   ",                                    # present and blank
     ],
 )
-def test_unparseable_forwarded_for_falls_back_to_one_shared_bucket(header: str, monkeypatch) -> None:
-    """A trailing comma produced the literal bucket `"ip:"` — keyed on nothing.
-
-    The fallback is deliberately pessimistic: a caller who scrambles the header
-    is throttled alongside every other scrambler rather than escaping the limit.
-    """
+def test_unresolvable_forwarded_for_falls_back_to_one_shared_bucket(header: str, monkeypatch) -> None:
+    """A trailing comma once produced the literal bucket `"ip:"` — keyed on nothing."""
     from gateway.app.api.rate_limit import SHARED_BUCKET, client_key
     from gateway.app.core.config import settings
 
-    monkeypatch.setattr(settings, "api_trusted_proxy_hops", 2)
-    key = client_key(_request_with(header))
+    monkeypatch.setattr(settings, "api_trusted_proxies", TRUSTED)
+    key = client_key(_request_with(header, peer="127.0.0.1"))
     assert key == SHARED_BUCKET
     assert key != "ip:"
 
 
-def test_missing_forwarded_for_behind_a_proxy_is_not_trusted(monkeypatch) -> None:
-    """No header while configured for proxies means the request bypassed them."""
+def test_no_forwarded_header_keys_on_the_peer(monkeypatch) -> None:
+    """Direct access, no proxy in the path: the peer IS the client."""
+    from gateway.app.api.rate_limit import client_key
+    from gateway.app.core.config import settings
+
+    monkeypatch.setattr(settings, "api_trusted_proxies", TRUSTED)
+    assert client_key(_request_with(None, peer="10.0.0.9")) == "ip:10.0.0.9"
+
+
+def test_no_header_from_a_trusted_proxy_is_not_keyed_on_the_proxy(monkeypatch) -> None:
+    """Otherwise everyone arriving through that proxy shares its address."""
     from gateway.app.api.rate_limit import SHARED_BUCKET, client_key
     from gateway.app.core.config import settings
 
-    monkeypatch.setattr(settings, "api_trusted_proxy_hops", 3)
-    assert client_key(_request_with(None, peer="10.0.0.9")) == SHARED_BUCKET
+    monkeypatch.setattr(settings, "api_trusted_proxies", TRUSTED)
+    assert client_key(_request_with(None, peer="127.0.0.1")) == SHARED_BUCKET
 
-    monkeypatch.setattr(settings, "api_trusted_proxy_hops", 0)
-    assert client_key(_request_with(None, peer="10.0.0.9")) == "ip:10.0.0.9"
+
+def test_addresses_are_normalized_so_spellings_do_not_split_buckets(monkeypatch) -> None:
+    """A bucket that splits on spelling is a bucket an attacker can multiply."""
+    from gateway.app.api.rate_limit import client_key
+    from gateway.app.core.config import settings
+
+    monkeypatch.setattr(settings, "api_trusted_proxies", TRUSTED)
+    keys = {
+        client_key(_request_with(f"{spelling}, 127.0.0.1", peer="127.0.0.1"))
+        for spelling in ("2001:db8::1", "2001:DB8::1", "2001:0db8:0000:0000:0000:0000:0000:0001")
+    }
+    assert len(keys) == 1, f"one host produced {len(keys)} buckets: {keys}"
 
 
 def test_ready_is_cached_so_a_flood_cannot_drain_the_connection_pool(monkeypatch) -> None:

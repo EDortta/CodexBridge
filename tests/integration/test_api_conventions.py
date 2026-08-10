@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.app.api import concurrency, idempotency, pagination
+from gateway.app.api.idempotency import Claim
 from gateway.app.api.errors import ApiError
 from gateway.app.api.request_context import REQUEST_ID_HEADER
 from gateway.app.api.setup import install_api_conventions
@@ -556,6 +557,17 @@ def test_five_hundred_reports_the_same_id_in_body_and_header(client: TestClient)
     assert response.status_code == 500
     assert response.headers[REQUEST_ID_HEADER] == "mobile-42"
     assert response.json()["requestId"] == "mobile-42"
+    # The central claim of the fix, asserted rather than assumed: the header the
+    # operator reads off a screenshot and the id in the body are the same value.
+    assert response.headers[REQUEST_ID_HEADER] == response.json()["requestId"]
+
+
+def test_generated_request_id_also_agrees_between_header_and_body(client: TestClient) -> None:
+    """Same equality when the server mints the id, which is the common case."""
+    response = client.get("/api/v1/boom")
+    assert response.status_code == 500
+    assert response.headers[REQUEST_ID_HEADER] == response.json()["requestId"]
+    assert response.headers[REQUEST_ID_HEADER]
 
 
 def test_unmatched_api_path_returns_the_envelope(client: TestClient) -> None:
@@ -642,30 +654,35 @@ async def test_concurrent_retries_do_not_both_execute(db_session) -> None:
     primary key with an unhandled IntegrityError.
     """
     first = await idempotency.reserve(db_session, request_fingerprint="fp", **IDEM_ARGS)
-    assert first is None, "the first caller wins the claim and does the work"
+    assert isinstance(first, Claim), "the first caller wins the claim and does the work"
 
     with pytest.raises(ApiError) as raised:
         await idempotency.reserve(db_session, request_fingerprint="fp", **IDEM_ARGS)
     assert raised.value.code == "conflict"
     assert raised.value.retryable is True
 
-    await idempotency.complete(db_session, status_code=200, body={"id": "t1"}, **IDEM_ARGS)
+    await idempotency.complete(
+        db_session, status_code=200, body={"id": "t1"}, claim=first, request_fingerprint="fp", **IDEM_ARGS
+    )
     replay = await idempotency.reserve(db_session, request_fingerprint="fp", **IDEM_ARGS)
-    assert replay is not None and replay.body == {"id": "t1"}
+    assert isinstance(replay, idempotency.ReplayedResponse) and replay.body == {"id": "t1"}
 
 
 async def test_release_lets_a_failed_write_be_retried(db_session) -> None:
     """Otherwise one transient failure locks the key for its whole TTL."""
-    assert await idempotency.reserve(db_session, request_fingerprint="fp", **IDEM_ARGS) is None
-    await idempotency.release(db_session, **{k: v for k, v in IDEM_ARGS.items()})
-    assert await idempotency.reserve(db_session, request_fingerprint="fp", **IDEM_ARGS) is None
+    claim = await idempotency.reserve(db_session, request_fingerprint="fp", **IDEM_ARGS)
+    assert isinstance(claim, Claim)
+    await idempotency.release(db_session, claim=claim, **IDEM_ARGS)
+    assert isinstance(
+        await idempotency.reserve(db_session, request_fingerprint="fp", **IDEM_ARGS), Claim
+    )
 
 
 async def test_release_does_not_discard_a_completed_response(db_session) -> None:
     await idempotency.remember(
         db_session, request_fingerprint="fp", status_code=200, body={"id": "t1"}, **IDEM_ARGS
     )
-    await idempotency.release(db_session, **{k: v for k, v in IDEM_ARGS.items()})
+    await idempotency.release(db_session, claim=Claim("whatever"), **IDEM_ARGS)
     replay = await idempotency.lookup(db_session, request_fingerprint="fp", **IDEM_ARGS)
     assert replay is not None and replay.body == {"id": "t1"}
 
@@ -678,7 +695,9 @@ async def test_abandoned_reservation_does_not_lock_the_key_for_a_day(db_session)
     was never coming — and `retryable: true` invited the client to keep trying.
     """
     stale = datetime.now(timezone.utc) - timedelta(seconds=idempotency.IN_FLIGHT_TIMEOUT_SECONDS + 5)
-    assert await idempotency.reserve(db_session, request_fingerprint="fp", now=stale, **IDEM_ARGS) is None
+    assert isinstance(
+        await idempotency.reserve(db_session, request_fingerprint="fp", now=stale, **IDEM_ARGS), Claim
+    )
 
     # Still inside the window: correctly refused.
     with pytest.raises(ApiError):
@@ -687,19 +706,22 @@ async def test_abandoned_reservation_does_not_lock_the_key_for_a_day(db_session)
         )
 
     # Past it: the claim is abandoned and the next caller takes over.
-    assert await idempotency.reserve(db_session, request_fingerprint="fp", **IDEM_ARGS) is None
+    assert isinstance(
+        await idempotency.reserve(db_session, request_fingerprint="fp", **IDEM_ARGS), Claim
+    )
 
 
 async def test_completing_a_lost_reservation_still_records_the_write(db_session) -> None:
     """Otherwise the next identical request executes the side effect again."""
-    assert await idempotency.reserve(db_session, request_fingerprint="fp", **IDEM_ARGS) is None
-    await idempotency.release(db_session, **IDEM_ARGS)  # simulate the row being swept
+    claim = await idempotency.reserve(db_session, request_fingerprint="fp", **IDEM_ARGS)
+    assert isinstance(claim, Claim)
+    await idempotency.release(db_session, claim=claim, **IDEM_ARGS)  # the row is swept
 
     await idempotency.complete(
-        db_session, status_code=200, body={"v": 1}, request_fingerprint="fp", **IDEM_ARGS
+        db_session, status_code=200, body={"v": 1}, claim=claim, request_fingerprint="fp", **IDEM_ARGS
     )
     replay = await idempotency.reserve(db_session, request_fingerprint="fp", **IDEM_ARGS)
-    assert replay is not None and replay.body == {"v": 1}
+    assert isinstance(replay, idempotency.ReplayedResponse) and replay.body == {"v": 1}
 
 
 async def test_a_completed_record_is_final(db_session) -> None:
@@ -715,7 +737,12 @@ async def test_a_completed_record_is_final(db_session) -> None:
     assert (replay.status_code, replay.body) == (200, {"v": "first"})
 
     await idempotency.complete(
-        db_session, status_code=500, body={"v": "third"}, request_fingerprint="fp", **IDEM_ARGS
+        db_session,
+        status_code=500,
+        body={"v": "third"},
+        claim=Claim("stale-token"),
+        request_fingerprint="fp",
+        **IDEM_ARGS,
     )
     replay = await idempotency.lookup(db_session, request_fingerprint="fp", **IDEM_ARGS)
     assert (replay.status_code, replay.body) == (200, {"v": "first"})
