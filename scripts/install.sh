@@ -24,10 +24,13 @@ echo "Ajuste /etc/codex-bridge/env e /etc/codex-bridge-agent/env antes de habili
 # effect of a deploy.
 echo
 echo "ANTES de (re)iniciar o gateway, aplique as migrations:"
-echo "  set -a; . /etc/codex-bridge/env; set +a"
-echo "  echo \"alvo: \$CODEX_BRIDGE_DATABASE_URL\"   # confira o alvo"
-echo "  sudo -u codexbridge --preserve-env=CODEX_BRIDGE_DATABASE_URL \\"
-echo "      /opt/codex-bridge/.venv/bin/python /opt/codex-bridge/scripts/apply_migrations.py --dry-run"
+echo "  DBURL=\$(sudo sed -n 's/^CODEX_BRIDGE_DATABASE_URL=//p' /etc/codex-bridge/env | head -1)"
+echo "  sudo -u codexbridge /opt/codex-bridge/.venv/bin/python \\"
+echo "      /opt/codex-bridge/scripts/apply_migrations.py --database-url \"\$DBURL\" --dry-run"
+echo
+echo "NAO use '. /etc/codex-bridge/env': o formato do EnvironmentFile permite"
+echo "valor com espaco sem aspas, que o bash tenta executar."
+echo
 echo "Banco criado antes do runner (todos os atuais) precisa uma vez de:"
-echo "  ... apply_migrations.py --mark-applied 0001_init.sql"
+echo "  ... apply_migrations.py --database-url \"\$DBURL\" --mark-applied 0001_init.sql"
 echo "Detalhes: docs/installation.md, passo 9."

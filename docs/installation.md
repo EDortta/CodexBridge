@@ -34,26 +34,22 @@
    discordam.
 9. **Aplicar as migrations antes de subir o serviço.**
    O `sudo -u` **não** lê `/etc/codex-bridge/env` — esse arquivo só é carregado
-   pelo systemd (`EnvironmentFile=`). Sem carregá-lo à mão, o script cai no
-   default `sqlite:///./codex_bridge.db`, cria um SQLite no diretório atual,
-   reporta sucesso e **não toca no Postgres** — de modo que o serviço continua
-   batendo em `SchemaOutOfDate`. Carregue o env explicitamente:
-   ```
-   set -a; . /etc/codex-bridge/env; set +a
-   echo "alvo: $CODEX_BRIDGE_DATABASE_URL"   # confira antes de aplicar
-   sudo -u codexbridge --preserve-env=CODEX_BRIDGE_DATABASE_URL \
-       /opt/codex-bridge/.venv/bin/python \
-       /opt/codex-bridge/scripts/apply_migrations.py --dry-run
-   sudo -u codexbridge --preserve-env=CODEX_BRIDGE_DATABASE_URL \
-       /opt/codex-bridge/.venv/bin/python \
-       /opt/codex-bridge/scripts/apply_migrations.py
-   ```
-   O startup **não migra sozinho** — aplicar mudança de schema em banco vivo é
-   decisão do operador, não efeito colateral de um deploy. Em compensação, o
-   startup **recusa subir** quando o schema está atrasado, nomeando o objeto que
-   falta e este comando. Como a unit tem `Restart=always`, pular este passo
-   transforma um `systemctl restart` de rotina em crash loop de 5 em 5 segundos.
+   pelo systemd (`EnvironmentFile=`). Sem passar o alvo, o script cai no default
+   `sqlite:///./codex_bridge.db`, cria um SQLite no diretório atual, reporta
+   sucesso e **não toca no banco real**.
 
+   E **não use `. /etc/codex-bridge/env`**: o formato do `EnvironmentFile` aceita
+   valor com espaço sem aspas (`CODEX_BRIDGE_OAUTH_DEFAULT_SCOPES=a b c`), que o
+   bash tenta executar — verificado no deploy de 2026-08-10, onde o `source`
+   falhou com `codexbridge.task.submit: command not found`. Leia a variável
+   diretamente:
+   ```
+   DBURL=$(sudo sed -n 's/^CODEX_BRIDGE_DATABASE_URL=//p' /etc/codex-bridge/env | head -1)
+   RUN="sudo -u codexbridge /opt/codex-bridge/.venv/bin/python \
+        /opt/codex-bridge/scripts/apply_migrations.py --database-url $DBURL"
+   $RUN --dry-run
+   $RUN
+   ```
    Banco criado antes deste script existir (todos os atuais) precisa de um passo
    de adoção uma única vez, porque `0001_init.sql` é Postgres-only e sequer
    parseia em SQLite:
