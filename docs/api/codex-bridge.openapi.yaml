@@ -1,0 +1,424 @@
+openapi: 3.1.0
+
+info:
+  title: CodexBridge Mobile API
+  summary: Contract-first HTTP API consumed by CodexBridgeMobile.
+  version: 1.0.0
+  description: |
+    Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
+    consumes. For that API this document is the **source of truth**: an
+    endpoint under `/api` that is not here is not public, and a field that is
+    not here is not part of the contract.
+
+    This is the **only** OpenAPI description of this gateway. FastAPI's
+    auto-generated document and its UIs (`/openapi.json`, `/docs`, `/redoc`) are
+    switched off in `gateway/app/main.py`: they described the internal MCP and
+    OAuth surfaces and carried none of the rules below, and serving them put two
+    public descriptions of one gateway on the wire — with the reachable one not
+    being the canonical one. There is no second document to reconcile against.
+
+    ## What this document does not cover
+
+    The MCP transport (`POST /mcp`), the OAuth authorization endpoints, the
+    Prometheus scrape endpoint (`GET /metrics`) and the reverse executor
+    WebSocket are **internal or third-party-facing** surfaces with their own
+    contracts. Each one is listed in `x-contract-excluded-paths` below with the
+    reason it is out of scope — see `docs/api/README.md` §"Contract scope".
+
+    ## Versioning
+
+    The public namespace is `/api/v1`. Compatibility, deprecation and the rules
+    that force a new namespace are specified in `docs/api/README.md`. The
+    `info.version` above is the **contract** version (semver) and is independent
+    of the gateway application version.
+
+    ## Conventions
+
+    These are review rules for every endpoint added to this document. No test
+    enforces them yet — response-body conformance is issue #14's scope — so they
+    are checked by the reviewer, not by CI.
+
+    - All timestamps are RFC 3339 with an explicit UTC offset (`Z`). Note that
+      `format: date-time` alone does not require `Z`; the rule is stricter than
+      the schema can express.
+    - Collection endpoints use the cursor pagination described by `PageInfo`.
+      **Append-only log streams are not collections** and page differently: the
+      underlying store addresses log lines by a monotonic integer offset
+      (`store.get_logs`), which the MCP client already consumes that way. Issue
+      #9 defines that scheme; do not force a cursor over it retroactively.
+    - All errors use the `Error` envelope. No endpoint returns a bare string.
+    - No response exposes a server filesystem path, a credential, or an internal
+      executor address. See `docs/api/README.md` §"Fields that must never ship".
+
+servers:
+  - url: https://{host}
+    description: |
+      Public CodexBridge deployment, reached through an nginx edge proxy.
+
+      The default `host` matches `settings.public_base_url` in
+      `gateway/app/core/config.py`, so a generated client names the real
+      deployment rather than a placeholder. **It does not promise that every
+      contracted route is reachable there.** The contract test inventories
+      `gateway.app.main.app.routes` in-process; the edge proxy in
+      `deploy/incus/` decides separately what it forwards, and it already
+      answers 404 or 403 for surfaces the application serves. End-to-end
+      reachability is unverified by this repository's tests.
+    variables:
+      host:
+        default: codexbridge.inovacaosistemas.com.br:8443
+        description: |
+          Hostname and port of the deployment. Override it when developing
+          against a local gateway — the default is production.
+
+# No public endpoints are defined yet. Paths are added by the issues that
+# implement them (#3 health/version, #9 sessions, ...). An empty object is
+# deliberate: it keeps `tests/contract/test_openapi_document.py` honest, because
+# that test fails when the application exposes a public route this file omits.
+paths: {}
+
+# Public HTTP routes the gateway serves that are deliberately NOT part of this
+# contract. Every entry needs a reason: `tests/contract/test_openapi_document.py`
+# rejects an empty one. A route that is neither in `paths` nor listed here fails
+# that test, so an endpoint can never be omitted by accident — only on purpose,
+# in writing. The human-readable version of this table is `docs/api/README.md`.
+x-contract-excluded-paths:
+
+  - path: /healthz
+    methods: [GET]
+    reason: >-
+      Pre-existing infrastructure probe with no version or capability data.
+      Superseded for mobile by GET /health (issue #3); kept for the existing
+      deployment health checks.
+
+  - path: /metrics
+    methods: [GET]
+    reason: >-
+      Prometheus text exposition format, operator-facing. Its contract is the
+      Prometheus exposition spec, not this document.
+
+  - path: /mcp
+    methods: [POST]
+    reason: >-
+      JSON-RPC/MCP transport for ChatGPT. Its contract is docs/protocol.md and
+      the Model Context Protocol specification.
+
+  - path: /agent/ws
+    methods: [WEBSOCKET]
+    reason: >-
+      Reverse executor channel. Executors dial in over wss and receive tasks;
+      no client of this API ever opens it. Its contract is docs/protocol.md,
+      which specifies the envelope, the handshake and the message types.
+
+  - path: /oauth/authorize
+    methods: [GET, POST]
+    reason: >-
+      OAuth 2.1 authorization endpoint, returning HTML for a browser flow. Its
+      contract is RFC 6749 as profiled by OAuth 2.1, not this document.
+      docs/chatgpt-oauth-rollout.md is a rollout plan and does NOT specify these
+      request/response shapes — do not follow it expecting one.
+
+  - path: /oauth/token
+    methods: [POST]
+    reason: >-
+      OAuth 2.1 token endpoint. Its contract is RFC 6749 plus RFC 7636 (PKCE).
+      See gateway/app/core/oauth.py for what this deployment actually issues.
+
+  - path: /.well-known/oauth-authorization-server
+    methods: [GET]
+    reason: >-
+      OAuth 2.0 Authorization Server Metadata (RFC 8414). Shape is fixed by the
+      RFC and by what ChatGPT's client expects; served from
+      gateway/app/core/oauth.py issuer_metadata().
+
+  - path: /.well-known/openid-configuration
+    methods: [GET]
+    reason: >-
+      OpenID Provider Metadata alias of the RFC 8414 document, served for
+      clients that probe the OIDC path first.
+
+  - path: /.well-known/oauth-protected-resource
+    methods: [GET]
+    reason: >-
+      OAuth 2.0 Protected Resource Metadata (RFC 9728), consumed by the MCP
+      client during discovery.
+
+  # FastAPI's /openapi.json, /docs, /docs/oauth2-redirect and /redoc are NOT
+  # listed here. They are not served at all — main.py passes openapi_url=None,
+  # docs_url=None and redoc_url=None. An exclusion entry for a route the gateway
+  # does not serve would be caught by test_no_exclusion_outlives_its_route, which
+  # is the correct behaviour: this list describes served surfaces, and a surface
+  # that no longer exists needs no exclusion.
+
+components:
+
+  securitySchemes:
+
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Opaque access token issued by the gateway's OAuth 2.1 + PKCE
+        authorization endpoints. The token is presented as
+        `Authorization: Bearer <token>`.
+
+        The mobile-specific session lifecycle — device authorization, refresh
+        and revocation — is **not yet part of this contract**. It is defined by
+        issue #4 and this scheme will be extended, not replaced, when it lands.
+
+  schemas:
+
+    Id:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: '^[A-Za-z0-9._:-]+$'
+      description: |
+        Opaque identifier. Clients must treat it as an opaque string and must
+        not parse, order or derive meaning from it. Some identifiers are UUIDs
+        and some are operator-assigned slugs; that difference is an
+        implementation detail and may change without a new API version.
+      examples:
+        - 'codexbridge-demo'
+        - '9f0d6b2c-2f5a-4c2b-9d5e-1a7c3f8e4b10'
+
+    ProjectId:
+      allOf:
+        - $ref: '#/components/schemas/Id'
+      description: Identifier of a project registered in the gateway registry.
+      examples:
+        - 'codexbridge-demo'
+
+    ExecutorId:
+      allOf:
+        - $ref: '#/components/schemas/Id'
+      description: Identifier of a registered executor machine.
+      examples:
+        - 'devel3'
+
+    Timestamp:
+      type: string
+      format: date-time
+      description: |
+        RFC 3339 instant, always in UTC and always carrying the `Z` offset.
+        Clients must not assume the server and the device clocks agree; use
+        server timestamps for ordering and display, never for elapsed-time
+        arithmetic against the device clock.
+      examples:
+        - '2026-08-10T14:32:07Z'
+
+    ActorKind:
+      type: string
+      enum:
+        - user
+        - executor
+        - system
+      description: |
+        What produced an action. `user` is a human principal authenticated
+        through the gateway. `executor` is a registered executor machine acting
+        under its own machine token. `system` is the gateway itself — startup
+        recovery, expiry sweeps and other unattended transitions.
+
+    Actor:
+      type: object
+      description: |
+        Who performed an auditable action. Present on every entity that records
+        provenance. `id` and `displayName` are always safe to render; `email` is
+        omitted when the caller is not authorized to see it.
+      required:
+        - kind
+        - id
+      properties:
+        kind:
+          $ref: '#/components/schemas/ActorKind'
+        id:
+          $ref: '#/components/schemas/Id'
+        displayName:
+          type: string
+          maxLength: 255
+          description: Human-readable label, safe to render in any context.
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: |
+            Omitted unless the caller is authorized to see the actor's email.
+            Absence means "not disclosed", never "the actor has no email".
+      examples:
+        - kind: user
+          id: esteban
+          displayName: Esteban D.Dortta
+        - kind: system
+          id: gateway
+          displayName: CodexBridge Gateway
+
+    PageInfo:
+      type: object
+      description: |
+        Cursor pagination state for **collections** — projects, sessions,
+        decisions and the like. A collection response carries this object under
+        the `page` key alongside its `items` array.
+
+        It does **not** apply to append-only log streams. Those are addressed by
+        a monotonic integer offset in the store (`store.get_logs`) and are
+        already consumed that way by the MCP client; issue #9 defines their
+        paging shape. The distinction is repeated here, and not only in
+        `info.description`, because this schema is what a code generator and a
+        reviewer of a single endpoint actually read.
+
+        Cursors are opaque and single-purpose: a cursor obtained from one
+        endpoint, or from the same endpoint under different filters, is not
+        valid elsewhere and the server rejects it. Clients page forward by
+        resending `nextCursor` until `hasMore` is `false`.
+      required:
+        - hasMore
+      properties:
+        hasMore:
+          type: boolean
+          description: |
+            Whether more items exist after this page. This is authoritative;
+            do not infer the end of a list from a short page, because a page may
+            be short when items are filtered out by authorization.
+        nextCursor:
+          type:
+            - string
+            - 'null'
+          maxLength: 512
+          description: |
+            Cursor to pass as the `cursor` query parameter to fetch the next
+            page. `null` (or absent) exactly when `hasMore` is `false`.
+      examples:
+        - hasMore: true
+          nextCursor: 'eyJhZnRlciI6IjIwMjYtMDgtMTBUMTQ6MzI6MDdaIn0'
+        - hasMore: false
+          nextCursor: null
+
+    ErrorCode:
+      type: string
+      description: |
+        Stable, machine-readable error identifier. Clients branch on this, never
+        on `message`. New codes may be added within a major version, so clients
+        must treat an unrecognized code as a generic failure of the response's
+        HTTP status class rather than crashing.
+      enum:
+        - validation_failed
+        - unauthenticated
+        - token_expired
+        - permission_denied
+        - not_found
+        - conflict
+        - rate_limited
+        - dependency_unavailable
+        - internal_error
+      # `stale_write` is deliberately absent. Optimistic concurrency needs a
+      # monotonic revision to compare against, and no persisted entity has one:
+      # TaskModel carries created_at/started_at/completed_at/expires_at and no
+      # version column, and none of those move when approval_state or last_error
+      # changes — so an ETag derived from them would match on both sides of a
+      # concurrent approval and the code would never fire. Adding an ErrorCode
+      # is non-breaking (see docs/api/README.md, "What is not breaking"), so
+      # issue #12 introduces `stale_write` together with the migration that
+      # makes it real. Publishing it here first would put a promise in v1 that
+      # v1 cannot keep and cannot withdraw.
+
+    ErrorDetail:
+      type: object
+      description: |
+        One specific problem inside a failed request. Validation errors carry
+        one entry per offending field.
+      required:
+        - message
+      properties:
+        field:
+          type: string
+          maxLength: 255
+          description: |
+            JSON Pointer-style path to the offending input, relative to the
+            request body or query string — for example `/instruction` or
+            `?limit`. Absent when the problem is not attributable to one field.
+        code:
+          type: string
+          maxLength: 64
+          description: Machine-readable sub-code, scoped to the parent `code`.
+        message:
+          type: string
+          maxLength: 1024
+          description: Human-readable explanation of this specific problem.
+
+    Error:
+      type: object
+      description: |
+        The single error envelope returned by every endpoint in this contract
+        for every non-2xx response. An endpoint that returns anything else is a
+        contract violation, not a variant.
+      required:
+        - code
+        - message
+        - requestId
+        - retryable
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          maxLength: 1024
+          description: |
+            Human-readable summary, safe to log. It is written for an operator,
+            not for an end user, and it is not localized. Clients must not parse
+            it and must not assume it is stable across releases.
+        requestId:
+          $ref: '#/components/schemas/Id'
+          description: |
+            Identifier tying this response to the server-side log record for
+            **this one request**. Always present, including on `internal_error`,
+            so an operator can find the failure from a mobile screenshot alone.
+
+            Named `requestId`, not `correlationId`, on purpose: `correlation_id`
+            already exists in this codebase as a column on `TaskModel`, scoped to
+            the whole lifetime of a task and shared by the executor protocol.
+            Populating this field from that column would make every failure on a
+            given task report the same identifier, defeating the only reason the
+            field exists — while the response stayed schema-valid, so no test
+            would catch it. The two are different identifiers and must not be
+            merged. When a response concerns a task, expose that task's
+            correlation id as its own named field instead.
+        retryable:
+          type: boolean
+          description: |
+            Whether repeating the identical request may succeed later without
+            the caller changing anything. `true` on transient failures
+            (`rate_limited`, `dependency_unavailable`); `false` on failures that
+            require caller action (`validation_failed`, `permission_denied`).
+
+            This is advice about the failure, not permission to retry blindly:
+            a client retrying a non-idempotent write still needs the idempotency
+            rules that issue #12 defines.
+        details:
+          type: array
+          description: |
+            Per-problem breakdown. Present on `validation_failed`; may be
+            omitted entirely on other codes. An empty array and an absent array
+            mean the same thing.
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+      examples:
+        - code: validation_failed
+          message: 'Request body failed validation.'
+          requestId: '5a3f1c88-90b1-4e2a-8a6f-2f9c0d1e7b43'
+          retryable: false
+          details:
+            - field: /timeoutSeconds
+              code: above_maximum
+              message: 'timeoutSeconds must not exceed the project limit of 3600.'
+        - code: permission_denied
+          message: 'The authenticated actor may not read this project.'
+          requestId: 'c1d2e3f4-a5b6-4708-9a0b-1c2d3e4f5061'
+          retryable: false
+        - code: rate_limited
+          message: 'Too many requests. Retry after the interval in Retry-After.'
+          requestId: '7e8f9a0b-1c2d-4e3f-a405-162738495a6b'
+          retryable: true
+        - code: internal_error
+          message: 'Unexpected server error. Report the requestId to the operator.'
+          requestId: 'b4c5d6e7-f809-4a1b-8c2d-3e4f50617283'
+          retryable: true

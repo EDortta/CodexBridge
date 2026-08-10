@@ -1,0 +1,32 @@
+name: contract
+
+# The anti-drift gate is only worth what runs it. Before this workflow existed,
+# `pytest tests/contract` ran when a contributor remembered — which is the same
+# protection as none, on exactly the change it exists to catch: a new public
+# route landing without a contract entry.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install project and test extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[test]'
+
+      - name: Validate the OpenAPI contract and check for route drift
+        run: pytest tests/contract -q
+
+      - name: Run the rest of the suite
+        run: pytest tests/unit tests/integration -q

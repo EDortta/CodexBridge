@@ -32,7 +32,24 @@ from shared.security import sanitize_log_line, secure_compare
 
 
 configure_logging()
-app = FastAPI(title="CodexBridge Gateway", version="0.1.0")
+
+# FastAPI's auto-generated OpenAPI document and its UIs are switched off on
+# purpose. They are produced by introspecting this application, so they publish
+# the internal MCP and OAuth surfaces and carry none of the rules the mobile
+# contract depends on (versioning, deprecation, forbidden fields). Serving them
+# alongside `docs/api/codex-bridge.openapi.yaml` put two public descriptions of
+# one gateway on the wire, and the reachable one was not the canonical one — so
+# any consumer doing the obvious thing (`GET /openapi.json`) found the wrong
+# document. The canonical contract is the only description of this API.
+# `tests/contract/test_openapi_document.py::test_generated_openapi_is_not_served`
+# keeps them off.
+app = FastAPI(
+    title="CodexBridge Gateway",
+    version="0.1.0",
+    openapi_url=None,
+    docs_url=None,
+    redoc_url=None,
+)
 hub = AgentHub(SessionLocal)
 rate_limiter = MemoryRateLimiter(settings.rate_limit_requests_per_window, settings.rate_limit_window_seconds)
 
