@@ -1,3 +1,10 @@
+"""RETIRED 2026-08-10 — the Incus edge proxy on the dom1 path.
+
+dom1 no longer serves CodexBridge; it only renews the certificate.
+Kept for reference. Reinstating it grows the X-Forwarded-For chain —
+see deploy/README.md before doing so.
+"""
+
 from __future__ import annotations
 
 import os
