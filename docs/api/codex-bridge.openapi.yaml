@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.2.0
+  version: 1.3.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -71,6 +71,276 @@ servers:
           against a local gateway — the default is production.
 
 paths:
+
+  /api/v1/auth/sign-in:
+    post:
+      operationId: signIn
+      tags: [auth]
+      summary: Exchange a username and password for an access and refresh token
+      description: |
+        The mobile session starts here. The credential checked is the one in the
+        gateway's user registry — the same hash the browser OAuth flow verifies
+        — and the response is the pair every other endpoint uses.
+
+        **Device authorization (RFC 8628) is not implemented.** It exists for
+        clients that cannot show a keyboard, and this client can. `GET
+        /api/version` reports `deviceAuthorization: false` so the difference is
+        visible rather than assumed.
+
+        Every failure is `401 unauthenticated` with one message, whether the
+        account is unknown, the password is wrong, or the account is disabled.
+        Distinguishing them turns this endpoint into a user directory. The
+        server also spends the same password-derivation work on an unknown
+        username, because a response that is identical but faster says the same
+        thing.
+
+        `scopes` in the response is the account's scopes **intersected with the
+        server's configured allowlist**, so it can be narrower than what the
+        registry grants the account. Read the field; do not assume the request
+        got everything the account has. The same ceiling applies to the browser
+        OAuth flow, and both flows write to the same token store.
+
+        The response is `Cache-Control: no-store`. It carries credentials.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+                  description: User id or email, as registered in the gateway.
+                password:
+                  type: string
+                  minLength: 1
+                  maxLength: 1024
+                  format: password
+      responses:
+        '200':
+          description: A new grant.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokens'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/auth/refresh:
+    post:
+      operationId: refreshTokens
+      tags: [auth]
+      summary: Rotate a refresh token into a new pair
+      description: |
+        Returns a new access token **and a new refresh token**. The presented
+        refresh token is consumed by the exchange: it is single use.
+
+        Presenting a consumed refresh token revokes the entire grant — both
+        tokens, immediately. Replay and theft are indistinguishable from the
+        server side, and the safe reading of that ambiguity is theft: signing in
+        again is cheap, sharing a session with whoever holds the copy is not.
+
+        `refreshTokenExpiresAt` does **not** move. A grant has an absolute
+        lifetime, so rotation cannot extend a stolen credential into a session
+        that never ends. When it passes, sign in again.
+
+        Scopes are re-read from the registry on every rotation and intersected
+        with what the grant already carried — never widened. A disabled or
+        removed account ends the grant here rather than at the next expiry.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+                  minLength: 1
+                  maxLength: 1024
+      responses:
+        '200':
+          description: A rotated grant. The presented refresh token is now dead.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokens'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/auth/revoke:
+    post:
+      operationId: revokeTokens
+      tags: [auth]
+      summary: Sign out — end the grant now rather than at expiry
+      description: |
+        Accepts either credential: the access token in the `Authorization`
+        header, the refresh token in the body, or both. Both are accepted
+        because the usual moment to sign out on a phone is after the access
+        token has already expired, and requiring a live one would mean the only
+        way to end a session is to wait for it.
+
+        Revocation reaches **both** tokens of the grant, not only the one
+        presented. A revoked access token stops working immediately, on this API
+        and on the MCP transport alike — they read one credential store.
+
+        Idempotent and deliberately incurious: an unknown, expired or
+        already-revoked credential is answered `200` like any other (RFC 7009).
+        The counters report how many credentials this call actually revoked, so
+        `0` is a meaningful answer and not an error.
+
+        `401` here means nothing usable was presented — no body, and no access
+        token the server recognises. It is a statement about the request, not
+        about a credential. A client whose access token has already expired
+        signs out with the refresh token, which is the half that keeps the grant
+        alive.
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+                  maxLength: 1024
+                  description: |
+                    Required when no access token is sent. Supplying both
+                    revokes the same grant once.
+      responses:
+        '200':
+          description: The credential can no longer be used.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revoked, revokedAt]
+                properties:
+                  revoked:
+                    type: boolean
+                    description: Always `true`. The credential is unusable after this call.
+                  revokedAt:
+                    $ref: '#/components/schemas/Timestamp'
+                  accessTokensRevoked:
+                    type: integer
+                    description: |
+                      How many access tokens this call revoked. `0` when the
+                      credential was already revoked, expired or unknown — which
+                      is not an error.
+                  refreshTokensRevoked:
+                    type: integer
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/auth/me:
+    get:
+      operationId: getCurrentActor
+      tags: [auth]
+      summary: The authenticated actor and what it may do
+      description: |
+        What a client reads **before** it renders a screen. `permissions` is the
+        server's own authorization table evaluated for this actor, so a control
+        the client offers and a `403` from the endpoint behind it cannot
+        disagree — both are decided by the same list.
+
+        The list contains only actions this build serves. An action absent from
+        it is not "denied", it is "not offered by this server", and a client
+        should treat an unknown action the same way: ignore it. New entries may
+        be added within a major version.
+
+        `projects.all` is a flag rather than an empty-list convention, because
+        "every project" and "no projects" are otherwise one character apart, and
+        the direction that mistake fails in is the one that grants everything.
+
+        **This operation declares no `403`, and that is deliberate.** On this
+        surface `403 permission_denied` comes from the per-action guard and from
+        nowhere else, and there is no action to guard here — every authenticated
+        actor may ask who they are. A token whose account has since been
+        disabled or removed is a `401`, like any other dead credential: the
+        recovery is to sign in again, not to tell the operator they lack a
+        permission.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The actor, its scopes, and its effective permissions.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [actor, scopes, projects, permissions, generatedAt]
+                properties:
+                  actor:
+                    $ref: '#/components/schemas/Actor'
+                  roles:
+                    type: array
+                    items:
+                      type: string
+                  scopes:
+                    type: array
+                    description: OAuth scopes carried by the presented token.
+                    items:
+                      type: string
+                  projects:
+                    type: object
+                    required: [all, ids]
+                    properties:
+                      all:
+                        type: boolean
+                        description: |
+                          The actor sees every project. `ids` is then empty and
+                          means nothing — do not read it as a restriction.
+                      ids:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ProjectId'
+                  permissions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Permission'
+                  authScheme:
+                    type: string
+                    description: How the caller authenticated, e.g. `oauth`.
+                  generatedAt:
+                    $ref: '#/components/schemas/Timestamp'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
 
   /api/v1/sessions:
     get:
@@ -532,13 +802,18 @@ paths:
                 application: codex-bridge-gateway
                 applicationVersion: '0.1.0'
                 apiVersions: [v1]
-                contractVersion: '1.1.0'
+                contractVersion: '1.3.0'
                 buildRevision: b76a391
                 capabilities:
                   errorEnvelope: true
-                  cursorPagination: false
-                  idempotencyKeys: false
-                  optimisticConcurrency: false
+                  cursorPagination: true
+                  idempotencyKeys: true
+                  optimisticConcurrency: true
+                  passwordSignIn: true
+                  tokenRefresh: true
+                  tokenRevocation: true
+                  effectivePermissions: true
+                  deviceAuthorization: false
                   eventStream: false
                   artifactDownloads: false
                 time: '2026-08-10T14:32:07Z'
@@ -626,11 +901,15 @@ x-contract-excluded-paths:
 # with no issue — the same rule as `x-contract-excluded-paths`: a thing may be
 # unused only on purpose and in writing.
 #
-# A client must not build against these. They are published so that #9 and #5 add
-# endpoints rather than re-litigating shapes, not as a promise of behaviour.
-x-pending-components:
-  - pointer: '#/components/schemas/Actor'
-    issue: 6
+# A client must not build against these. They are published so that a later
+# issue adds endpoints rather than re-litigating shapes, not as a promise of
+# behaviour.
+#
+# Empty today: `Actor` was the last entry and issue #4 wired it into
+# `GET /api/v1/auth/me`, which `test_no_pending_component_is_stale` requires be
+# recorded here by removal. The key stays so the mechanism is visible to whoever
+# declares the next shape ahead of its endpoint.
+x-pending-components: []
 
 components:
 
@@ -664,6 +943,15 @@ components:
       schema:
         type: string
       example: '"7"'
+
+    CacheControl:
+      description: |
+        `no-store` on every response that carries a credential or an
+        authorization decision. A client must not write these bodies to disk,
+        and an intermediary must not hold them.
+      schema:
+        type: string
+      example: 'no-store'
 
   parameters:
 
@@ -742,7 +1030,15 @@ components:
             $ref: '#/components/schemas/Error'
 
     Unauthenticated:
-      description: No valid credential was presented.
+      description: |
+        No usable credential was presented. Absent, malformed, unknown, expired,
+        revoked, or belonging to an account that has since been disabled or
+        removed — one status, one code, one message for all of them, because
+        telling them apart tells a caller holding a token they were never given
+        whether it was ever real.
+
+        This is the branch a client answers by signing in again. `403` is the
+        other one.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/XRequestId'
@@ -755,6 +1051,11 @@ components:
       description: |
         The actor is authenticated but not permitted. Returned in preference to
         `404` only when the resource's existence is already known to the caller.
+
+        Signing in again does not help — the credential is fine, the permission
+        is not. On `/api/v1` this comes from the per-action guard and from
+        nowhere else, which is why operations with no action to guard (such as
+        `getCurrentActor`) do not declare it.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/XRequestId'
@@ -847,13 +1148,23 @@ components:
       scheme: bearer
       bearerFormat: opaque
       description: |
-        Opaque access token issued by the gateway's OAuth 2.1 + PKCE
-        authorization endpoints. The token is presented as
-        `Authorization: Bearer <token>`.
+        Opaque access token, presented as `Authorization: Bearer <token>`.
 
-        The mobile-specific session lifecycle — device authorization, refresh
-        and revocation — is **not yet part of this contract**. It is defined by
-        issue #4 and this scheme will be extended, not replaced, when it lands.
+        Two issuers, one credential store. `POST /api/v1/auth/sign-in` mints
+        tokens for CodexBridgeMobile, and the OAuth 2.1 + PKCE authorization
+        endpoints mint them for ChatGPT's MCP client. Both land in the same
+        table, so `POST /api/v1/auth/revoke` takes effect on both surfaces and
+        an expired or revoked token is refused everywhere.
+
+        A token is opaque: it carries no readable claims and must not be parsed.
+        Read `expiresIn` from the response that issued it, and refresh before it
+        elapses rather than waiting for a `401`.
+
+        Every rejection is `401` with code `unauthenticated` and the same
+        message — absent, unknown, expired and revoked are not distinguished,
+        because doing so tells a caller holding a token they were never given
+        whether it was ever real. A client that receives `401` should refresh
+        once, and sign in again if that also fails.
 
   schemas:
 
@@ -940,6 +1251,105 @@ components:
         - kind: system
           id: gateway
           displayName: CodexBridge Gateway
+
+    AuthTokens:
+      type: object
+      description: |
+        One grant: a short-lived access token and the refresh token that renews
+        it. Returned by sign-in and by every rotation.
+
+        Both values are opaque credentials. Store them where the platform stores
+        secrets, never in application logs or crash reports, and treat the whole
+        object as `no-store`.
+      required:
+        - tokenType
+        - accessToken
+        - accessTokenExpiresAt
+        - expiresIn
+        - refreshToken
+        - refreshTokenExpiresAt
+        - scopes
+      properties:
+        tokenType:
+          type: string
+          enum: [Bearer]
+        accessToken:
+          type: string
+          description: |
+            Present in the `Authorization` header as `Bearer <accessToken>`.
+        accessTokenExpiresAt:
+          $ref: '#/components/schemas/Timestamp'
+        expiresIn:
+          type: integer
+          description: |
+            Seconds until the access token expires, counted from the response.
+            Prefer it over `accessTokenExpiresAt` for scheduling a refresh: it
+            is the only form that survives a device whose clock is wrong.
+        refreshToken:
+          type: string
+          description: |
+            Single use. Exchanging it returns a new one and kills this one, and
+            presenting a spent token revokes the whole grant.
+        refreshTokenExpiresAt:
+          $ref: '#/components/schemas/Timestamp'
+          description: |
+            The grant's absolute expiry. It does **not** move when the token is
+            rotated: after this instant the operator signs in again.
+        scopes:
+          type: array
+          description: |
+            What this grant carries. A rotation may return fewer — the registry
+            is re-read each time — and never more.
+          items:
+            type: string
+
+    PermissionCategory:
+      type: string
+      enum:
+        - read
+        - operational
+        - administrative
+      description: |
+        How much an action can do. `read` observes state. `operational` changes
+        what an executor is doing. `administrative` reaches beyond the actor's
+        own projects. A client may use this to group or to gate a confirmation
+        step, but must not infer `allowed` from it.
+
+    Permission:
+      type: object
+      description: |
+        One action, and whether this actor may perform it. The server's own
+        authorization table, evaluated for the caller — not a hint. An endpoint
+        guarded by an action refuses exactly when `allowed` is `false`.
+      required: [action, category, allowed]
+      properties:
+        action:
+          type: string
+          maxLength: 64
+          description: |
+            Stable identifier, e.g. `sessions.stop`. Clients branch on this.
+            Actions may be added within a major version, so an unrecognized one
+            must be ignored rather than treated as denied.
+        category:
+          $ref: '#/components/schemas/PermissionCategory'
+        requiredScope:
+          type: string
+          maxLength: 128
+          description: |
+            The scope that grants this action. Informational: a client must read
+            `allowed` and never re-derive it from the token's scope list, which
+            is how a client's copy of the rules drifts from the server's.
+        allowed:
+          type: boolean
+      examples:
+        - action: sessions.read
+          category: read
+          requiredScope: codexbridge.read
+          allowed: true
+        - action: sessions.stop
+          category: operational
+          requiredScope: codexbridge.task.cancel
+          allowed: false
 
     PageInfo:
       type: object

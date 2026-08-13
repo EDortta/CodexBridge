@@ -20,7 +20,18 @@ class Settings(BaseSettings):
     bind_port: int = 8080
     database_url: str = "sqlite+aiosqlite:///./codex_bridge.db"
     registry_file: str = str(Path("examples/registry.json").resolve())
-    user_registry_file: str = str(Path("examples/users.json").resolve())
+    # Where the accounts that may sign in are read from. Deliberately NOT
+    # `examples/users.json`: that file ships one `admin` account whose plaintext
+    # is committed in this repository, and `POST /api/v1/auth/sign-in` (issue #4)
+    # made it reachable with one unauthenticated JSON body — no client
+    # registration, no redirect allowlist, no PKCE. A default that resolves to a
+    # published credential is a shipped secret (`security-standards.md` §1).
+    #
+    # An unconfigured deployment therefore has no registry at all: the file is
+    # absent, `load_user_registry` returns empty, and every sign-in is refused at
+    # the same cost as any other. Fail-closed, per `design-standards.md` §6.
+    # Development sets `CODEX_BRIDGE_USER_REGISTRY_FILE` like production does.
+    user_registry_file: str = "/etc/codex-bridge/users.json"
     public_base_url: str = "https://codexbridge.inovacaosistemas.com.br:8443"
     mcp_auth_mode: str = "bearer"
     mcp_bearer_token: str = Field(default="change-me")
@@ -31,7 +42,22 @@ class Settings(BaseSettings):
     oauth_default_scopes: str = "codexbridge.read codexbridge.task.submit codexbridge.task.cancel"
     oauth_access_token_ttl_seconds: int = 3600
     oauth_authorization_code_ttl_seconds: int = 600
+    # Absolute lifetime of a mobile sign-in (issue #4). Rotation carries this
+    # expiry forward unchanged rather than extending it, so a stolen refresh
+    # token cannot be turned into an unbounded session: 30 days after signing
+    # in, the operator signs in again.
+    oauth_refresh_token_ttl_seconds: int = 2592000
     oauth_allow_unauthenticated_discovery: bool = True
+    # How long an audit row is kept. `POST /api/v1/auth/sign-in` is the first
+    # unauthenticated write path into `audit_events` — every other `record_event`
+    # call site sits behind authentication — so a rejected attempt commits a row,
+    # and the rate limiter's ceiling of 120/minute/bucket is a ceiling on the
+    # write rate, not on the table. Nothing else ever removed one.
+    #
+    # Zero or negative disables the sweep, for an operator who exports the table
+    # elsewhere and wants it kept whole. That is an explicit opt-in to unbounded
+    # growth, not the default.
+    audit_event_retention_days: int = 90
     metrics_enabled: bool = True
     max_log_chunk_chars: int = 4000
     max_result_chars: int = 200000

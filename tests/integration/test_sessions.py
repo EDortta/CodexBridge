@@ -135,18 +135,18 @@ async def api(users_file, monkeypatch):
             ],
         )
         future = datetime.now(timezone.utc) + timedelta(hours=1)
-        for token, user_id, email, scopes in (
-            (ALICE_TOKEN, "alice", "alice@example.com", ["codexbridge.read", "codexbridge.task.cancel"]),
-            (READER_TOKEN, "reader", "reader@example.com", ["codexbridge.read"]),
-            (ADMIN_TOKEN, "admin", "admin@example.com", ["codexbridge.admin"]),
+        for token, user_id, scopes in (
+            (ALICE_TOKEN, "alice", ["codexbridge.read", "codexbridge.task.cancel"]),
+            (READER_TOKEN, "reader", ["codexbridge.read"]),
+            (ADMIN_TOKEN, "admin", ["codexbridge.admin"]),
         ):
             await store.create_oauth_access_token(
-                seed, token=token, client_id="c", user_id=user_id, user_email=email,
+                seed, token=token, client_id="c", user_id=user_id,
                 scopes=scopes, expires_at=future,
             )
         await store.create_oauth_access_token(
             seed, token=EXPIRED_TOKEN, client_id="c", user_id="alice",
-            user_email="alice@example.com", scopes=["codexbridge.read"],
+            scopes=["codexbridge.read"],
             expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
         )
 

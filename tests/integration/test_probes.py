@@ -260,6 +260,14 @@ def _api_route_signals() -> dict[str, bool]:
         "optimisticConcurrency": "if-match" in header_names,
         # Route-shaped capabilities: nothing to declare on a signature, so the
         # evidence is whether a route exists to serve them at all.
+        "passwordSignIn": any(path.endswith("/auth/sign-in") for path in paths),
+        "tokenRefresh": any(path.endswith("/auth/refresh") for path in paths),
+        "tokenRevocation": any(path.endswith("/auth/revoke") for path in paths),
+        "effectivePermissions": any(path.endswith("/auth/me") for path in paths),
+        # RFC 8628. Issue #4 shipped password sign-in instead and says so, which
+        # is the point of a `false` flag: a client can see the difference rather
+        # than discovering it at a 404.
+        "deviceAuthorization": any("/auth/device" in path for path in paths),
         "eventStream": any("/events" in path or "/stream" in path for path in paths),
         "artifactDownloads": any("/artifacts" in path or "/builds" in path for path in paths),
     }

@@ -36,8 +36,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Header, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.app.api import concurrency, idempotency, pagination
-from gateway.app.api.auth import CANCEL_SCOPE, READ_SCOPE, require_scope, visible_projects
+from gateway.app.api import concurrency, idempotency, pagination, permissions, timestamps
+from gateway.app.api.auth import require_action, visible_projects
 from gateway.app.api.errors import CONFLICT, NOT_FOUND, ApiError
 from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.db.session import get_session
@@ -138,11 +138,8 @@ def _cursor_time(value: datetime) -> str:
 
 
 def _iso(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    """Contract form of a timestamp. One implementation, in `timestamps`."""
+    return timestamps.utc_z(value)
 
 
 def _session_dto(task) -> dict:
@@ -187,7 +184,7 @@ async def list_sessions(
     state: list[str] | None = Query(default=None),
     cursor: str | None = Query(default=None),
     limit: int | None = Query(default=None),
-    principal: AuthenticatedPrincipal = Depends(require_scope(READ_SCOPE)),
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.SESSIONS_READ)),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Sessions the caller may see, newest first."""
@@ -230,7 +227,7 @@ async def list_sessions(
 async def get_session_detail(
     session_id: str,
     response: Response,
-    principal: AuthenticatedPrincipal = Depends(require_scope(READ_SCOPE)),
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.SESSIONS_READ)),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     task = await store.get_task_for_projects(session, session_id, visible_projects(principal))
@@ -247,7 +244,7 @@ async def get_session_logs(
     response: Response,
     offset: int = Query(default=0, ge=0),
     limit: int | None = Query(default=None),
-    principal: AuthenticatedPrincipal = Depends(require_scope(READ_SCOPE)),
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.SESSIONS_READ_LOGS)),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Log lines from `offset`, the append-only scheme the store already uses.
@@ -287,7 +284,7 @@ async def stop_session(
     response: Response,
     if_match: str | None = Header(default=None, alias="If-Match"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    principal: AuthenticatedPrincipal = Depends(require_scope(CANCEL_SCOPE)),
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.SESSIONS_STOP)),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Cancel a running or queued session.
@@ -421,7 +418,7 @@ async def _dispatch_cancel(hub: AgentHub, task) -> bool:
 @router.post("/sessions/{session_id}/explain-error", tags=["sessions"])
 async def explain_session_error(
     session_id: str,
-    principal: AuthenticatedPrincipal = Depends(require_scope(READ_SCOPE)),
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.SESSIONS_EXPLAIN_ERROR)),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """A structured account of why a session failed, assembled server-side.

@@ -64,19 +64,25 @@ def _sync_url(url: str) -> str:
 def _statements(sql: str) -> list[str]:
     """Split a migration into statements.
 
-    Naive on purpose — semicolons inside string literals or procedural bodies
-    would break it. The migrations in this repository are plain DDL; if one ever
-    needs a function body, this splitter must be replaced rather than worked
-    around, and this comment is the warning.
+    **Comments are stripped before the split, not after.** The previous cut
+    split on `;` first and dropped comment lines from each chunk afterwards, so
+    a semicolon inside a comment — ordinary prose, `like this; and this` — cut
+    the file mid-sentence and handed the tail to the database as a statement.
+    That is not hypothetical: `migrations/0003_mobile_auth.sql` hit it on the day
+    it was written, and the mitigation shipped was a note asking every future
+    author to avoid semicolons in prose. A guard every caller must remember is a
+    guard one caller will not remember (`design-standards.md` §3), and here every
+    future migration is the caller.
+
+    Still naive about semicolons inside **string literals** and procedural
+    bodies. The migrations in this repository are plain DDL; if one ever needs a
+    function body, this splitter must be replaced rather than worked around, and
+    this comment is the warning.
     """
-    out = []
-    for chunk in sql.split(";"):
-        stripped = "\n".join(
-            line for line in chunk.splitlines() if not line.strip().startswith("--")
-        ).strip()
-        if stripped:
-            out.append(stripped)
-    return out
+    without_comments = "\n".join(
+        line for line in sql.splitlines() if not line.strip().startswith("--")
+    )
+    return [chunk.strip() for chunk in without_comments.split(";") if chunk.strip()]
 
 
 def main() -> int:
@@ -150,12 +156,17 @@ def main() -> int:
 
     for path in pending:
         print(f"applying {path.name} ...", end=" ", flush=True)
+        # How many statements the database accepted before the failure. Needed
+        # because "one transaction per migration" is a promise the engine keeps
+        # only where DDL is transactional: SQLite's pysqlite driver autocommits
+        # every ALTER and CREATE, so a file whose third statement fails leaves
+        # the first two committed and the ledger row rolled back.
+        executed = 0
         try:
-            # One transaction per migration: a failure leaves the ledger and the
-            # schema agreeing, so a fixed migration can simply be re-run.
             with engine.begin() as connection:
                 for statement in _statements(path.read_text(encoding="utf-8")):
                     connection.execute(text(statement))
+                    executed += 1
                 connection.execute(
                     text("insert into schema_migrations (filename, applied_at) values (:f, CURRENT_TIMESTAMP)"),
                     {"f": path.name},
@@ -163,16 +174,42 @@ def main() -> int:
         except SQLAlchemyError as exc:
             # A bare traceback here is a dead end for the operator, who arrived
             # from a startup message naming this exact command. Say what failed
-            # and what the two ways forward are.
+            # and what the ways forward are.
             print("FAILED")
             print(f"\n{path.name} did not apply:\n  {exc.__class__.__name__}: {exc}\n", file=sys.stderr)
+            if executed:
+                # The message that used to print here said "Nothing was
+                # committed for this file", unconditionally. That is false
+                # whenever a statement succeeded first, and it is false in the
+                # case that needs the operator most: they are told the database
+                # is untouched while it may be half migrated, and the remedy
+                # offered in the same breath would record a half-applied file as
+                # complete. What this script can honestly say is how many
+                # statements the database accepted — whether any of them changed
+                # anything is a question about the file, so it is asked, not
+                # answered.
+                print(
+                    f"WARNING: {executed} statement(s) ran before the failure, and this\n"
+                    "engine may not roll back DDL — SQLite does not. The ledger row WAS\n"
+                    "rolled back, so if any of those statements changed the schema, this\n"
+                    "file is now PARTIALLY APPLIED and re-running it will fail on the part\n"
+                    "that already succeeded.\n\n"
+                    f"Read the first {executed} statement(s) of {path.name} before doing\n"
+                    "anything else, and check the schema against them.",
+                    file=sys.stderr,
+                )
+            else:
+                print("The first statement failed, so nothing was committed for this file.", file=sys.stderr)
             print(
-                "If this database already has the objects that migration creates — the\n"
+                "\nIf this database already has the objects that migration creates — the\n"
                 "usual case for a database bootstrapped by the application rather than by\n"
-                f"this script — record it as applied without running it:\n\n"
+                "this script, where every statement above was a no-op — record it as\n"
+                "applied without running it:\n\n"
                 f"    python3 scripts/apply_migrations.py --mark-applied {path.name}\n\n"
-                "Otherwise the migration itself needs fixing. Nothing was committed for\n"
-                "this file, and later migrations were not attempted.",
+                "Do NOT do that if the statements above actually changed the schema: it\n"
+                "would record a half-applied migration as complete and the next reader\n"
+                "would have no way to tell. Otherwise the migration itself needs fixing.\n"
+                "Later migrations were not attempted.",
                 file=sys.stderr,
             )
             return 1

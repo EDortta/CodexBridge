@@ -22,11 +22,11 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Response
 from sqlalchemy import text
 
+from gateway.app.api import timestamps
 from gateway.app.api.errors import DEPENDENCY_UNAVAILABLE, error_body
 from gateway.app.core.config import settings
 from gateway.app.db.session import engine
@@ -49,7 +49,7 @@ version_router = APIRouter()
 # `tests/contract/test_openapi_document.py` asserts it equals the document's
 # `info.version`, so the two cannot drift — a client that pins a contract version
 # has no other way to tell what the server actually speaks.
-API_CONTRACT_VERSION = "1.2.0"
+API_CONTRACT_VERSION = "1.3.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a
@@ -71,13 +71,18 @@ CAPABILITIES = {
     "cursorPagination": True,    # GET /api/v1/sessions
     "idempotencyKeys": True,     # POST /api/v1/sessions/{id}/stop
     "optimisticConcurrency": True,  # If-Match on the same write
+    "passwordSignIn": True,      # POST /api/v1/auth/sign-in
+    "tokenRefresh": True,        # POST /api/v1/auth/refresh
+    "tokenRevocation": True,     # POST /api/v1/auth/revoke
+    "effectivePermissions": True,  # GET /api/v1/auth/me
+    "deviceAuthorization": False,  # RFC 8628; sign-in is what #4 delivered
     "eventStream": False,        # issue #13
     "artifactDownloads": False,  # issue #11
 }
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return timestamps.now_z()
 
 
 # Last readiness probe result, reused for `settings.ready_cache_seconds`.

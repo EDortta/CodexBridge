@@ -60,9 +60,23 @@ Padrões relevantes quando não há `.env`:
 |---|---|
 | `database_url` | `sqlite+aiosqlite:///./codex_bridge.db` |
 | `registry_file` | `examples/registry.json` |
-| `user_registry_file` | `examples/users.json` |
+| `user_registry_file` | `/etc/codex-bridge/users.json` — **não** `examples/users.json` |
 | `mcp_auth_mode` | `bearer` (o token é `change-me`) |
-| `rate_limit` | 120 requisições / 60s, só em `/mcp` |
+| `rate_limit` | 120 requisições / 60s, em `/mcp` e em toda rota `/api` |
+| `audit_event_retention_days` | 90 (varredura no startup) |
+
+O padrão de `user_registry_file` não aponta para o exemplo de propósito: o
+`admin` de `examples/users.json` tem o texto claro da senha comitado neste
+repositório, e `POST /api/v1/auth/sign-in` o alcançaria com um único POST não
+autenticado. Em desenvolvimento, aponte a variável para uma cópia sua:
+
+```
+export CODEX_BRIDGE_USER_REGISTRY_FILE=$PWD/.local/users.json
+```
+
+A conta do exemplo é recusada mesmo quando o arquivo é apontado explicitamente
+(motivo `published_example_credential`) — troque o hash, receita em
+`docs/installation.md`.
 
 Verificar: `curl -s localhost:8080/healthz`.
 

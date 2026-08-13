@@ -19,7 +19,43 @@
    novo em vez de deduzir: com o valor errado, ou todo mundo cai num bucket só,
    ou o cliente escolhe o próprio.
 5. Ajustar `/etc/codex-bridge/registry.json`.
-6. Criar `/etc/codex-bridge/users.json` a partir de `examples/users.json` e trocar a senha inicial.
+6. Criar `/etc/codex-bridge/users.json` a partir de `examples/users.json` e
+   **trocar a senha inicial** — o hash que o exemplo traz tem o texto claro
+   (`change-me-now`) comitado neste repositório, e `users.authenticate` recusa
+   qualquer conta que ainda o carregue (401, motivo
+   `published_example_credential` na auditoria). Gerar o novo hash com o custo
+   esperado:
+
+   ```
+   python3 - <<'EOF'
+   import base64, getpass, hashlib, secrets
+   ITERATIONS = 600000
+   salt = secrets.token_bytes(16)
+   digest = hashlib.pbkdf2_hmac("sha256", getpass.getpass("senha: ").encode(), salt, ITERATIONS)
+   b64 = lambda raw: base64.urlsafe_b64encode(raw).decode().rstrip("=")
+   print("$".join(("pbkdf2_sha256", str(ITERATIONS), b64(salt), b64(digest))))
+   EOF
+   ```
+
+   O custo pode ser outro: `users.authenticate` lê a contagem de iterações do
+   próprio registro para cobrar o mesmo de um usuário inexistente, então o
+   oráculo de tempo não reabre. O que muda com um custo menor é só quanto custa
+   quebrar a senha offline.
+
+   `CODEX_BRIDGE_USER_REGISTRY_FILE` **precisa apontar para esse arquivo**. Sem
+   a variável o padrão é `/etc/codex-bridge/users.json`, e um gateway que não
+   tenha o arquivo simplesmente não deixa ninguém entrar — falha fechada, de
+   propósito. O padrão antigo apontava para `examples/users.json`, dentro do
+   checkout.
+
+   **Ao atualizar uma instalação que nunca definiu essa variável**, ela para de
+   autenticar: o padrão antigo resolvia para um arquivo do repositório e o novo
+   não. O sintoma é `401 Sign-in failed.` em tudo e `403 user_registry_unavailable`
+   no `/mcp` para tokens já emitidos. O startup registra o motivo em nível
+   `ERROR`, nomeando o arquivo e a variável:
+   ```
+   journalctl -u codex-bridge-gateway | grep 'user registry unusable'
+   ```
 7. Instalar `deploy/systemd/codex-bridge-gateway.service`.
 8. Ajustar `deploy/nginx/frida-codex-bridge.conf`.
    **O arquivo instalado no `frida` chama-se `codexbridge-https`** (com um
@@ -56,6 +92,12 @@
    ```
    … apply_migrations.py --mark-applied 0001_init.sql
    ```
+   `0004_drop_user_email.sql` é o único que **remove** colunas
+   (`user_email` das três tabelas de credencial). O código deixou de preenchê-las
+   e elas são `not null`, então um gateway atualizado sem essa migração **não
+   sobe**: `schema_guard` recusa e nomeia o arquivo. Preferível ao alternativo,
+   que seria um erro de integridade no primeiro sign-in. Nenhuma linha é
+   perdida — todas já carregam `user_id`.
 10. Habilitar:
    `sudo systemctl enable --now codex-bridge-gateway`
 

@@ -1,12 +1,10 @@
-"""Authentication for the contract surface.
+"""Authentication and authorization for the contract surface.
 
-Reuses the OAuth 2.1 access tokens the gateway already issues and the user
-registry it already reads, because both exist and work. Issue #4 — device
-authorization, refresh, revocation, an endpoint reporting effective permissions —
-is a **separate** piece of work and is not implemented here. What this module
-provides is the minimum that lets `/api/v1` endpoints exist at all: a request
-either carries a valid token belonging to an enabled user, or it does not reach
-a handler.
+This module answers two questions for every `/api/v1` request: *who is calling*
+(`current_principal`) and *may they do this* (`require_action`). The credentials
+themselves are minted by `gateway/app/api/routes/auth.py` — sign-in, refresh,
+revocation — and stored in the same table the MCP transport reads, so a token
+revoked for one is revoked for both.
 
 Building `/api/v1/sessions` without this was never an option. A session record
 carries the instruction the operator wrote, the project it ran against and its
@@ -29,18 +27,33 @@ import json
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.app.api import permissions
 from gateway.app.api.errors import PERMISSION_DENIED, UNAUTHENTICATED, ApiError
+from gateway.app.api.permissions import Action
 from gateway.app.core.config import settings
 from gateway.app.core.users import AuthenticatedPrincipal, lookup_user
 from gateway.app.db.session import get_session
 from gateway.app.services import store
 
 
-READ_SCOPE = "codexbridge.read"
-CANCEL_SCOPE = "codexbridge.task.cancel"
+# The one message every rejected credential on this surface gets. A constant
+# rather than a convention: the previous cut passed a different string for an
+# absent header than for an invalid token, under a docstring promising they were
+# the same, and nothing failed. The property that matters — real-but-dead is
+# indistinguishable from never-real — held; the claim did not, and a reader
+# checking the claim would have stopped at the docstring.
+TOKEN_REJECTED = "This endpoint requires a valid bearer token."
 
 
-def _unauthenticated(message: str) -> ApiError:
+def unauthenticated(message: str = TOKEN_REJECTED) -> ApiError:
+    """The one shape of a 401 on this surface.
+
+    Every `unauthenticated` response carries `WWW-Authenticate`, and every one
+    of them says the same thing whatever went wrong — absent, unknown, expired,
+    revoked, or belonging to an account that no longer exists. Distinguishing
+    them tells a caller holding a token they were never given whether it was
+    ever real.
+    """
     return ApiError(
         status_code=401,
         code=UNAUTHENTICATED,
@@ -58,27 +71,31 @@ async def current_principal(
     The token is looked up in the same table the MCP transport uses, so a token
     revoked there is revoked here — one credential store, not two.
     """
-    authorization = request.headers.get("Authorization")
-    if not authorization or not authorization.startswith("Bearer "):
-        raise _unauthenticated("This endpoint requires a bearer token.")
+    token = bearer_token(request)
+    if token is None:
+        raise unauthenticated()
 
-    token = authorization.removeprefix("Bearer ").strip()
     item = await store.get_oauth_access_token(session, token)
     if item is None:
-        # Covers unknown and expired alike: `store.get_oauth_access_token`
-        # filters on expiry, and telling the two apart tells a probing caller
-        # whether a token was ever real.
-        raise _unauthenticated("The bearer token is not valid.")
+        # Covers unknown, expired and revoked alike: the store refuses all
+        # three, and telling them apart tells a probing caller whether a token
+        # was ever real.
+        raise unauthenticated()
 
-    user = lookup_user(settings.user_registry_file, item.user_id) or lookup_user(
-        settings.user_registry_file, item.user_email
-    )
+    user = lookup_user(settings.user_registry_file, item.user_id)
     if user is None or not user.enabled:
-        raise ApiError(
-            status_code=403,
-            code=PERMISSION_DENIED,
-            message="The account for this token is unknown or disabled.",
-        )
+        # 401, not 403. The operator disabled the account or removed it, so the
+        # credential is dead and the only recovery is to present another one —
+        # which is what 401 means and what the client's 401 branch does. A 403
+        # here told the client "you are authenticated and not permitted", so it
+        # showed a permissions error and kept the dead session; and it made
+        # `/api/v1/auth/me` — the one endpoint whose purpose is reporting
+        # authorization — answer a status its contract does not declare.
+        #
+        # It also makes the rule the rest of this surface is documented by
+        # actually true: on `/api/v1`, `403` comes from `require_action` and
+        # from nowhere else.
+        raise unauthenticated()
 
     principal = AuthenticatedPrincipal(
         user_id=user.user_id,
@@ -101,17 +118,42 @@ async def current_principal(
     return principal
 
 
-def require_scope(scope: str):
-    """Dependency factory refusing a principal that lacks `scope`."""
+def bearer_token(request: Request) -> str | None:
+    """The presented bearer token, or None when the header is absent or not one.
+
+    One reader, because `/api/v1/auth/revoke` needs the token itself rather than
+    the principal derived from it, and two parsers of the same header is how one
+    of them ends up accepting a form the other does not.
+    """
+    authorization = request.headers.get("Authorization")
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization.removeprefix("Bearer ").strip()
+    return token or None
+
+
+def require_action(action: Action):
+    """Dependency factory refusing a principal that may not perform `action`.
+
+    Endpoints are guarded by an **action** from `permissions.CATALOGUE`, not by
+    a bare scope string. That is what keeps `GET /api/v1/auth/me` honest: the
+    report the client uses to decide whether to show a control is produced from
+    the same table this guard enforces, so a control the client offers and a
+    `403` from the endpoint cannot disagree.
+    """
 
     async def _dependency(
         principal: AuthenticatedPrincipal = Depends(current_principal),
     ) -> AuthenticatedPrincipal:
-        if not principal.has_scope(scope):
+        if not permissions.is_allowed(principal, action):
             raise ApiError(
                 status_code=403,
                 code=PERMISSION_DENIED,
-                message=f"This action requires the {scope} scope.",
+                message=(
+                    f"This action requires the {action.name!r} permission "
+                    f"(scope {action.scope}). GET /api/v1/auth/me reports what "
+                    "this actor may do."
+                ),
             )
         return principal
 

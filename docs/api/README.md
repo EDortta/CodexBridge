@@ -17,7 +17,7 @@ The gateway exposes several HTTP surfaces. Only one of them is this contract.
 
 | surface | in this contract? | why |
 |---|---|---|
-| `/api/v1/**` | **yes** | the mobile-facing public API |
+| `/api/v1/**` | **yes** | the mobile-facing public API, including `/api/v1/auth/**` (issue #4) |
 | `/health`, `/ready`, `/api/version` | **yes** (issue #3) | mobile probes them before authenticating |
 | `POST /mcp` | no | JSON-RPC/MCP transport for ChatGPT; contract is `docs/protocol.md` |
 | `/oauth/**`, `/.well-known/**` | no | OAuth 2.1 flow and metadata; contract is the RFCs (6749, 7636, 8414, 9728) |
@@ -329,6 +329,133 @@ wired must be removed, so the list cannot become a permanent exemption.
 
 ---
 
+## Authentication and authorization (issue #4)
+
+`POST /api/v1/auth/sign-in`, `POST /api/v1/auth/refresh`,
+`POST /api/v1/auth/revoke`, `GET /api/v1/auth/me`.
+
+### Sign-in, not device authorization
+
+The issue allowed either. Device authorization (RFC 8628) exists for clients
+that cannot show a keyboard; CodexBridgeMobile is a phone app with a text field,
+and the gateway already verifies the operator's password for the browser OAuth
+flow. A device-code table, a polling endpoint and a verification page would be a
+second authentication surface to keep correct forever, serving a client that can
+simply ask. `GET /api/version` reports `deviceAuthorization: false`, so the
+absence is visible to a client rather than assumed.
+
+The existing OAuth 2.1 + PKCE flow is **not** what mobile uses, and that is not
+duplication. It is the right flow for ChatGPT — a third-party client that must
+never see the password — and it issues no refresh token at all, which is the
+renewal this issue is about. Both flows write to the same token table.
+
+### One credential store
+
+`store.get_oauth_access_token` refuses an expired **or revoked** token, and both
+the mobile API and `POST /mcp` authenticate through it. That is why revocation
+is a property of the system rather than of one router: a token revoked from the
+phone stops driving executors through ChatGPT in the same instant.
+
+### Rotation, and what a replay means
+
+A refresh token is single use. Exchanging it consumes it and returns a new pair;
+`refreshTokenExpiresAt` is carried forward unchanged, so a grant has an absolute
+lifetime and rotation cannot extend a stolen credential indefinitely.
+
+Presenting a **consumed** refresh token revokes the whole grant. Replay and
+theft are indistinguishable from the server side, and the safe reading of that
+ambiguity is theft: signing in again is cheap, sharing a session with whoever
+holds the copy is not.
+
+Every rotation re-reads `users.json` and intersects — never unions — the grant's
+scopes with the account's current ones. A disabled or deleted account ends the
+grant at the next refresh rather than at the next expiry, which for a 30-day
+refresh token is the difference between minutes and a month.
+
+### Every 401 says the same thing
+
+Absent, unknown, wrong, expired, revoked, or belonging to an account the
+operator has since disabled: one status, one code, one message, and
+`WWW-Authenticate` on all of them. A distinct "expired" tells a holder of a
+stolen token it was once real; a distinct "no such user" turns the sign-in form
+into a user directory. `403 permission_denied` is reserved for an actor who *is*
+authenticated and is not permitted — the distinction the mobile client branches
+on to decide between "sign in again" and "you cannot do this".
+
+**A disabled or deleted account is a `401`, not a `403`.** The credential is
+dead and the only recovery is to present another one, which is what 401 means.
+It was briefly a 403, on the reasoning that the token itself was still valid;
+that made a client show a permissions error and keep a session that could never
+work again, and it made `GET /api/v1/auth/me` — the one endpoint whose purpose
+is reporting authorization — answer a status its contract does not declare.
+On `/api/v1`, `403` comes from `require_action` and from nowhere else.
+Asserted by `tests/integration/test_auth.py::test_every_401_on_this_surface_is_the_same_401`
+and `::test_a_disabled_account_is_asked_to_sign_in_again_not_told_it_may_not` —
+"one message" is a claim that was written in four places and was not true, so
+it now has a test under it rather than a docstring.
+
+The same reasoning covers timing, which no response body can hide: an unknown
+username is charged the same PBKDF2 derivation as a real one
+(`users.authenticate`), at the iteration count read from the registry itself
+rather than from a constant that nothing keeps in step with it. The same
+function serves `POST /oauth/authorize`, which used to short-circuit and
+answered an unknown username 185x faster than a real one.
+
+### What a sign-in token may carry
+
+The account's scopes **intersected with `CODEX_BRIDGE_OAUTH_DEFAULT_SCOPES`**.
+Both flows write to the same token table, and `POST /mcp` authenticates against
+it, so a sign-in token that skipped the browser flow's cap would be a live MCP
+credential carrying scopes the deployment's allowlist exists to withhold. Note
+that `roles` still come from `users.json` at request time: stripping
+`codexbridge.admin` from a token does not demote an account whose role is
+`admin`, and it is not meant to.
+
+### Effective permissions, and why the client must not compute them
+
+`GET /api/v1/auth/me` returns `permissions`: every action this build serves,
+with `allowed` evaluated for the caller. A client reads it to decide whether to
+**show** a control.
+
+The list is produced from `gateway/app/api/permissions.py:CATALOGUE`, which is
+the same table `require_action` enforces on the endpoints. That is the whole
+design: a client deriving "may I stop a session" from a scope string would be
+re-implementing the server's authorization rules, and the two copies drift the
+first time a scope is split — with the client's copy deciding what the operator
+sees. `tests/integration/test_auth.py::test_the_report_and_the_endpoints_agree`
+calls two different actors against every action that *has* an endpoint and
+asserts a `403` exactly when the report says `allowed: false`.
+
+Be precise about the coverage, because the first version of this paragraph was
+not: `sessions.readAllProjects` has no endpoint of its own — it is the admin
+widening of the two read endpoints — and is covered by
+`::test_the_administrative_action_describes_what_the_list_endpoint_does`
+instead. The guard that keeps a new action from shipping unchecked
+(`::test_every_catalogued_action_is_exercised_below`) names that exemption one
+action at a time. It used to exempt the whole `administrative` category, which
+meant the next administrative action would have shipped with no parity
+assertion at all and a green suite —
+`::test_the_guard_flags_a_new_administrative_action` is what now stops that.
+
+Actions carry one of three classes — `read`, `operational`, `administrative` —
+so that adding an endpoint forces a reviewer to classify it, and classifying a
+cancel as `read` is a visible mistake instead of an invisible one.
+
+**The catalogue lists only actions a served endpoint honours.** Same rule as the
+capability flags, for the same reason: `codexbridge.task.submit` and
+`codexbridge.task.approve` exist in the MCP transport and in `users.json`, and
+no HTTP endpoint offers them yet, so they are absent.
+
+### Schema
+
+`migrations/0003_mobile_auth.sql` adds `oauth_access_tokens.revoked_at`,
+`oauth_access_tokens.grant_id` and the `oauth_refresh_tokens` table. Both
+columns are nullable with no default: a migration that revoked the installed
+base would sign out ChatGPT and the operator at deploy time. `schema_guard`
+names the file if a deployment starts without it.
+
+---
+
 ## Sessions (issue #9)
 
 A **session** is one `codex exec` run — internally a `TaskModel`. The mobile
@@ -485,14 +612,48 @@ Expired records are swept at startup. There is no scheduler in this deployment
 and adding one is a larger change than this issue owns; without the sweep the
 table grows without bound, each row holding a full response body.
 
-### Rate limiting — vocabulary only, so far
+### Rate limiting
 
 The contract defines `rate_limited`, the `RateLimited` response and the
-`Retry-After` header, and `errors.py` maps `429` to the code. **No middleware
-applies a limit to `/api`.** `MemoryRateLimiter` exists and guards `POST /mcp`
-only. Nothing is promised to a client yet — there are no `/api` endpoints — but
-do not read the contract's `429` as implemented: wiring it belongs with the
-first endpoints, in issue #3.
+`Retry-After` header, and `errors.py` maps `429` to the code. **Every served
+`/api` route carries the limiter**, as a router-level dependency
+(`RateLimitDependency` over `MemoryRateLimiter`): the two `/api/v1` routers and
+`/api/version`. The default ceiling is 120 requests per 60 seconds per bucket
+(`CODEX_BRIDGE_RATE_LIMIT_REQUESTS_PER_WINDOW`,
+`CODEX_BRIDGE_RATE_LIMIT_WINDOW_SECONDS`), so a client should implement
+`Retry-After` backoff — the `429` in the contract is real.
+
+The bucket is the caller's address, not the actor: the limiter is a router-level
+dependency and is solved before the route-level authentication, so it never sees
+a principal. That is deliberate for `POST /api/v1/auth/sign-in`, which is
+unauthenticated and is the one endpoint where guessing repeatedly is the whole
+attack.
+
+`dependencies=` binds to the routes of the router it is passed to, so a route
+added later with a bare `@app.get("/api/v1/...")` would be unlimited. What makes
+"every served `/api` route" true is a test —
+`tests/integration/test_probes.py::test_every_served_api_route_carries_the_rate_limiter`
+— not this paragraph.
+
+`POST /oauth/authorize` is not an `/api` route and now carries the same limiter
+anyway, declared on the route itself. It takes a password, it is
+unauthenticated, and since the constant-cost guard moved into
+`users.authenticate` every attempt — including one with an invented username —
+costs a full PBKDF2 derivation. Closing the enumeration oracle made the cheapest
+hostile request on the gateway ~190x more expensive to serve, on the one auth
+route that would not refuse a caller for repeating it. The `GET` that renders
+the form is deliberately unlimited: it touches no credential.
+
+Both password endpoints run the derivation **off the event loop**
+(`users.authenticate_async`). A few hundred milliseconds of PBKDF2 with no
+`await` in it holds the whole process while it runs: ten concurrent attempts
+took `GET /health` from 0.8 ms to 3.3 s, and a liveness probe that times out
+restarts a gateway that is merely being probed for accounts. Pinned by
+`tests/integration/test_oauth_authorize.py::test_a_flood_of_bad_logins_does_not_stall_the_liveness_probe`.
+
+This section is checked against the running application. It previously said the
+opposite — that nothing limited `/api` — for a while after the limiter shipped,
+which is a client author deciding not to implement backoff from a false premise.
 
 ### Optimistic concurrency
 

@@ -5,6 +5,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
+from uuid import uuid4
 
 from gateway.app.core.config import settings
 
@@ -15,6 +16,20 @@ def generate_authorization_code() -> str:
 
 def generate_access_token() -> str:
     return secrets.token_urlsafe(48)
+
+
+def generate_refresh_token() -> str:
+    """A refresh token is longer-lived than an access token, so it is longer."""
+    return secrets.token_urlsafe(64)
+
+
+def generate_grant_id() -> str:
+    """Identifier of one sign-in and every rotation descended from it.
+
+    Not derived from a token: it is written to audit records and returned
+    nowhere, so it must stay useless to anyone who reads it.
+    """
+    return str(uuid4())
 
 
 def now_utc() -> datetime:

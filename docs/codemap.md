@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-10 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-08-13 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 67 file(s) · 371 symbol(s) indexed
-- Languages: config (2), python (63), shell (2)
+- 73 file(s) · 475 symbol(s) indexed
+- Languages: config (2), python (69), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -21,7 +21,7 @@
 ## Ignored Paths
 
 - Built-in: `.docs-migration-bak`, `.git`, `.idea`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`, `.venv`, `.vscode`, `__pycache__`, `build`, `dist`, `env`, `node_modules`, `venv`
-- `.gitignore`: `__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.coverage`, `codex_bridge.db`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `venv/`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md`, `.windsurfrules`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/ai-agents.md`, `.credentials`, `handoff.md`, `new-tag.sh`, `scripts/install-agents-kit.sh`, `scripts/agent-worktree.sh`, `.docs-migration-bak/`, `.gk/operator.json`, `.gk/secrets.json`, `.gk/context-telemetry.jsonl`, `.gk/overwritten/`
+- `.gitignore`: `__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.coverage`, `codex_bridge.db`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `venv/`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md`, `.windsurfrules`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/ai-agents.md`, `.credentials`, `handoff.md`, `new-tag.sh`, `scripts/install-agents-kit.sh`, `scripts/agent-worktree.sh`, `.docs-migration-bak/`, `.gk/operator.json`, `.gk/secrets.json`, `.gk/context-telemetry.jsonl`, `.gk/overwritten/`, `.env`, `.env.*`, `.envrc`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, `.credentials/*`, `!.env.example`, `!.env.sample`, `!.env.template`, `!.env.dist`, `!.env-example`, `!.env.missing`, `!.credentials/.gitignore`, `!.credentials/.keep`, `!.credentials/README*`, `!.credentials/*.example`, `!.credentials/*.sample`, `!.credentials/*.template`, `!.credentials/*.dist`
 
 ## Entry Points
 
@@ -49,26 +49,29 @@ gateway/
     __init__.py  — "Gateway app package."
     api/
       __init__.py  — "Cross-cutting HTTP behaviour for the mobile API (issue #12)."
-      auth.py  — "Authentication for the contract surface."
+      auth.py  — "Authentication and authorization for the contract surface."
       concurrency.py  — "Optimistic concurrency: two operators, two devices, one decision."
       errors.py  — "The one error envelope every contract endpoint returns."
       idempotency.py  — "Replay-safe writes for a client that goes offline mid-request."
       pagination.py  — "Cursor pagination for collections, and the offset scheme logs keep."
+      permissions.py  — "What an actor may do, in one table the API and the client both read."
       rate_limit.py  — "Rate limiting for the contract surface."
       request_context.py  — "Per-request identifier, carried from the middleware to the error envelope."
       routes/
         __init__.py  — "HTTP routers for the mobile contract surface."
+        auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
         sessions.py  — "Agent sessions, their logs, and the one control the protocol actually has."
       scope.py  — "Which requests the API's cross-cutting rules apply to."
       setup.py  — "One call that installs every cross-cutting API behaviour."
+      timestamps.py  — "RFC 3339 in UTC, spelled one way."
     core/
       config.py
       logging.py
       oauth.py
       rate_limit.py
       registry.py
-      users.py
+      users.py  — "The user registry, and the one operation that turns a password into a user."
     db/
       base.py
       schema_guard.py  — "Refuse to start on a database that is behind the code."
@@ -99,10 +102,13 @@ shared/
 tests/
   conftest.py
   contract/
+    test_docs_match_the_runtime.py  — "Prose that states a runtime fact, checked against the runtime."
     test_openapi_document.py  — "Contract tests for the canonical OpenAPI document."
     test_proxy_routes.py  — "Every contracted path must be routed by the proxies in front of the gateway."
   integration/
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
+    test_auth.py  — "The mobile credential lifecycle — issue #4."
+    test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
     test_sessions.py  — "Agent sessions, logs and control — issue #9."
     test_store_and_mcp.py
@@ -152,10 +158,12 @@ tests/
 
 ### `gateway/app/api/auth.py`
 
-> Authentication for the contract surface.
+> Authentication and authorization for the contract surface.
 
+- `unauthenticated(message)` — "The one shape of a 401 on this surface."
 - `current_principal(request, session)` *(async function)* — "Resolve the bearer token to a principal, or refuse the request."
-- `require_scope(scope)` — "Dependency factory refusing a principal that lacks `scope`."
+- `bearer_token(request)` — "The presented bearer token, or None when the header is absent or not one."
+- `require_action(action)` — "Dependency factory refusing a principal that may not perform `action`."
 - `visible_projects(principal)` — "Project ids the principal may see, or None meaning "no restriction"."
 
 ### `gateway/app/api/concurrency.py`
@@ -204,6 +212,14 @@ tests/
 - `page_info()` — "Build `PageInfo`, keeping its one invariant true by construction."
 - `paginate(items)` — "Trim an over-fetched list to `limit` and describe the page."
 
+### `gateway/app/api/permissions.py`
+
+> What an actor may do, in one table the API and the client both read.
+
+- **`Action`** *(class)* — "One thing an actor may attempt, and what it takes to be allowed to."
+- `is_allowed(principal, action)` — "Whether `principal` may perform `action`."
+- `report_for(principal)` — "The catalogue evaluated for one actor, in contract shape."
+
 ### `gateway/app/api/rate_limit.py`
 
 > Rate limiting for the contract surface.
@@ -222,6 +238,18 @@ tests/
 - **`RequestContextMiddleware`** *(class)* — "Assign a request id, expose it in the context, echo it in the response."
   - `__init__(self, app, on_unhandled)` *(method)*
   - `dispatch(self, request, call_next)` *(async method)*
+
+### `gateway/app/api/routes/auth.py`
+
+> Sign-in, renewal, revocation, and what the actor may actually do.
+
+- **`SignInRequest`** *(class)*
+- **`RefreshRequest`** *(class)*
+- **`RevokeRequest`** *(class)*
+- `sign_in(body, response, session)` *(async function)* — "Exchange a username and password for an access/refresh pair."
+- `refresh(body, response, session)` *(async function)* — "Rotate a refresh token into a new pair."
+- `revoke(request, response, body, session)` *(async function)* — "Sign out: end the grant now rather than at expiry."
+- `current_actor(response, principal)` *(async function)* — "Who is calling, and what this build will let them do."
 
 ### `gateway/app/api/routes/probes.py`
 
@@ -256,6 +284,13 @@ tests/
 
 - `install_api_conventions(app)` — "Install the error envelope, the request id, and their shared plumbing."
 
+### `gateway/app/api/timestamps.py`
+
+> RFC 3339 in UTC, spelled one way.
+
+- `utc_z(value)` — "`value` as an RFC 3339 UTC instant ending in `Z`, or None."
+- `now_z()` — "The current instant, in the same form."
+
 ### `gateway/app/core/config.py`
 
 - **`Settings`** *(class)*
@@ -274,6 +309,8 @@ tests/
 
 - `generate_authorization_code()`
 - `generate_access_token()`
+- `generate_refresh_token()` — "A refresh token is longer-lived than an access token, so it is longer."
+- `generate_grant_id()` — "Identifier of one sign-in and every rotation descended from it."
 - `now_utc()`
 - `expires_in(seconds)`
 - `pkce_challenge(verifier)`
@@ -295,6 +332,8 @@ tests/
 
 ### `gateway/app/core/users.py`
 
+> The user registry, and the one operation that turns a password into a user.
+
 - **`GatewayUser`** *(class)*
 - **`UserRegistry`** *(class)*
 - **`AuthenticatedPrincipal`** *(class)*
@@ -303,6 +342,11 @@ tests/
   - `can_access_project(self, project_id)` *(method)*
 - `load_user_registry(path)`
 - `lookup_user(path, username_or_email)`
+- `unusable_registry_reason(path)` — "Why no account can sign in against `path`, or None when some can."
+- **`AuthenticationResult`** *(class)* — "Whether the credential was accepted, and — for the audit trail — why not."
+  - `ok` *(property)*
+- `authenticate(path, username_or_email, password)` — "Resolve a username and check its password, at a cost that does not vary."
+- `authenticate_async(path, username_or_email, password)` *(async function)* — "`authenticate`, moved off the event loop."
 - `verify_password(password, encoded_hash)`
 
 ### `gateway/app/db/base.py`
@@ -326,6 +370,7 @@ tests/
 - `validate_oauth_client(client_id, redirect_uri)`
 - `render_authorize_form()`
 - `authenticate_mcp_request(session, body, authorization)` *(async function)*
+- `report_user_registry_state()` — "Log, once at startup, when no account can sign in."
 - `startup()` *(async function)*
 - `healthz()` *(async function)*
 - `metrics_endpoint()` *(async function)*
@@ -356,6 +401,7 @@ tests/
 - **`IdempotencyRecordModel`** *(class)* — "A completed write, keyed so an offline retry replays instead of repeating."
 - **`OAuthAuthorizationCodeModel`** *(class)*
 - **`OAuthAccessTokenModel`** *(class)*
+- **`OAuthRefreshTokenModel`** *(class)* — "A single-use credential that mints access tokens for one grant."
 
 ### `gateway/app/services/agent_hub.py`
 
@@ -398,7 +444,13 @@ tests/
 - `create_oauth_authorization_code(session)` *(async function)*
 - `consume_oauth_authorization_code(session, code)` *(async function)*
 - `create_oauth_access_token(session)` *(async function)*
-- `get_oauth_access_token(session, token)` *(async function)*
+- `get_oauth_access_token(session, token)` *(async function)* — "The token row, or None when the token may not be used."
+- `inspect_refresh_token(session, token)` *(async function)* — "Classify a presented refresh token without deciding what to do about it."
+- `issue_auth_grant(session)` *(async function)* — "Write one sign-in (or one rotation) and its audit record, in one commit."
+- `revoke_auth_grant(session)` *(async function)* — "Revoke every credential issued under one grant."
+- `revoke_access_token(session)` *(async function)* — "Revoke one access token that belongs to no grant."
+- `record_auth_event(session)` *(async function)* — "Persist one authentication event on its own."
+- `purge_expired_audit_events(session)` *(async function)* — "Drop **authentication** audit rows older than the window. Returns how many."
 - `store_message_receipt(session, message_id, executor_id, message_type)` *(async function)*
 - `list_tasks_page(session)` *(async function)* — "Tasks the caller may see, newest first, over-fetched by one."
 - `get_task_for_projects(session, task_id, project_ids)` *(async function)* — "A task the caller may see, or None."
@@ -438,6 +490,13 @@ tests/
 - `sanitize_log_line(line)`
 - `ensure_within_root(root, target)`
 - `filtered_environment(allowed_keys)`
+
+### `tests/contract/test_docs_match_the_runtime.py`
+
+> Prose that states a runtime fact, checked against the runtime.
+
+- `test_the_codemap_names_every_module_it_claims_to_index()` — "`.docs/agents/programmer.md` tells the next agent to read this instead of scanning."
+- `test_the_api_readme_does_not_deny_the_limiter_that_ships(denial)` — "§"Rate limiting — vocabulary only, so far" outlived the wiring."
 
 ### `tests/contract/test_openapi_document.py`
 
@@ -526,6 +585,75 @@ tests/
 - `test_completing_a_lost_reservation_still_records_the_write(db_session)` *(async function)* — "Otherwise the next identical request executes the side effect again."
 - `test_a_completed_record_is_final(db_session)` *(async function)* — "Replacing a recorded 200 with a later 500 defeats the whole mechanism."
 - `test_non_contract_unhandled_error_is_logged_once(client, caplog)` — "Two full tracebacks for one failure, on the highest-volume transport."
+
+### `tests/integration/test_auth.py`
+
+> The mobile credential lifecycle — issue #4.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)* — "The auth and sessions routers over a real database."
+- `sign_in(api, username, password)`
+- `auth(token)`
+- `make_task(factory, project_id)` *(async function)*
+- `audit_events(factory, event_type)` *(async function)*
+- `test_sign_in_returns_a_pair_that_works(api)` *(async function)*
+- `test_a_token_response_is_never_cached(api)` *(async function)* — "It carries credentials. RFC 6749 §5.1."
+- `test_every_sign_in_failure_answers_the_same(api, username, password)` *(async function)* — "Anything finer turns the sign-in form into a user directory."
+- `test_a_failed_sign_in_is_attributed_without_storing_what_was_typed(api)` *(async function)* — "The reason is worth keeping. The input is not: it is unvalidated, and an"
+- `test_an_unconfigured_gateway_has_no_account_to_sign_in_as(api, monkeypatch)` *(async function)* — "`security-standards.md` §1: no default user password; fail-fast on missing config."
+- `test_an_unconfigured_gateway_says_so_instead_of_failing_in_silence(tmp_path, monkeypatch, caplog)` *(async function)* — "Fail-closed is only half of it; the other half is saying why."
+- `test_the_published_example_credential_is_refused_even_when_configured(api, monkeypatch)` *(async function)* — "Defence in depth: the operator who copies the example and forgets."
+- `test_sign_in_cannot_mint_a_scope_the_server_allowlist_withholds(api, monkeypatch)` *(async function)* — "Two issuers, one token table, and only one of them had a ceiling."
+- `test_rotation_cannot_restore_a_scope_the_allowlist_has_since_dropped(api, monkeypatch)` *(async function)* — "A 30-day grant must not outlive a narrowing of the allowlist."
+- `test_the_audit_trail_names_the_actor_by_id_and_never_by_email(api)` *(async function)* — "`security-standards.md` §2 lists e-mail among the fields never logged."
+- `test_a_credential_row_names_the_actor_by_id_and_never_by_email(api)` *(async function)* — "The scope of the test above was the defect, not its assertion."
+- `test_audit_rows_past_the_retention_window_are_swept(api)` *(async function)* — "Rejected sign-ins are the first unauthenticated write into `audit_events`."
+- `test_the_retention_sweep_does_not_age_out_the_approval_record(api)` *(async function)* — "The window bounds sign-in spam. It must not decide anything else."
+- `test_retention_of_zero_keeps_everything(api)` *(async function)* — "An operator who exports the table elsewhere opts out explicitly."
+- `test_a_sensitive_action_is_tied_to_the_actor_that_signed_in(api)` *(async function)*
+- `test_no_credential_is_stored_in_the_clear(api)` *(async function)*
+- `test_refresh_returns_a_new_pair(api)` *(async function)*
+- `test_rotation_does_not_extend_the_grant(api)` *(async function)* — "A refresh token that renewed its own deadline would never expire, which"
+- `test_replaying_a_spent_refresh_token_kills_the_whole_grant(api)` *(async function)* — "Replay and theft are indistinguishable here, so it is read as theft."
+- `test_only_one_rotation_of_a_refresh_token_can_win(api)` *(async function)* — "Single use has to survive two requests arriving together."
+- `test_an_expired_refresh_token_is_refused(api)` *(async function)*
+- `test_an_unknown_refresh_token_is_refused(api)` *(async function)*
+- `test_refresh_narrows_to_what_the_registry_says_now(api)` *(async function)* — "A 30-day refresh token must not keep minting yesterday's permissions."
+- `test_refresh_ends_the_grant_when_the_account_is_disabled(api)` *(async function)* — "Otherwise disabling an account takes as long as the refresh TTL."
+- `test_revoking_stops_the_access_token_immediately(api)` *(async function)*
+- `test_revocation_reaches_the_credential_store_the_mcp_transport_reads(api)` *(async function)* — "One store, or a revocation honoured by one surface and not the other."
+- `test_a_refresh_token_alone_can_sign_out(api)` *(async function)* — "The usual moment to sign out is after the access token has expired."
+- `test_revocation_is_idempotent_and_says_nothing_about_the_token(api)` *(async function)*
+- `test_signing_out_twice_with_only_an_access_token_is_still_a_sign_out(api)` *(async function)* — "The second call is the one a flaky mobile connection actually makes."
+- `test_an_access_token_that_was_never_issued_signs_out_quietly(api)` *(async function)* — "Same rule, reached from the other side: incurious about the credential."
+- `test_a_consumed_refresh_token_still_ends_its_own_grant(api)` *(async function)* — "Pinned on purpose — this behaviour is a decision, not an accident."
+- `test_revoking_nothing_is_refused(api)` *(async function)*
+- `test_revocation_is_recorded_against_the_actor(api)` *(async function)*
+- `test_me_requires_a_token(api)` *(async function)*
+- `test_me_refuses_an_expired_token(api)` *(async function)*
+- `test_every_401_on_this_surface_is_the_same_401(api)` *(async function)* — "Four places claimed this and it was not true."
+- `test_a_disabled_account_is_asked_to_sign_in_again_not_told_it_may_not(api)` *(async function)* — "401, not 403 — and `/api/v1/auth/me` declares no 403 at all."
+- `test_me_reports_the_actor_and_its_projects(api)` *(async function)*
+- `test_me_marks_an_admin_as_seeing_every_project(api)` *(async function)*
+- `test_me_separates_read_operational_and_administrative(api)` *(async function)* — "The three classes the issue asks for, reported per action."
+- `test_every_catalogued_action_is_exercised_below()` — "A new action must extend the table, or it ships unchecked."
+- `test_each_exemption_names_a_test_that_exists()` — "An exemption pointing at nothing is an exemption with no coverage behind it."
+- `test_the_guard_flags_a_new_administrative_action(monkeypatch)` — "The guard is only worth having if it fires — so fire it."
+- `test_the_report_and_the_endpoints_agree(api, who)` *(async function)* — "The claim the whole endpoint exists for."
+- `test_the_administrative_action_describes_what_the_list_endpoint_does(api)` *(async function)* — "`sessions.readAllProjects` is administrative because it crosses projects."
+
+### `tests/integration/test_oauth_authorize.py`
+
+> The browser OAuth form — the *other* caller of the password check.
+
+- `browser(tmp_path, monkeypatch)` *(async function)*
+- `concurrent_browser(tmp_path, monkeypatch)` *(async function)* — "The same app, driven by a client that can have requests in flight at once."
+- `test_a_wrong_password_costs_the_same_for_a_real_and_an_invented_account(browser)` *(async function)* — "Otherwise `/oauth/authorize` enumerates every account in the registry."
+- `test_a_disabled_account_cannot_complete_the_browser_flow(browser)` *(async function)* — "The short-circuit this replaced also enforced `enabled`; keep it enforced."
+- `test_a_flood_of_bad_logins_does_not_stall_the_liveness_probe(concurrent_browser)` *(async function)* — "A key derivation on the event loop takes the whole process down with it."
+- `test_the_browser_login_form_has_an_attempt_ceiling(browser, monkeypatch)` — "`/oauth/authorize` was the one auth endpoint with no limiter at all."
+- `test_no_request_handler_derives_a_key_on_the_event_loop()` — "The threadpool hop has to be unforgettable, not merely present."
+- `test_no_module_outside_the_registry_verifies_a_password_itself()` — "The guard has to be unforgettable, not merely present."
 
 ### `tests/integration/test_probes.py`
 
@@ -641,8 +769,13 @@ tests/
 - `columns(db, table)`
 - `tables(db)`
 - `test_adopting_then_upgrading_adds_the_column_to_existing_rows(legacy_db)`
+- `test_the_auth_migration_leaves_existing_tokens_usable(legacy_db)` — "0003 adds revocation without revoking the installed base."
+- `test_the_operators_email_is_gone_from_every_credential_table(legacy_db)` — "`security-standards.md` §2 names e-mail, and the default database is in `~/Sync`."
 - `test_reapplying_is_a_no_op(legacy_db)`
 - `test_failure_names_the_way_forward(legacy_db)` — "The operator arrives here from a startup message naming this command."
+- `run_script(script, db, *args)`
+- `test_a_semicolon_in_a_comment_is_not_a_statement(tmp_path)` — "The failure `migrations/0003_mobile_auth.sql` hit the day it was written."
+- `test_a_half_applied_migration_is_not_reported_as_untouched(tmp_path)` — "The runner must not tell the operator the database is clean when it is not."
 - `test_dry_run_changes_nothing(legacy_db)`
 - `test_unknown_migration_name_is_refused(legacy_db)`
 
@@ -670,6 +803,7 @@ tests/
 
 - `test_fresh_database_passes(tmp_path)`
 - `test_missing_column_is_named_with_its_migration(tmp_path)` — "The message has to be actionable: what is missing, and what adds it."
+- `test_a_database_that_cannot_express_revocation_refuses_to_serve(tmp_path)` — "`revoked_at` is what makes a revoked token stop working."
 - `test_create_all_does_not_repair_an_existing_table(tmp_path)` — "The premise of the guard, asserted rather than assumed."
 
 ### `tests/unit/test_security.py`
@@ -680,6 +814,14 @@ tests/
 ### `tests/unit/test_users.py`
 
 - `test_verify_password_accepts_known_hash()`
+- `test_authenticate_returns_the_user_and_no_reason(tmp_path)`
+- `test_authenticate_names_why_it_refused(tmp_path, username, password, reason)` — "The reason reaches the audit trail; the caller is told nothing."
+- `test_authenticate_refuses_a_disabled_account(tmp_path)`
+- `test_a_registry_still_carrying_the_published_example_password_cannot_sign_in(tmp_path)` — "`security-standards.md` §1: no default user password."
+- `test_the_shipped_example_registry_is_covered_by_that_refusal()` — "The constant tracks the file, or the guard protects nothing."
+- `test_an_absent_user_costs_what_this_registry_costs(tmp_path)` — "Otherwise `POST /api/v1/auth/sign-in` is a user-enumeration oracle."
+- `test_the_cheapest_account_in_a_mixed_registry_is_not_identifiable(tmp_path)` — "A registry written at two costs made the older accounts enumerable."
+- `test_an_empty_registry_still_costs_something(tmp_path)` — "A missing `users.json` must not make probing cheap."
 - `test_load_user_registry_indexes_by_user_id_and_email(tmp_path)`
 - `test_authenticated_principal_checks_scopes_and_projects()`
 

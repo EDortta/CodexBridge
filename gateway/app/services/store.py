@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.models.entities import (
+    AuditEventModel,
     ExecutorModel,
     MessageReceiptModel,
     OAuthAccessTokenModel,
     OAuthAuthorizationCodeModel,
+    OAuthRefreshTokenModel,
     ProjectModel,
     TaskLogModel,
     TaskModel,
@@ -26,6 +28,12 @@ from shared.protocol import (
     TaskState,
 )
 from shared.security import hash_token
+
+
+# `entity_type` of every row the credential lifecycle writes, and the only rows
+# `purge_expired_audit_events` is allowed to remove. A literal at each call site
+# would have made the retention window's scope a coincidence of spelling.
+AUTH_ENTITY_TYPE = "auth"
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -315,7 +323,6 @@ async def create_oauth_authorization_code(
     client_id: str,
     redirect_uri: str,
     user_id: str,
-    user_email: str,
     scopes: list[str],
     code_challenge: str,
     code_challenge_method: str,
@@ -327,7 +334,6 @@ async def create_oauth_authorization_code(
             client_id=client_id,
             redirect_uri=redirect_uri,
             user_id=user_id,
-            user_email=user_email,
             scopes_json=json.dumps(scopes, ensure_ascii=True),
             code_challenge=code_challenge,
             code_challenge_method=code_challenge_method,
@@ -358,31 +364,293 @@ async def create_oauth_access_token(
     token: str,
     client_id: str,
     user_id: str,
-    user_email: str,
     scopes: list[str],
     expires_at: datetime,
+    grant_id: str | None = None,
 ) -> None:
     session.add(
         OAuthAccessTokenModel(
             token_hash=hash_token(token),
             client_id=client_id,
             user_id=user_id,
-            user_email=user_email,
             scopes_json=json.dumps(scopes, ensure_ascii=True),
             expires_at=expires_at,
             created_at=datetime.now(timezone.utc),
+            grant_id=grant_id,
         )
     )
     await session.commit()
 
 
 async def get_oauth_access_token(session: AsyncSession, token: str) -> OAuthAccessTokenModel | None:
+    """The token row, or None when the token may not be used.
+
+    Expiry and revocation are both refused **here**, inside the lookup every
+    caller already makes, rather than at the call sites. There are two of them —
+    the MCP transport and the mobile API — and a revocation honoured by one and
+    not the other is a revocation that did not happen.
+    """
     item = await session.get(OAuthAccessTokenModel, hash_token(token))
     if item is None:
+        return None
+    if item.revoked_at is not None:
         return None
     if _as_utc(item.expires_at) <= datetime.now(timezone.utc):
         return None
     return item
+
+
+# Why a refresh token was refused. Only `reused` reaches the caller as anything
+# other than a flat 401: the client is told nothing, but the *server* has to
+# tell replay apart from theft, because theft revokes the grant.
+REFRESH_UNKNOWN = "unknown"
+REFRESH_REVOKED = "revoked"
+REFRESH_REUSED = "reused"
+REFRESH_EXPIRED = "expired"
+REFRESH_VALID = "valid"
+
+
+async def inspect_refresh_token(
+    session: AsyncSession, token: str
+) -> tuple[str, OAuthRefreshTokenModel | None]:
+    """Classify a presented refresh token without deciding what to do about it.
+
+    The verdict lives here, next to the timestamps it is computed from, so the
+    route does not re-implement expiry comparison against a column that may come
+    back naive from SQLite and aware from Postgres.
+    """
+    item = await session.get(OAuthRefreshTokenModel, hash_token(token))
+    if item is None:
+        return REFRESH_UNKNOWN, None
+    if item.revoked_at is not None:
+        return REFRESH_REVOKED, item
+    if item.consumed_at is not None:
+        # Single use. A second presentation is a replay or a stolen copy, and
+        # the two are indistinguishable from here — so it is treated as theft.
+        return REFRESH_REUSED, item
+    if _as_utc(item.expires_at) <= datetime.now(timezone.utc):
+        return REFRESH_EXPIRED, item
+    return REFRESH_VALID, item
+
+
+async def issue_auth_grant(
+    session: AsyncSession,
+    *,
+    grant_id: str,
+    access_token: str,
+    refresh_token: str,
+    client_id: str,
+    user_id: str,
+    scopes: list[str],
+    access_expires_at: datetime,
+    refresh_expires_at: datetime,
+    event_type: str,
+    rotated_from_hash: str | None = None,
+) -> bool:
+    """Write one sign-in (or one rotation) and its audit record, in one commit.
+
+    Returns False when a rotation lost a race — see below — having written
+    nothing. A sign-in always returns True.
+
+    Rotation consumes the previous refresh token in the same transaction that
+    issues the replacement: committing them separately leaves a window in which
+    both are usable, which is exactly the state `inspect_refresh_token` treats
+    as theft.
+
+    The consumption is a conditional UPDATE and its row count is checked, rather
+    than a read-then-write. Two refreshes arriving together both read an
+    unconsumed token and both would mint a pair, so single use would hold only
+    when nobody tested it. Whoever the database lets consume the row proceeds;
+    the loser is told nothing was written and answers like any other rejected
+    credential.
+
+    **Nothing this function writes carries a personal identifier** — not the
+    audit payload, and not the two token rows either. The actor is `user_id`
+    everywhere: in `entity_id` on the audit row and in the `user_id` column on
+    both tokens. `security-standards.md` §2 names e-mail explicitly and adds
+    that PII is never stored plaintext in a synced directory, and the default
+    `database_url` is a SQLite file inside this checkout, which sits under
+    `~/Sync`.
+
+    The scope of that sentence is the point of it. An earlier cut made the same
+    §2 argument in this docstring while writing `user_email` into
+    `oauth_access_tokens` and `oauth_refresh_tokens` twenty and thirty lines
+    below, and the test behind it asserted on `audit_events` alone — so the
+    reasoning retired the risk for the next reader while the field was still
+    there. `migrations/0004_drop_user_email.sql` removes the columns; the
+    registry lookup that used to fall back to the stored e-mail now resolves by
+    `user_id`, which is the same registry key and was always tried first.
+
+    A token row is a credential record: it needs to say *which account* the
+    credential belongs to, and the opaque id says that. Whose e-mail address
+    that is belongs in `users.json` and nowhere else.
+    """
+    now = datetime.now(timezone.utc)
+    if rotated_from_hash is not None:
+        consumed = await session.execute(
+            update(OAuthRefreshTokenModel)
+            .where(OAuthRefreshTokenModel.token_hash == rotated_from_hash)
+            .where(OAuthRefreshTokenModel.consumed_at.is_(None))
+            .where(OAuthRefreshTokenModel.revoked_at.is_(None))
+            .values(consumed_at=now)
+        )
+        if consumed.rowcount != 1:
+            await session.rollback()
+            return False
+    session.add(
+        OAuthAccessTokenModel(
+            token_hash=hash_token(access_token),
+            client_id=client_id,
+            user_id=user_id,
+            scopes_json=json.dumps(scopes, ensure_ascii=True),
+            expires_at=access_expires_at,
+            created_at=now,
+            grant_id=grant_id,
+        )
+    )
+    session.add(
+        OAuthRefreshTokenModel(
+            token_hash=hash_token(refresh_token),
+            grant_id=grant_id,
+            client_id=client_id,
+            user_id=user_id,
+            scopes_json=json.dumps(scopes, ensure_ascii=True),
+            expires_at=refresh_expires_at,
+            created_at=now,
+        )
+    )
+    await record_event(
+        session,
+        AUTH_ENTITY_TYPE,
+        user_id,
+        event_type,
+        {
+            "grant_id": grant_id,
+            "client_id": client_id,
+            "scopes": scopes,
+            "rotated": rotated_from_hash is not None,
+        },
+    )
+    await session.commit()
+    return True
+
+
+async def revoke_auth_grant(
+    session: AsyncSession, *, grant_id: str, user_id: str, reason: str
+) -> dict[str, int]:
+    """Revoke every credential issued under one grant.
+
+    Both tables, one commit: leaving the access tokens behind would mean a
+    sign-out that keeps working for the rest of the access-token TTL, which is
+    the failure the endpoint exists to prevent.
+    """
+    now = datetime.now(timezone.utc)
+    access = await session.execute(
+        update(OAuthAccessTokenModel)
+        .where(OAuthAccessTokenModel.grant_id == grant_id)
+        .where(OAuthAccessTokenModel.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    refresh = await session.execute(
+        update(OAuthRefreshTokenModel)
+        .where(OAuthRefreshTokenModel.grant_id == grant_id)
+        .where(OAuthRefreshTokenModel.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    revoked = {"access_tokens": max(access.rowcount, 0), "refresh_tokens": max(refresh.rowcount, 0)}
+    await record_event(
+        session,
+        AUTH_ENTITY_TYPE,
+        user_id,
+        "auth.credentials_revoked",
+        {"grant_id": grant_id, "reason": reason, **revoked},
+    )
+    await session.commit()
+    return revoked
+
+
+async def revoke_access_token(
+    session: AsyncSession, *, token: str, user_id: str, reason: str
+) -> dict[str, int]:
+    """Revoke one access token that belongs to no grant.
+
+    The browser OAuth flow issues those: there is no refresh chain to revoke,
+    so revocation stops at the token presented.
+    """
+    item = await session.get(OAuthAccessTokenModel, hash_token(token))
+    revoked = {"access_tokens": 0, "refresh_tokens": 0}
+    if item is not None and item.revoked_at is None:
+        item.revoked_at = datetime.now(timezone.utc)
+        revoked["access_tokens"] = 1
+    await record_event(
+        session,
+        AUTH_ENTITY_TYPE,
+        user_id,
+        "auth.credentials_revoked",
+        {"grant_id": None, "reason": reason, **revoked},
+    )
+    await session.commit()
+    return revoked
+
+
+async def record_auth_event(
+    session: AsyncSession, *, user_id: str, event_type: str, payload: dict
+) -> None:
+    """Persist one authentication event on its own.
+
+    Failed sign-ins are recorded here. The payload carries a reason and never
+    the credential, nor the string the caller typed as a username: an audit
+    table that stores unvalidated input is a log-forging surface and, when the
+    caller typed a password into the wrong field, a credential store.
+    """
+    await record_event(session, AUTH_ENTITY_TYPE, user_id, event_type, payload)
+    await session.commit()
+
+
+async def purge_expired_audit_events(
+    session: AsyncSession, *, retention_days: int, now: datetime | None = None
+) -> int:
+    """Drop **authentication** audit rows older than the window. Returns how many.
+
+    `POST /api/v1/auth/sign-in` is the first unauthenticated write path into
+    this table: a wrong password commits a row, and the rate limiter bounds the
+    write *rate*, not the total. Before this, nothing removed an audit row at
+    all — the startup sweep collected `idempotency_records` only — so a caller
+    that never authenticated could grow the operator's database indefinitely.
+
+    Scoped to `entity_type == "auth"`, and that scope is the point. The window
+    is chosen to bound sign-in spam; applying it to the whole table would delete
+    `task.approved` — the record of who authorized a sensitive task — plus
+    `task.stopped_by_actor`, `task.state_changed` and `task.result`, on a table
+    that had kept everything forever. Whether an approval record may be aged out
+    at 90 days is an operator's decision about their own compliance, and it is
+    not one to make by inheritance from a spam control. Eleven `record_event`
+    call sites write here; two of them are auth, and those two are the ones an
+    unauthenticated caller can drive.
+
+    A non-positive window means "keep everything", for a deployment that exports
+    the table elsewhere. It is an explicit opt-in to unbounded growth.
+
+    Deletes by timestamp in one statement rather than loading the rows: the
+    whole point is the case where there are a great many of them.
+    """
+    if retention_days <= 0:
+        return 0
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=retention_days)
+    result = await session.execute(
+        delete(AuditEventModel)
+        .where(AuditEventModel.entity_type == AUTH_ENTITY_TYPE)
+        .where(AuditEventModel.created_at < cutoff),
+        # The delete happens in the database, not by evaluating the predicate
+        # against whatever this session happens to have loaded. Letting
+        # SQLAlchemy synchronize means comparing an aware cutoff against rows
+        # SQLite hands back naive, and the sweep of a large table is exactly the
+        # case where loading them is what must not happen.
+        execution_options={"synchronize_session": False},
+    )
+    await session.commit()
+    return max(result.rowcount, 0)
 
 
 async def store_message_receipt(session: AsyncSession, message_id: str, executor_id: str, message_type: str) -> bool:
