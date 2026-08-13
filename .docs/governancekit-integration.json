@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "ai_agents": {
+    "repo": "EDortta/AI-Agents",
+    "ref": "v1.2.1"
+  },
+  "governancekit": {
+    "version_range": ">=0.2.2,<0.4.0",
+    "required_features": [
+      "version-reporting",
+      "doctor-advisory",
+      "install-agents-manifest"
+    ]
+  }
+}

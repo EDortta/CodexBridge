@@ -1,0 +1,110 @@
+# AI-Agents kit-owned context selection contract.
+$schema: schemas/context-manifest.schema.json
+version: 1
+
+base:
+  required:
+    - path: AGENTS.md
+      mode: full
+    - path: docs/software-overview.md
+      mode: full
+    - path: docs/limits.md
+      mode: full
+    - path: docs/required-reading.md
+      mode: full
+
+project:
+  include:
+    - path: docs/project-rules.md
+      mode: full
+
+tasks:
+  implementation:
+    include:
+      - path: .docs/agents/programmer.md
+        mode: full
+        required: true
+      - path: .docs/agents/design-standards.md
+        mode: full
+        required: true
+  review:
+    include:
+      - path: .docs/agents/reviewer.md
+        mode: full
+        required: true
+      - path: .docs/agents/design-standards.md
+        mode: full
+        required: true
+  council:
+    include:
+      - path: .docs/agents/council.md
+        mode: full
+        required: true
+  # The delivery commit needs the branch/commit gate and the council contract in the
+  # same load — §7 names council.md, and the gate refuses without a recorded round.
+  # Not folded into `implementation`: that profile is already 8,027/8,500 and adding
+  # these would overflow. Over budget with required:true raises; with required:false
+  # the loader drops a mandatory contract in silence, which is the worse failure.
+  delivery:
+    include:
+      - path: .docs/workflows/delivery-loop.md
+        mode: full
+        required: true
+      - path: .docs/workflows/git-delivery.md
+        mode: full
+        required: true
+      - path: .docs/agents/council.md
+        mode: full
+        required: true
+  # `.docs/workflows/session-memory.md` and `sending-email.md` get no profile on
+  # purpose: their triggers are session lifecycle and a capability, neither of which
+  # is an axis this manifest models. `docs/required-reading.md` routes them.
+
+risks:
+  runtime:
+    include:
+      - path: .docs/agents/security.md
+        mode: full
+        required: true
+      - path: .docs/agents/security-standards.md
+        mode: full
+        required: true
+  personal_data:
+    include:
+      - path: .docs/agents/privacy-compliance.md
+        mode: full
+        required: true
+
+# Baseline with deterministic fallback (characters / 4), measured 2026-08-07 after
+# AGENTS.md was sliced into .docs/workflows/:
+# base_contracts=6,010; implementation=7,994; review=6,533; council=4,157;
+# delivery=5,983. Largest normal combination (implementation + runtime) is 18,735.
+#
+# base_contracts had reached 7,999/8,000 — one token — before the slice. The cap was
+# not raised: a budget lifted to make its own test pass is decoration, and this cap is
+# the only thing that has kept AGENTS.md readable. It is measured, not aspirational;
+# re-measure here whenever a base contract changes.
+budgets:
+  total_input_tokens: 22000
+  categories:
+    base_contracts: 8000
+    task_contracts: 8500
+    risk_contracts: 4500
+    project_context: 1000
+    active_work: 3500
+    retrieved_evidence: 1000
+    reserve: 1000
+
+retrieval:
+  max_sections: 4
+  max_section_tokens: 500
+
+exclude_by_default:
+  - handoff.md
+  - docs/napkin-lessons.md
+  - docs/issues/**/archive/**
+
+telemetry:
+  path: .gk/context-telemetry.jsonl
+  retention_days: 30
+  content_capture: false

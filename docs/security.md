@@ -12,12 +12,22 @@
 * fila persistente com auditoria append-only.
 * WebSocket reverso iniciado pelo executor.
 * `systemd` com endurecimento e usuário sem privilégio.
+* rate limiting por IP em `POST /mcp` (`MemoryRateLimiter`, `gateway/app/main.py`),
+  padrão de 120 requisições por janela de 60 segundos, resposta `429` e métrica
+  `RATE_LIMIT_REJECTIONS`.
 
 ## Lacunas assumidas para endurecimento
 
-* rate limiting ainda não foi ligado no middleware HTTP.
+* **`/oauth/authorize` e `/oauth/token` não têm rate limiting.** São endpoints
+  públicos que recebem senha; hoje o limitador cobre apenas `/mcp`. É a lacuna de
+  maior prioridade nesta lista.
+* o limitador é em memória por processo: não sobrevive a restart e não é
+  compartilhado entre réplicas.
 * rotação automatizada de tokens ainda não foi implementada.
 * cgroups finos por subprocesso do `codex exec` ainda dependem do host do agente.
+* `sensitive_patterns` por projeto está no schema mas não é aplicado em lugar
+  nenhum; a classificação de tarefa sensível usa apenas a lista global
+  `SENSITIVE_KEYWORDS` em `shared/policy.py`. Ver `docs/project-onboarding.md`.
 
 ## Recomendações de produção
 

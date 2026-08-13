@@ -23,12 +23,35 @@ O ChatGPT conversa apenas com o `gateway`, através de um servidor MCP remoto ex
 * Justificativa: canal full-duplex simples para heartbeat, despacho, ACK, logs incrementais e cancelamento
 * Trade-off: exige controle de reconexão e deduplicação; em troca, elimina SSH de entrada e simplifica entrega em tempo real
 
-### Topologia operacional recomendada
+### Topologia operacional definida
 
-* `frida` é o hub público 24x7 e deve hospedar o gateway MCP.
-* `devel3` é o executor 24x7 mais adequado quando os repositórios locais são necessários.
-* `dom1` pode continuar servindo workloads adjacentes, mas não é o runtime principal do bridge.
-* A ponte reversa já existente em `devel3 -> frida` nas portas `2200/2204` continua útil para acesso administrativo.
+| Host | Papel | Observação |
+|---|---|---|
+| `frida` | hub público, hospeda o gateway MCP | Raspberry Pi, 24x7. Ponto de entrada único. |
+| `devel3` | executor, roda o `codex-bridge-agent` | Tem os repositórios locais. |
+| `T610` | histórico | Primeira máquina de desenvolvimento do projeto. |
+| `dom1` | workloads adjacentes | Não é runtime do bridge. |
+
+Portas no `frida`: o `nginx` termina TLS na porta **interna 443**, publicada
+**externamente na 8443**. Daí `CODEX_BRIDGE_PUBLIC_BASE_URL=https://codexbridge.inovacaosistemas.com.br:8443`.
+O gateway em si escuta em `127.0.0.1:18080`, atrás do `nginx`, porque `*:8080` já
+está ocupado por `mosquitto`.
+
+Dois caminhos distintos, que não devem ser confundidos:
+
+* **Caminho de dados do bridge**: o agente no `devel3` abre conexão reversa
+  `wss` para o `frida` e fica escutando tarefas. O `frida` nunca inicia conexão
+  para o `devel3`.
+* **Caminho administrativo humano**: o operador entra pelo `frida` e de lá alcança
+  o `devel3` pelo túnel SSH já operacional (portas `2200/2204`). Esse túnel é para
+  operação manual e não participa da execução de tarefas.
+
+Sobre o `T610`: foi a primeira máquina usada para desenvolver o projeto, antes da
+decisão de entrar pelo `frida`. O nome sobreviveu como valor de exemplo em
+`.env.example` (`CODEX_BRIDGE_AGENT_EXECUTOR_ID=T610`) e em `examples/registry.json`.
+`executor_id` é apenas um rótulo de registro — mas os exemplos ainda trazem `T610`
+enquanto o executor real é o `devel3`, e essa divergência é intencionalmente
+apontada aqui até que alguém decida renomear.
 
 ### Persistência
 
@@ -55,7 +78,7 @@ O ChatGPT conversa apenas com o `gateway`, através de um servidor MCP remoto ex
    * `run_when_available=true` -> persiste em fila.
 5. O agente do executor, idealmente no `devel3`, mantém `wss` com heartbeat.
 6. Quando o executor está disponível, o gateway envia `task.dispatch`.
-7. O agente confirma `ACK`, executa `codex exec` localmente e transmite `task.log`, `task.progress`, `task.result`.
+7. O agente confirma `task.ack`, executa `codex exec` localmente e transmite `task.log` (com `offset` incremental) e `task.result`.
 8. O gateway persiste tudo e responde aos tools MCP.
 9. `cancel_codex_task` envia `task.cancel` ao agente ou marca a tarefa antes da execução.
 
@@ -88,7 +111,8 @@ Contra:
 * `frida` já roda `nginx` em `80/443`.
 * `frida` já tem `mosquitto` ocupando `*:8080`.
 * Portanto, o gateway deve escutar em outra porta local, por exemplo `127.0.0.1:18080`, com proxy reverso no `nginx`.
-* `devel3` é a máquina com os repositórios locais e deve ser tratada como executor primário.
+* `devel3` é a máquina com os repositórios locais e é o executor primário.
+* `T610` é a máquina de desenvolvimento original e não é executor de produção.
 
 ## Observação sobre autenticação ChatGPT
 

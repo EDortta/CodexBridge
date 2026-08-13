@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/EDortta/AI-Agents/context-state.schema.json",
+  "title": "Active governed work state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["work_id", "stage", "objective", "next_action", "changed_files", "validated", "not_validated", "blockers", "decisions"],
+  "properties": {
+    "work_id": {"type": "string", "pattern": "^WK-[0-9]{8}-[a-z0-9-]+$"},
+    "stage": {"enum": ["diagnosis", "design", "implementation", "review", "finished", "blocked"]},
+    "objective": {"type": "string"},
+    "next_action": {"type": "string"},
+    "changed_files": {"type": "array", "items": {"type": "string"}},
+    "validated": {"type": "array", "items": {"type": "string"}},
+    "not_validated": {"type": "array", "items": {"type": "string"}},
+    "blockers": {"type": "array", "items": {"type": "string"}},
+    "decisions": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -1,0 +1,7 @@
+# Managed by governancekit.
+# manifest.json is intentionally NOT ignored — the team must share it.
+operator.json
+secrets.json
+context-telemetry.jsonl
+overwritten/
+council/
