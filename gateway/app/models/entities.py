@@ -122,7 +122,6 @@ class OAuthAuthorizationCodeModel(Base):
     client_id: Mapped[str] = mapped_column(String(255))
     redirect_uri: Mapped[str] = mapped_column(String(2048))
     user_id: Mapped[str] = mapped_column(String(255))
-    user_email: Mapped[str] = mapped_column(String(255))
     scopes_json: Mapped[str] = mapped_column(Text, default="[]")
     code_challenge: Mapped[str] = mapped_column(String(255))
     code_challenge_method: Mapped[str] = mapped_column(String(32), default="S256")
@@ -137,7 +136,41 @@ class OAuthAccessTokenModel(Base):
     token_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
     client_id: Mapped[str] = mapped_column(String(255))
     user_id: Mapped[str] = mapped_column(String(255))
-    user_email: Mapped[str] = mapped_column(String(255))
     scopes_json: Mapped[str] = mapped_column(Text, default="[]")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # The grant this token belongs to: one sign-in and every refresh rotated
+    # from it (migrations/0003_mobile_auth.sql). Null for a token issued by the
+    # browser OAuth flow, which has no refresh chain — revoking one of those
+    # revokes that single token.
+    grant_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Set once and never cleared. `store.get_oauth_access_token` refuses a
+    # revoked token, so revocation reaches the MCP transport and the mobile API
+    # alike — one credential store, not two.
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OAuthRefreshTokenModel(Base):
+    """A single-use credential that mints access tokens for one grant.
+
+    `consumed_at` is what makes rotation safe to detect: presenting a refresh
+    token that was already exchanged means a replay or a stolen copy, and the
+    only safe reading is theft. That presentation revokes the whole grant
+    instead of being answered with a fresh pair.
+
+    `expires_at` is carried forward unchanged by every rotation, so a grant has
+    an absolute lifetime. Extending it on each refresh would turn a stolen
+    refresh token into an unbounded session.
+    """
+
+    __tablename__ = "oauth_refresh_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
+    grant_id: Mapped[str] = mapped_column(String(128))
+    client_id: Mapped[str] = mapped_column(String(255))
+    user_id: Mapped[str] = mapped_column(String(255))
+    scopes_json: Mapped[str] = mapped_column(Text, default="[]")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -39,10 +39,33 @@ ADOPT_HINT = (
 # startup.
 REQUIRED_TABLES: dict[str, str] = {
     "idempotency_records": "0002_api_foundation.sql",
+    "oauth_refresh_tokens": "0003_mobile_auth.sql",
 }
 
 REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     "tasks": {"revision": "0002_api_foundation.sql"},
+    # Without these two, every request authenticates against a table that
+    # cannot express revocation — so a token the operator revoked keeps working
+    # and nothing says why.
+    "oauth_access_tokens": {
+        "revoked_at": "0003_mobile_auth.sql",
+        "grant_id": "0003_mobile_auth.sql",
+    },
+}
+
+
+# Columns a migration *removes*, with the migration that removes each one.
+#
+# The mirror image of the case above, and it fails just as late without a check.
+# `create_all` never drops a column either, so a database upgraded past
+# `0004_drop_user_email.sql` without running it keeps three `not null` columns
+# the code has stopped supplying — and the symptom is an integrity error on the
+# first sign-in, which reads like a code bug. Presence, again: this says the
+# migration has not run, not that the shape is subtly wrong.
+FORBIDDEN_COLUMNS: dict[str, dict[str, str]] = {
+    "oauth_authorization_codes": {"user_email": "0004_drop_user_email.sql"},
+    "oauth_access_tokens": {"user_email": "0004_drop_user_email.sql"},
+    "oauth_refresh_tokens": {"user_email": "0004_drop_user_email.sql"},
 }
 
 
@@ -69,9 +92,17 @@ def check_schema(connection: Connection) -> None:
             if column not in present:
                 missing.append(f"column {table}.{column} (added by {migration})")
 
+    for table, columns in FORBIDDEN_COLUMNS.items():
+        if table not in existing_tables:
+            continue
+        present = {column["name"] for column in inspector.get_columns(table)}
+        for column, migration in columns.items():
+            if column in present:
+                missing.append(f"column {table}.{column} still present (dropped by {migration})")
+
     if missing:
         raise SchemaOutOfDate(
-            "The database is missing objects this build requires: "
+            "The database does not match what this build requires: "
             + "; ".join(missing)
             + f". Run `{APPLY_COMMAND}` against this database, then start again. "
             + ADOPT_HINT

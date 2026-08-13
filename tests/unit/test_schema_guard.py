@@ -45,6 +45,26 @@ def test_missing_column_is_named_with_its_migration(tmp_path) -> None:
     assert "scripts/apply_migrations.py" in message
 
 
+def test_a_database_that_cannot_express_revocation_refuses_to_serve(tmp_path) -> None:
+    """`revoked_at` is what makes a revoked token stop working.
+
+    Without it the gateway starts, authenticates happily, and honours tokens the
+    operator revoked — the one failure `POST /api/v1/auth/revoke` exists to
+    prevent, presenting as nothing at all.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path/'no-revocation.db'}")
+    with engine.begin() as connection:
+        Base.metadata.create_all(connection)
+        connection.execute(text("alter table oauth_access_tokens drop column revoked_at"))
+        connection.execute(text("drop table oauth_refresh_tokens"))
+        with pytest.raises(SchemaOutOfDate) as raised:
+            check_schema(connection)
+    message = str(raised.value)
+    assert "oauth_access_tokens.revoked_at" in message
+    assert "oauth_refresh_tokens" in message
+    assert "0003_mobile_auth.sql" in message
+
+
 def test_create_all_does_not_repair_an_existing_table(tmp_path) -> None:
     """The premise of the guard, asserted rather than assumed.
 

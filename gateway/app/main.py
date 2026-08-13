@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.api.idempotency import purge_expired
 from gateway.app.api.rate_limit import RateLimitDependency, client_key
+from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import probes, sessions
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.core.config import settings
@@ -27,7 +28,12 @@ from gateway.app.core.oauth import (
 )
 from gateway.app.core.rate_limit import MemoryRateLimiter
 from gateway.app.core.registry import load_registry
-from gateway.app.core.users import AuthenticatedPrincipal, lookup_user, verify_password
+from gateway.app.core.users import (
+    AuthenticatedPrincipal,
+    authenticate_async,
+    lookup_user,
+    unusable_registry_reason,
+)
 from gateway.app.db.base import Base
 from gateway.app.db.schema_guard import check_schema
 from gateway.app.db.session import SessionLocal, engine, get_session
@@ -85,12 +91,17 @@ app.include_router(probes.router)
 # `/api` route without the dependency. Add new API routes to a router carrying it.
 app.include_router(probes.version_router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
-# Agent sessions (issue #9). Same limiter, and authentication per route through
-# gateway/app/api/auth.py — the OAuth tokens the MCP transport already issues.
-# Issue #4 (device flow, refresh, revocation, effective-permissions endpoint)
-# remains separate; this is the minimum that lets an authenticated endpoint
-# exist, because a session carries the operator's instruction and its logs.
+# Agent sessions (issue #9). Same limiter, and authorization per route through
+# gateway/app/api/auth.py against the catalogue in gateway/app/api/permissions.py.
 app.include_router(sessions.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# The mobile credential lifecycle (issue #4): sign-in, refresh, revocation, and
+# the effective permissions a client reads before it offers a control.
+#
+# The limiter matters more here than anywhere else on this surface: `sign-in` is
+# unauthenticated, so its bucket is the caller's address, and it is the one
+# endpoint where guessing repeatedly is the whole attack.
+app.include_router(auth_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:
@@ -181,8 +192,15 @@ async def authenticate_mcp_request(
             detail="invalid_oauth_token",
             headers={"WWW-Authenticate": oauth_www_authenticate_header()},
         )
-    user = lookup_user(settings.user_registry_file, item.user_id) or lookup_user(settings.user_registry_file, item.user_email)
+    user = lookup_user(settings.user_registry_file, item.user_id)
     if user is None or not user.enabled:
+        # Says which of the two it is. A gateway whose registry file is missing
+        # refused every already-issued token as an unknown-or-disabled *account*,
+        # which sends the operator to `users.json` to look for a user that is not
+        # the problem. Nothing is leaked by the distinction: the caller already
+        # presented a token this gateway issued.
+        if unusable_registry_reason(settings.user_registry_file) is not None:
+            raise HTTPException(status_code=403, detail="user_registry_unavailable")
         raise HTTPException(status_code=403, detail="unknown_or_disabled_user")
     scopes = json.loads(item.scopes_json or "[]")
     return AuthenticatedPrincipal(
@@ -196,8 +214,36 @@ async def authenticate_mcp_request(
     )
 
 
+def report_user_registry_state() -> None:
+    """Log, once at startup, when no account can sign in.
+
+    Logged rather than raised. Fail-fast is the rule for missing required config
+    (`security-standards.md` §1) and the user registry is not required by every
+    deployment: with the default `mcp_auth_mode="bearer"`, `/mcp` authenticates
+    against static tokens and never reads `users.json`, so refusing to boot
+    would take down a correctly configured gateway to complain about a file it
+    does not use. What is not acceptable is the silence — the gateway that
+    *does* need it starts clean and refuses every credential with the same
+    opaque message an attacker gets.
+
+    `GET /api/version` still reports `passwordSignIn: true`, and that is not a
+    lie this hides: the flag describes what this build serves, which is the
+    question a client asks it, and no capability flag on that endpoint has ever
+    described the deployment's configuration. The operator's signal is here.
+    """
+    complaint = unusable_registry_reason(settings.user_registry_file)
+    if complaint is None:
+        return
+    logging.getLogger(__name__).error(
+        "user registry unusable: %s",
+        complaint,
+        extra={"correlation_id": None, "task_id": None, "executor_id": None},
+    )
+
+
 @app.on_event("startup")
 async def startup() -> None:
+    report_user_registry_state()
     async with engine.begin() as connection:
         # `create_all` builds a fresh database but never alters an existing one,
         # so an upgraded deployment starts fine and then fails on the first read
@@ -230,6 +276,29 @@ async def startup() -> None:
                 logging.getLogger(__name__).info(
                     "purged %s expired idempotency record(s)",
                     purged,
+                    extra={"correlation_id": None, "task_id": None, "executor_id": None},
+                )
+
+        # Same sweep, same reasoning, different table. `audit_events` had no
+        # retention at all, and issue #4 gave it an unauthenticated writer:
+        # every rejected sign-in commits a row. Same fail-open handling — a
+        # cleanup never decides whether the gateway serves.
+        try:
+            aged = await store.purge_expired_audit_events(
+                session, retention_days=settings.audit_event_retention_days
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "audit_purge_failed",
+                exc_info=True,
+                extra={"correlation_id": None, "task_id": None, "executor_id": None},
+            )
+        else:
+            if aged:
+                logging.getLogger(__name__).info(
+                    "purged %s audit event(s) past the %s-day retention window",
+                    aged,
+                    settings.audit_event_retention_days,
                     extra={"correlation_id": None, "task_id": None, "executor_id": None},
                 )
 
@@ -283,7 +352,23 @@ async def oauth_authorize(
     )
 
 
-@app.post("/oauth/authorize", response_class=HTMLResponse)
+@app.post(
+    "/oauth/authorize",
+    response_class=HTMLResponse,
+    # The attempt ceiling this endpoint never had. It takes a password, it is
+    # unauthenticated, and since the constant-cost guard moved into
+    # `users.authenticate` every attempt — including one with an invented
+    # username — costs a full PBKDF2 derivation. Closing the enumeration oracle
+    # made the cheapest hostile request here ~190x more expensive to serve, so
+    # the endpoint with no ceiling became the cheapest way to spend the
+    # gateway's CPU. Same limiter and same bucket as the `/api` surface: the
+    # caller is unauthenticated, so the bucket is the address.
+    #
+    # The GET is deliberately not limited: it renders a static form and touches
+    # no credential, and throttling the page a human is looking at is not the
+    # same decision as throttling the attempt.
+    dependencies=[Depends(RateLimitDependency(rate_limiter))],
+)
 async def oauth_authorize_submit(
     response_type: str = Form(...),
     client_id: str = Form(...),
@@ -301,8 +386,20 @@ async def oauth_authorize_submit(
         raise HTTPException(status_code=400, detail="unsupported_response_type")
     if code_challenge_method != "S256":
         raise HTTPException(status_code=400, detail="unsupported_code_challenge_method")
-    user = lookup_user(settings.user_registry_file, username)
-    if user is None or not user.enabled or not verify_password(password, user.password_hash):
+    # The same operation the mobile sign-in uses, not a hand-rolled
+    # lookup-then-verify. The short-circuit that used to be here answered an
+    # unknown username in ~1.6 ms and a real one in ~299 ms against the same
+    # `users.json` — a 185x oracle enumerating every account in the registry, on
+    # the one auth route that carries no rate limiter. Issue #4 added the
+    # constant-cost guard at the mobile call site only, which is precisely the
+    # failure `design-standards.md` §3 names: the guard belongs in the operation.
+    #
+    # `_async` because that derivation has no `await` in it: called directly it
+    # would hold the event loop for its whole duration, and ten concurrent
+    # attempts here took `GET /health` from 0.8 ms to 3.3 s.
+    outcome = await authenticate_async(settings.user_registry_file, username, password)
+    user = outcome.user
+    if not outcome.ok:
         return render_authorize_form(
             client_id=client_id,
             redirect_uri=redirect_uri,
@@ -333,7 +430,6 @@ async def oauth_authorize_submit(
         client_id=client_id,
         redirect_uri=redirect_uri,
         user_id=user.user_id,
-        user_email=user.email,
         scopes=sorted(requested_scopes),
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method,
@@ -371,7 +467,6 @@ async def oauth_token(
         token=access_token,
         client_id=client_id,
         user_id=item.user_id,
-        user_email=item.user_email,
         scopes=scopes,
         expires_at=expires_in(settings.oauth_access_token_ttl_seconds),
     )
