@@ -7,6 +7,16 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+EXECUTOR_TOKEN_HEADER = "X-Executor-Token"
+"""Header carrying the executor machine token on the `/agent/ws` handshake.
+
+The token used to travel as a query parameter, which put it verbatim in every
+access log on the path — 37 lines in the gateway journal and 70 in nginx's,
+counted on 2026-08-10 (#15). A WebSocket handshake is an HTTP request and
+carries headers normally, so the credential does not belong in the URL.
+"""
+
+
 class TaskMode(str, Enum):
     ANALYZE = "analyze"
     REVIEW = "review"

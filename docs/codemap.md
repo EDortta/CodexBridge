@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-13 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-08-14 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 73 file(s) · 475 symbol(s) indexed
-- Languages: config (2), python (69), shell (2)
+- 76 file(s) · 491 symbol(s) indexed
+- Languages: config (2), python (72), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -66,6 +66,7 @@ gateway/
       setup.py  — "One call that installs every cross-cutting API behaviour."
       timestamps.py  — "RFC 3339 in UTC, spelled one way."
     core/
+      agent_auth.py  — "Credential resolution for the `/agent/ws` handshake — issue #15."
       config.py
       logging.py
       oauth.py
@@ -106,6 +107,7 @@ tests/
     test_openapi_document.py  — "Contract tests for the canonical OpenAPI document."
     test_proxy_routes.py  — "Every contracted path must be routed by the proxies in front of the gateway."
   integration/
+    test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
@@ -113,6 +115,7 @@ tests/
     test_sessions.py  — "Agent sessions, logs and control — issue #9."
     test_store_and_mcp.py
   unit/
+    test_agent_auth.py  — "Credential resolution for the `/agent/ws` handshake — issue #15."
     test_agent_service.py
     test_apply_migrations.py  — "The migration runner, exercised against real throwaway databases."
     test_main_import.py
@@ -291,6 +294,13 @@ tests/
 - `utc_z(value)` — "`value` as an RFC 3339 UTC instant ending in `Z`, or None."
 - `now_z()` — "The current instant, in the same form."
 
+### `gateway/app/core/agent_auth.py`
+
+> Credential resolution for the `/agent/ws` handshake — issue #15.
+
+- **`TokenSource`** *(class)* — "How the executor presented its machine token."
+- `resolve_executor_token()` — "Pick the credential to verify and report where it came from."
+
 ### `gateway/app/core/config.py`
 
 - **`Settings`** *(class)*
@@ -380,7 +390,7 @@ tests/
 - `oauth_authorize_submit(response_type, client_id, redirect_uri, scope, state, code_challenge, code_challenge_method, username, password, session)` *(async function)*
 - `oauth_token(grant_type, code, redirect_uri, client_id, code_verifier, session)` *(async function)*
 - `mcp_endpoint(request, authorization, session)` *(async function)*
-- `agent_ws(websocket, executor_id, token)` *(async function)*
+- `agent_ws(websocket, executor_id, token, x_executor_token)` *(async function)*
 
 ### `gateway/app/mcp/server.py`
 
@@ -527,6 +537,18 @@ tests/
 - `test_nginx_configs_exist()` — "If the configs move, this gate must fail loudly rather than pass empty."
 - `test_every_contract_path_is_routed_by_every_terminating_vhost(contract_paths)`
 - `test_every_proxied_location_reaches_an_upstream()` — "A location block with no `proxy_pass` silently drops its path."
+
+### `tests/integration/test_agent_ws_handshake.py`
+
+> The `/agent/ws` handshake stops carrying the token in the URL — issue #15.
+
+- `client()`
+- `test_a_handshake_with_no_credential_is_refused(client)`
+- `test_refusing_an_anonymous_handshake_touches_no_executor_record(client, monkeypatch)` — "4401 must be decided before the database, not after a lookup."
+- `test_the_header_is_bound_and_reaches_the_registry_check(client)` — "An unknown executor authenticating by header gets 4404, not 4401."
+- `test_the_query_parameter_still_works_and_warns(client, caplog)`
+- `test_the_deprecation_warning_does_not_print_the_token(client, caplog)` — "A warning about a leaked credential must not leak it again."
+- `test_the_header_path_logs_no_deprecation_warning(client, caplog)`
 
 ### `tests/integration/test_api_conventions.py`
 
@@ -751,6 +773,17 @@ tests/
 - `test_approval_moves_task_back_to_queue(db_session)` *(async function)*
 - `test_startup_recovery_marks_running_as_lost(db_session)` *(async function)*
 
+### `tests/unit/test_agent_auth.py`
+
+> Credential resolution for the `/agent/ws` handshake — issue #15.
+
+- `test_header_is_the_new_path()`
+- `test_query_still_authenticates_during_the_transition()` — "Gateway and agent deploy independently, so the old form must keep working."
+- `test_header_wins_when_both_are_present()` — "An agent already on the header must not be downgraded by a stale query."
+- `test_nothing_presented_is_absent_not_empty_string()`
+- `test_blank_values_do_not_count_as_a_credential(blank)` — "`?token=` is not a presented credential."
+- `test_a_blank_header_falls_through_to_the_query()` — "Proxies that inject empty headers must not break the transition path."
+
 ### `tests/unit/test_agent_service.py`
 
 - **`DummyWebSocket`** *(class)*
@@ -759,6 +792,7 @@ tests/
 - **`FailingRunner`** *(class)*
   - `run_task(self, **_)` *(async method)*
 - `test_dispatch_failure_returns_task_result(tmp_path)` *(async function)*
+- `test_machine_token_travels_in_a_header_not_the_url(monkeypatch)` *(async function)* — "The token in the query string was logged verbatim 107 times (#15)."
 
 ### `tests/unit/test_apply_migrations.py`
 

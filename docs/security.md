@@ -12,6 +12,13 @@
 * fila persistente com auditoria append-only.
 * WebSocket reverso iniciado pelo executor.
 * `systemd` com endurecimento e usuário sem privilégio.
+* token de máquina do executor apresentado no header `X-Executor-Token` no
+  handshake de `/agent/ws`, e não mais na query string (#15). Credencial em query
+  string vira linha de log em todo componente do caminho — journal do gateway,
+  `access.log` do nginx (`-rw-r----- www-data adm`), rotacionados, backup e
+  pipeline de observabilidade. A forma antiga segue aceita por uma release, com
+  `WARNING` de depreciação que **não** imprime o valor; o header vence quando os
+  dois estão presentes. Resolução em `gateway/app/core/agent_auth.py`.
 * rate limiting por IP em `POST /mcp` (`MemoryRateLimiter`, `gateway/app/main.py`),
   padrão de 120 requisições por janela de 60 segundos, resposta `429` e métrica
   `RATE_LIMIT_REJECTIONS`.
@@ -110,6 +117,18 @@
   que é o que precisa mudar se a decisão mudar.
 
 ## Lacunas assumidas para endurecimento
+
+* **O token de máquina já exposto continua válido, e os logs antigos continuam
+  no disco.** Tirar a credencial da URL impede exposição nova; não desfaz a
+  antiga. Rotacionar o token no `registry.json` e purgar ou rotacionar os logs
+  que já o contêm são ações do operador, e a issue #15 as coloca explicitamente
+  fora do escopo do código. Enquanto não acontecerem, qualquer membro do grupo
+  `adm` no host do gateway — e qualquer backup daqueles logs — tem uma credencial
+  de executor funcionando.
+* **A forma com query string ainda autentica.** É deliberado, para permitir
+  publicar gateway e agente em momentos diferentes, mas significa que o caminho
+  vulnerável continua aberto até ser removido na release seguinte. O `WARNING` de
+  depreciação existe para que ninguém esqueça que ele está lá.
 
 * **`POST /oauth/token` não tem rate limiting.** `POST /oauth/authorize` passou a
   ter (mesmo limitador, mesmo balde por endereço), porque era o único endpoint de

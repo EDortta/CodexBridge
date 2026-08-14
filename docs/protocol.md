@@ -30,7 +30,33 @@ São 11 ferramentas. `approve_codex_task` é a que libera tarefa parada em
 
 ## Canal reverso do agente
 
-Endpoint: `wss://codexbridge.inovacaosistemas.com.br:8443/agent/ws?executor_id=<ID>&token=...`
+Endpoint: `wss://codexbridge.inovacaosistemas.com.br:8443/agent/ws?executor_id=<ID>`
+
+O token de máquina vai no header `X-Executor-Token`, **não na URL**. Um handshake
+WebSocket é uma requisição HTTP e carrega headers normalmente; a query string vira
+linha de log em todo componente do caminho — foi assim que o token apareceu 37
+vezes no journal do gateway e 70 nos logs do nginx (#15). O `executor_id` continua
+na query: ele nomeia o executor, não é segredo.
+
+```
+GET /agent/ws?executor_id=devel3
+Upgrade: websocket
+X-Executor-Token: <token de máquina>
+```
+
+Compatibilidade: a forma antiga `?token=...` **continua aceita por uma release**,
+para que gateway e agente possam ser publicados em momentos diferentes. Quando ela
+é usada, o gateway emite um `WARNING` de depreciação — sem o valor do token. O
+header vence quando os dois estão presentes, para que um agente já corrigido não
+seja rebaixado por um parâmetro remanescente em proxy ou unit file.
+
+Códigos de fechamento no handshake:
+
+| Código | Significado |
+|---|---|
+| `4401` | nenhuma credencial apresentada |
+| `4403` | token não confere com o registro |
+| `4404` | `executor_id` desconhecido |
 
 Mensagens (`AgentMessageType` em `shared/protocol.py`):
 
