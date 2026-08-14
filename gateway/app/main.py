@@ -14,6 +14,7 @@ from gateway.app.api.rate_limit import RateLimitDependency, client_key
 from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import probes, sessions
 from gateway.app.api.setup import install_api_conventions
+from gateway.app.core.agent_auth import TokenSource, resolve_executor_token
 from gateway.app.core.config import settings
 from gateway.app.version import APP_VERSION
 from gateway.app.core.logging import configure_logging
@@ -40,7 +41,7 @@ from gateway.app.db.session import SessionLocal, engine, get_session
 from gateway.app.mcp.server import handle_mcp_call
 from gateway.app.services import metrics, store
 from gateway.app.services.agent_hub import AgentHub
-from shared.protocol import AgentEnvelope, AgentMessageType, TaskState
+from shared.protocol import EXECUTOR_TOKEN_HEADER, AgentEnvelope, AgentMessageType, TaskState
 from shared.security import sanitize_log_line, secure_compare
 
 
@@ -503,8 +504,23 @@ async def mcp_endpoint(
 async def agent_ws(
     websocket: WebSocket,
     executor_id: str,
-    token: str,
+    token: str | None = None,
+    x_executor_token: str | None = Header(default=None),
 ) -> None:
+    presented, source = resolve_executor_token(header_token=x_executor_token, query_token=token)
+    if presented is None:
+        await websocket.close(code=4401)
+        return
+    if source == TokenSource.QUERY:
+        # No token value here, and none in any branch below: the point of the
+        # change is that this handshake stops writing the credential to logs.
+        logging.getLogger(__name__).warning(
+            "executor %s authenticated with the deprecated token query parameter, which is "
+            "recorded verbatim by every access log on the path; send the %s header instead (#15)",
+            executor_id,
+            EXECUTOR_TOKEN_HEADER,
+        )
+
     async with SessionLocal() as session:
         executor = await session.get(store.ExecutorModel, executor_id)
         if executor is None:
@@ -512,7 +528,7 @@ async def agent_ws(
             return
         metadata = json.loads(executor.metadata_json)
         accepted_machine_tokens = [metadata["machine_token"], *metadata.get("machine_tokens", [])]
-        if not any(secure_compare(token, accepted) for accepted in accepted_machine_tokens):
+        if not any(secure_compare(presented, accepted) for accepted in accepted_machine_tokens):
             await websocket.close(code=4403)
             return
 

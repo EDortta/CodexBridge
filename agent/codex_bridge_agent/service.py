@@ -12,7 +12,15 @@ import websockets
 from agent.codex_bridge_agent.codex_runner import CodexRunner
 from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects
 from shared.policy import evaluate_task_policy
-from shared.protocol import AgentEnvelope, AgentMessageType, SubmitTaskRequest, TaskMode, TaskPriority, TaskState
+from shared.protocol import (
+    EXECUTOR_TOKEN_HEADER,
+    AgentEnvelope,
+    AgentMessageType,
+    SubmitTaskRequest,
+    TaskMode,
+    TaskPriority,
+    TaskState,
+)
 from shared.security import ensure_within_root
 
 
@@ -40,9 +48,13 @@ class AgentService:
                 delay = min(delay * 2, self.settings.reconnect_max_seconds)
 
     async def _run_once(self) -> None:
-        query = urlencode({"executor_id": self.settings.executor_id, "token": self.settings.machine_token})
+        # `executor_id` stays in the query — it names the executor, it is not a
+        # secret. The machine token moves to a header so it stops being written
+        # to every access log between here and the gateway (#15).
+        query = urlencode({"executor_id": self.settings.executor_id})
         url = f"{self.settings.gateway_ws_url}?{query}"
-        async with websockets.connect(url, max_size=2_000_000) as websocket:
+        headers = {EXECUTOR_TOKEN_HEADER: self.settings.machine_token}
+        async with websockets.connect(url, max_size=2_000_000, extra_headers=headers) as websocket:
             await websocket.send(self._envelope(AgentMessageType.HELLO, {"version": "0.1.0"}).model_dump_json())
             heartbeat_task = asyncio.create_task(self._heartbeat_loop(websocket))
             try:
