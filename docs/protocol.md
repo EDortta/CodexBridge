@@ -68,6 +68,9 @@ Mensagens (`AgentMessageType` em `shared/protocol.py`):
 * `task.log`
 * `task.result`
 * `task.cancel`
+* `task.pause`
+* `task.resume`
+* `task.restart`
 * `task.cancelled`
 * `error`
 
@@ -85,4 +88,3 @@ Campos comuns:
 ## Idempotência
 
 O gateway persiste `message_id` em `message_receipts`. Mensagens repetidas do agente são descartadas.
-

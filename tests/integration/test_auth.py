@@ -981,6 +981,12 @@ async def test_me_separates_read_operational_and_administrative(api) -> None:
     assert by_action["sessions.read"]["allowed"] is True
     assert by_action["sessions.stop"]["category"] == "operational"
     assert by_action["sessions.stop"]["allowed"] is False
+    assert by_action["sessions.pause"]["category"] == "operational"
+    assert by_action["sessions.pause"]["allowed"] is False
+    assert by_action["sessions.resume"]["category"] == "operational"
+    assert by_action["sessions.resume"]["allowed"] is False
+    assert by_action["sessions.restart"]["category"] == "operational"
+    assert by_action["sessions.restart"]["allowed"] is False
     assert by_action["sessions.readAllProjects"]["category"] == "administrative"
     assert by_action["sessions.readAllProjects"]["allowed"] is False
 
@@ -992,6 +998,9 @@ ENDPOINT_FOR_ACTION = {
     "sessions.readLogs": ("GET", "/api/v1/sessions/{id}/logs"),
     "sessions.explainError": ("POST", "/api/v1/sessions/{id}/explain-error"),
     "sessions.stop": ("POST", "/api/v1/sessions/{id}/stop"),
+    "sessions.pause": ("POST", "/api/v1/sessions/{id}/pause"),
+    "sessions.resume": ("POST", "/api/v1/sessions/{id}/resume"),
+    "sessions.restart": ("POST", "/api/v1/sessions/{id}/restart"),
 }
 
 # Actions with no endpoint of their own, each naming the test that covers it

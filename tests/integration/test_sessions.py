@@ -22,6 +22,7 @@ from gateway.app.db.base import Base
 from gateway.app.db.session import get_session
 from gateway.app.services import store
 from shared.protocol import (
+    ApprovalDecision,
     ExecutorRegistration,
     ProjectRegistration,
     SubmitTaskRequest,
@@ -47,7 +48,8 @@ class _Hub:
     again. A stub narrower than the real object cannot fail that way.
     """
 
-    def __init__(self, connected: bool = True) -> None:
+    def __init__(self, factory, connected: bool = True) -> None:
+        self.factory = factory
         self.connected = connected
         self.sent: list = []
         self.running_tasks: dict[str, set[str]] = {}
@@ -57,6 +59,24 @@ class _Hub:
 
     async def send(self, executor_id: str, envelope) -> None:
         self.sent.append((executor_id, envelope))
+
+    async def dispatch_next(self, executor_id: str) -> dict | None:
+        if not self.connected:
+            return None
+        async with self.factory() as session:
+            task = await store.next_dispatchable_task(session, executor_id)
+            if task is None:
+                return None
+            task = await store.update_task_state(session, task.id, TaskState.RUNNING)
+        self.running_tasks.setdefault(executor_id, set()).add(task.id)
+        return {
+            "task_id": task.id,
+            "project_id": task.project_id,
+            "instruction": task.instruction,
+            "mode": task.mode,
+            "timeout_seconds": task.timeout_seconds,
+            "continue_session_id": task.session_id,
+        }
 
     async def mark_task_finished(self, executor_id: str, task_id: str) -> None:
         self.running_tasks.setdefault(executor_id, set()).discard(task_id)
@@ -160,7 +180,7 @@ async def api(users_file, monkeypatch):
 
     app.dependency_overrides[get_session] = override
 
-    hub = _Hub()
+    hub = _Hub(factory)
     import gateway.app.main as main_module
 
     monkeypatch.setattr(main_module, "hub", hub, raising=False)
@@ -435,6 +455,123 @@ async def test_a_failed_stop_does_not_keep_the_key_claimed(api) -> None:
     detail = api.get(f"/api/v1/sessions/{task.id}", headers=auth(ALICE_TOKEN))
     good = {**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"], "Idempotency-Key": "k-2"}
     assert api.post(f"/api/v1/sessions/{task.id}/stop", headers=good).status_code == 200
+
+
+async def test_pause_marks_the_session_pausing_and_tells_the_executor(api) -> None:
+    task = await make_task(api.factory, "p1", state="running")
+    detail = api.get(f"/api/v1/sessions/{task.id}", headers=auth(ALICE_TOKEN))
+
+    response = api.post(
+        f"/api/v1/sessions/{task.id}/pause",
+        headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == TaskState.PAUSING.value
+    assert api.hub.sent[-1][1].type.value == "task.pause"
+
+
+async def test_pause_requires_a_connected_executor(api) -> None:
+    api.hub.connected = False
+    task = await make_task(api.factory, "p1", state="running")
+    detail = api.get(f"/api/v1/sessions/{task.id}", headers=auth(ALICE_TOKEN))
+
+    response = api.post(
+        f"/api/v1/sessions/{task.id}/pause",
+        headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "conflict"
+
+
+async def test_resume_marks_the_session_resuming_and_tells_the_executor(api) -> None:
+    task = await make_task(api.factory, "p1", state="paused")
+    detail = api.get(f"/api/v1/sessions/{task.id}", headers=auth(ALICE_TOKEN))
+
+    response = api.post(
+        f"/api/v1/sessions/{task.id}/resume",
+        headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == TaskState.RESUMING.value
+    assert api.hub.sent[-1][1].type.value == "task.resume"
+
+
+async def test_restart_marks_the_session_restarting_and_tells_the_executor(api) -> None:
+    task = await make_task(api.factory, "p1", state="paused")
+    detail = api.get(f"/api/v1/sessions/{task.id}", headers=auth(ALICE_TOKEN))
+
+    response = api.post(
+        f"/api/v1/sessions/{task.id}/restart",
+        headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == TaskState.RESTARTING.value
+    assert api.hub.sent[-1][1].type.value == "task.restart"
+
+
+async def test_restart_of_a_finished_session_re_queues_it(api) -> None:
+    """A completed session is in FINISHED_RESTARTABLE, so restart succeeds and
+    re-dispatches it — the opposite of a conflict. This test used to be named
+    `..._is_a_conflict` while asserting exactly this success path; the two 409
+    branches this endpoint actually has are covered separately below (council
+    2026-08-18, "the claim auditor")."""
+    task = await make_task(api.factory, "p1", state="completed")
+    detail = api.get(f"/api/v1/sessions/{task.id}", headers=auth(ALICE_TOKEN))
+
+    response = api.post(
+        f"/api/v1/sessions/{task.id}/restart",
+        headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == TaskState.RUNNING.value
+    assert api.hub.sent[-1][1].type.value == "task.dispatch"
+
+    async with api.factory() as s:
+        restarted = await store.get_task(s, task.id)
+        logs = await store.get_logs(s, task.id)
+    assert restarted is not None
+    assert restarted.result_json is None
+    assert restarted.completed_at is None
+    assert logs == []
+
+
+async def test_restart_of_a_rejected_session_is_a_conflict(api) -> None:
+    task = await make_task(api.factory, "p1", state="awaiting_approval")
+    async with api.factory() as s:
+        await store.decide_task_approval(s, task.id, ApprovalDecision.REJECTED)
+        await s.commit()
+    detail = api.get(f"/api/v1/sessions/{task.id}", headers=auth(ALICE_TOKEN))
+    assert detail.json()["state"] == TaskState.CANCELLED.value
+
+    response = api.post(
+        f"/api/v1/sessions/{task.id}/restart",
+        headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "conflict"
+    assert "rejected" in response.json()["message"].lower()
+
+
+async def test_restart_of_a_finished_session_needs_a_connected_executor(api) -> None:
+    api.hub.connected = False
+    task = await make_task(api.factory, "p1", state="failed")
+    detail = api.get(f"/api/v1/sessions/{task.id}", headers=auth(ALICE_TOKEN))
+    assert detail.json()["state"] == TaskState.FAILED.value
+
+    response = api.post(
+        f"/api/v1/sessions/{task.id}/restart",
+        headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "conflict"
+    assert "disconnected" in response.json()["message"].lower()
 
 
 # --------------------------------------------------------------------------

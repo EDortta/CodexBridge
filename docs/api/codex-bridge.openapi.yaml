@@ -499,11 +499,8 @@ paths:
       tags: [sessions]
       summary: Cancel a queued or running session
       description: |
-        `stop` is the only lifecycle control this API offers, and that is a
-        statement about the agent protocol rather than a choice: `task.cancel`
-        is the only lifecycle message it defines. `pause`, `resume` and
-        `restart` need protocol and executor work — see issue #16 — and are
-        deliberately absent rather than present and inert.
+        `stop` sends `task.cancel` to the executor when it is connected, and
+        otherwise records the session as cancelled immediately.
 
         Requires `If-Match`. With `Idempotency-Key`, a retry returns the first
         response and stops nothing twice; the replay carries
@@ -511,10 +508,19 @@ paths:
 
         A disconnected executor does not fail the call: refusing would leave the
         operator unable to stop a session exactly when the executor is
-        unreachable. But the response then carries `executorNotified: false`,
-        and that distinction is load-bearing — **nothing replays `task.cancel`
-        on reconnect** (issue #17), so the run continues while the session reads
-        as cancelled.
+        unreachable. The response then carries `executorNotified: false`, and
+        that distinction was load-bearing before issue #16: nothing resent
+        `task.cancel` on reconnect at all — not on a plain reconnect, and not
+        on a full gateway restart either, since the startup recovery sweep has
+        always skipped tasks already in `cancelled` (issue #17) — so the run
+        could continue indefinitely while the session read as cancelled.
+        Issue #16 built exactly that replay — for `task.cancel` and for
+        pending `task.pause`/`task.resume`/`task.restart` alike — as a side
+        effect of fixing the equivalent gap for its own three controls, so a
+        reconnect now resends whichever control a task is still waiting on.
+        `executorNotified: false` still means the executor did not hear about
+        it *yet*; it is resolved on the next reconnect rather than left open
+        indefinitely.
       security:
         - bearerAuth: []
       parameters:
@@ -528,6 +534,144 @@ paths:
       responses:
         '200':
           description: The session after cancellation.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}/pause:
+    post:
+      operationId: pauseSession
+      tags: [sessions]
+      summary: Ask the executor to pause a running session
+      description: |
+        Sends `task.pause` to a **connected** executor and moves the session to
+        `pausing` until the executor acknowledges it with `task.ack`.
+
+        Requires `If-Match`. With `Idempotency-Key`, a retry returns the first
+        response and does not enqueue a second pause request.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The session in its transitional control state.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}/resume:
+    post:
+      operationId: resumeSession
+      tags: [sessions]
+      summary: Ask the executor to resume a paused session
+      description: |
+        Sends `task.resume` to a **connected** executor and moves the session
+        to `resuming` until the executor acknowledges it with `task.ack`.
+
+        Requires `If-Match`. With `Idempotency-Key`, a retry returns the first
+        response and does not enqueue a second resume request.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The session in its transitional control state.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}/restart:
+    post:
+      operationId: restartSession
+      tags: [sessions]
+      summary: Ask the executor to restart a running or paused session
+      description: |
+        Sends `task.restart` to a **connected** executor and moves the session
+        to `restarting` until the executor acknowledges it with `task.ack`.
+
+        Requires `If-Match`. With `Idempotency-Key`, a retry returns the first
+        response and does not enqueue a second restart request.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The session in its transitional control state.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/XRequestId'
@@ -1350,6 +1494,10 @@ components:
           category: operational
           requiredScope: codexbridge.task.cancel
           allowed: false
+        - action: sessions.pause
+          category: operational
+          requiredScope: codexbridge.task.cancel
+          allowed: false
 
     PageInfo:
       type: object
@@ -1414,6 +1562,20 @@ components:
           type: string
         state:
           type: string
+          enum:
+            - queued
+            - waiting_executor
+            - awaiting_approval
+            - pausing
+            - paused
+            - resuming
+            - restarting
+            - running
+            - completed
+            - failed
+            - cancelled
+            - expired
+            - lost
         priority:
           type: string
         revision:
@@ -1446,10 +1608,11 @@ components:
           description: |
             Present on the response to `stop`. Whether the executor was actually
             told to cancel. `false` means the session is recorded as cancelled
-            **and the run may still be going**: nothing replays `task.cancel`
-            when an executor reconnects (issue #17), so a disconnected executor
-            finishes its `codex exec`. Show the difference; do not present a
-            `false` here as a stopped run.
+            **and the run may still be going right now**: the gateway resends
+            `task.cancel` the next time that executor reconnects (issue #16),
+            but until then a disconnected executor keeps running its
+            `codex exec`. Show the difference; do not present a `false` here
+            as an immediately stopped run.
 
     LogLine:
       type: object

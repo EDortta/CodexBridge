@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-14 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-08-18 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 76 file(s) · 491 symbol(s) indexed
-- Languages: config (2), python (72), shell (2)
+- 79 file(s) · 542 symbol(s) indexed
+- Languages: config (2), python (75), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -61,7 +61,7 @@ gateway/
         __init__.py  — "HTTP routers for the mobile contract surface."
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
-        sessions.py  — "Agent sessions, their logs, and the one control the protocol actually has."
+        sessions.py  — "Agent sessions, their logs, and lifecycle control."
       scope.py  — "Which requests the API's cross-cutting rules apply to."
       setup.py  — "One call that installs every cross-cutting API behaviour."
       timestamps.py  — "RFC 3339 in UTC, spelled one way."
@@ -107,6 +107,8 @@ tests/
     test_openapi_document.py  — "Contract tests for the canonical OpenAPI document."
     test_proxy_routes.py  — "Every contracted path must be routed by the proxies in front of the gateway."
   integration/
+    test_agent_ack_handling.py  — "`task.ack` handling in the `/agent/ws` message loop — issue #16 council."
+    test_agent_hub.py
     test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
@@ -118,6 +120,7 @@ tests/
     test_agent_auth.py  — "Credential resolution for the `/agent/ws` handshake — issue #15."
     test_agent_service.py
     test_apply_migrations.py  — "The migration runner, exercised against real throwaway databases."
+    test_codex_runner.py  — "CodexRunner's pause/resume/restart/cancel state machine — issue #16 council."
     test_main_import.py
     test_policy.py
     test_rate_limiter_bounds.py  — "The limiter's key space must be bounded, or it becomes the resource exhausted."
@@ -131,9 +134,13 @@ tests/
 
 ### `agent/codex_bridge_agent/codex_runner.py`
 
+- **`RunningTask`** *(class)*
 - **`CodexRunner`** *(class)*
   - `__init__(self, settings)` *(method)*
   - `cancel(self, task_id)` *(async method)*
+  - `pause(self, task_id)` *(async method)*
+  - `resume(self, task_id)` *(async method)*
+  - `restart(self, task_id)` *(async method)*
   - `run_task(self, task_id, project_root, instruction, timeout_seconds, continue_session_id, send_log)` *(async method)*
 
 ### `agent/codex_bridge_agent/config.py`
@@ -266,13 +273,16 @@ tests/
 
 ### `gateway/app/api/routes/sessions.py`
 
-> Agent sessions, their logs, and the one control the protocol actually has.
+> Agent sessions, their logs, and lifecycle control.
 
 - `redact(value)` — "Strip from any executor-influenced text what a response must never carry."
 - `list_sessions(response, state, cursor, limit, principal, session)` *(async function)* — "Sessions the caller may see, newest first."
 - `get_session_detail(session_id, response, principal, session)` *(async function)*
 - `get_session_logs(session_id, response, offset, limit, principal, session)` *(async function)* — "Log lines from `offset`, the append-only scheme the store already uses."
 - `stop_session(session_id, response, if_match, idempotency_key, principal, session)` *(async function)* — "Cancel a running or queued session."
+- `pause_session(session_id, response, if_match, idempotency_key, principal, session)` *(async function)*
+- `resume_session(session_id, response, if_match, idempotency_key, principal, session)` *(async function)*
+- `restart_session(session_id, response, if_match, idempotency_key, principal, session)` *(async function)*
 - `explain_session_error(session_id, principal, session)` *(async function)* — "A structured account of why a session failed, assembled server-side."
 
 ### `gateway/app/api/scope.py`
@@ -390,6 +400,7 @@ tests/
 - `oauth_authorize_submit(response_type, client_id, redirect_uri, scope, state, code_challenge, code_challenge_method, username, password, session)` *(async function)*
 - `oauth_token(grant_type, code, redirect_uri, client_id, code_verifier, session)` *(async function)*
 - `mcp_endpoint(request, authorization, session)` *(async function)*
+- `handle_task_ack(session, envelope)` *(async function)* — "Handles one `task.ack` from the `/agent/ws` message loop."
 - `agent_ws(websocket, executor_id, token, x_executor_token)` *(async function)*
 
 ### `gateway/app/mcp/server.py`
@@ -451,6 +462,7 @@ tests/
 - `recover_tasks_after_startup(session)` *(async function)*
 - `get_logs(session, task_id, offset, limit)` *(async function)*
 - `store_result(session, task_id, result, final_state)` *(async function)*
+- `restart_finished_task(session, task_id)` *(async function)*
 - `create_oauth_authorization_code(session)` *(async function)*
 - `consume_oauth_authorization_code(session, code)` *(async function)*
 - `create_oauth_access_token(session)` *(async function)*
@@ -465,6 +477,8 @@ tests/
 - `list_tasks_page(session)` *(async function)* — "Tasks the caller may see, newest first, over-fetched by one."
 - `get_task_for_projects(session, task_id, project_ids)` *(async function)* — "A task the caller may see, or None."
 - `get_recent_logs(session, task_id)` *(async function)* — "The most recent log lines, oldest-first within the slice."
+- `list_tasks_requiring_cancel_replay(session, executor_id)` *(async function)* — "Cancelled tasks whose executor has not yet acknowledged the cancellation."
+- `list_tasks_requiring_control_replay(session, executor_id)` *(async function)* — "Tasks stuck in a pending pause/resume/restart, waiting for a `task.ack`"
 
 ### `scripts/apply_migrations.py`
 
@@ -537,6 +551,29 @@ tests/
 - `test_nginx_configs_exist()` — "If the configs move, this gate must fail loudly rather than pass empty."
 - `test_every_contract_path_is_routed_by_every_terminating_vhost(contract_paths)`
 - `test_every_proxied_location_reaches_an_upstream()` — "A location block with no `proxy_pass` silently drops its path."
+
+### `tests/integration/test_agent_ack_handling.py`
+
+> `task.ack` handling in the `/agent/ws` message loop — issue #16 council.
+
+- `factory()` *(async function)*
+- `test_an_executor_cannot_ack_a_task_it_does_not_own(factory)` *(async function)*
+- `test_an_ack_with_no_task_id_is_logged_not_raised(factory)` *(async function)* — "council 2026-08-18, round 2, "the adversarial user": the same class of"
+- `test_an_ack_with_an_unknown_state_is_refused_not_raised(factory)` *(async function)*
+- `test_a_rejected_pause_or_resume_reverts_to_the_state_it_assumed(factory, pending, control, expected_state)` *(async function)*
+- `test_a_rejected_restart_is_reported_as_failed_not_left_pending(factory)` *(async function)*
+- `test_an_accepted_ack_updates_state_and_is_recorded(factory)` *(async function)*
+
+### `tests/integration/test_agent_hub.py`
+
+- **`DummyWebSocket`** *(class)*
+  - `__init__(self)` *(method)*
+  - `send_json(self, payload)` *(async method)*
+- `factory()` *(async function)*
+- `test_register_replays_pending_cancel_before_dispatch(factory)` *(async function)*
+- `test_register_replays_a_pending_pause_that_never_got_an_ack(factory)` *(async function)* — "council 2026-08-18, "the sweep skeptic" / "the second caller": a task"
+- `test_register_replays_pending_resume_and_restart_too(factory)` *(async function)*
+- `test_acknowledged_cancel_is_not_replayed_and_allows_dispatch(factory)` *(async function)*
 
 ### `tests/integration/test_agent_ws_handshake.py`
 
@@ -743,6 +780,13 @@ tests/
 - `test_a_disconnected_executor_does_not_block_the_stop(api)` *(async function)* — "Refusing here strands the operator exactly when they most want to stop."
 - `test_a_retried_stop_replays_instead_of_acting_twice(api)` *(async function)*
 - `test_a_failed_stop_does_not_keep_the_key_claimed(api)` *(async function)* — "One transient refusal must not lock the key for its whole TTL."
+- `test_pause_marks_the_session_pausing_and_tells_the_executor(api)` *(async function)*
+- `test_pause_requires_a_connected_executor(api)` *(async function)*
+- `test_resume_marks_the_session_resuming_and_tells_the_executor(api)` *(async function)*
+- `test_restart_marks_the_session_restarting_and_tells_the_executor(api)` *(async function)*
+- `test_restart_of_a_finished_session_re_queues_it(api)` *(async function)* — "A completed session is in FINISHED_RESTARTABLE, so restart succeeds and"
+- `test_restart_of_a_rejected_session_is_a_conflict(api)` *(async function)*
+- `test_restart_of_a_finished_session_needs_a_connected_executor(api)` *(async function)*
 - `test_explain_error_reports_the_recorded_evidence(api)` *(async function)*
 - `test_explain_error_on_a_healthy_session_says_so(api)` *(async function)*
 - `test_explain_error_of_an_invisible_session_is_not_found(api)` *(async function)*
@@ -772,6 +816,7 @@ tests/
 - `test_task_logs_and_status_are_limited_to_task_owner(db_session)` *(async function)*
 - `test_approval_moves_task_back_to_queue(db_session)` *(async function)*
 - `test_startup_recovery_marks_running_as_lost(db_session)` *(async function)*
+- `test_startup_recovery_marks_pending_control_states_as_lost(db_session, pending_state)` *(async function)* — "council 2026-08-18, round 2, "the second caller": issue #16 added these"
 
 ### `tests/unit/test_agent_auth.py`
 
@@ -791,8 +836,14 @@ tests/
   - `send(self, payload)` *(async method)*
 - **`FailingRunner`** *(class)*
   - `run_task(self, **_)` *(async method)*
+- **`ControlRunner`** *(class)*
+  - `__init__(self)` *(method)*
+  - `pause(self, _)` *(async method)*
+  - `resume(self, _)` *(async method)*
+  - `restart(self, _)` *(async method)*
 - `test_dispatch_failure_returns_task_result(tmp_path)` *(async function)*
 - `test_machine_token_travels_in_a_header_not_the_url(monkeypatch)` *(async function)* — "The token in the query string was logged verbatim 107 times (#15)."
+- `test_pause_resume_and_restart_controls_acknowledge_over_the_socket(monkeypatch)` *(async function)* — "Drives the real `_run_once` dispatch loop, not a copy of it."
 
 ### `tests/unit/test_apply_migrations.py`
 
@@ -812,6 +863,22 @@ tests/
 - `test_a_half_applied_migration_is_not_reported_as_untouched(tmp_path)` — "The runner must not tell the operator the database is clean when it is not."
 - `test_dry_run_changes_nothing(legacy_db)`
 - `test_unknown_migration_name_is_refused(legacy_db)`
+
+### `tests/unit/test_codex_runner.py`
+
+> CodexRunner's pause/resume/restart/cancel state machine — issue #16 council.
+
+- `test_pause_signals_sigstop_and_marks_paused()` *(async function)*
+- `test_pause_refuses_when_already_paused()` *(async function)*
+- `test_pause_refuses_an_unknown_task()` *(async function)*
+- `test_resume_signals_sigcont_and_clears_paused()` *(async function)*
+- `test_resume_refuses_when_not_paused()` *(async function)*
+- `test_restart_resumes_a_paused_process_before_terminating_it()` *(async function)*
+- `test_cancel_resumes_a_paused_process_before_terminating_it()` *(async function)*
+- `test_cancel_after_restart_clears_the_pending_restart()` *(async function)* — "council 2026-08-18, "the second caller", reproduced live: restart()"
+- `test_terminate_gracefully_resumes_a_paused_process_before_terminating()` *(async function)*
+- `test_terminate_gracefully_does_not_signal_cont_when_not_paused()` *(async function)*
+- `test_terminate_gracefully_falls_back_to_kill_if_still_stuck()` *(async function)* — "The safety net behind the SIGCONT fix: a process that does not end"
 
 ### `tests/unit/test_main_import.py`
 
