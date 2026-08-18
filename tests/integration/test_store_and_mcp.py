@@ -238,3 +238,27 @@ async def test_startup_recovery_marks_running_as_lost(db_session: AsyncSession):
     assert recovered["lost"] == 1
     reloaded = await store.get_task(db_session, task.id)
     assert reloaded.state == TaskState.LOST.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pending_state",
+    [TaskState.PAUSING, TaskState.PAUSED, TaskState.RESUMING, TaskState.RESTARTING],
+)
+async def test_startup_recovery_marks_pending_control_states_as_lost(
+    db_session: AsyncSession, pending_state: TaskState
+):
+    """council 2026-08-18, round 2, "the second caller": issue #16 added these
+    four states to the LOST-on-startup set alongside the pre-existing
+    RUNNING, but nothing exercised it — reverting the branch back to
+    `RUNNING`-only left the full 302-test suite green. `PAUSED` matters most
+    of the four: `AgentHub.register`'s control replay only fires for
+    PAUSING/RESUMING/RESTARTING (transitional states waiting on a `task.ack`),
+    never for the stable PAUSED state, so a gateway restart is the only path
+    that ever unsticks a task left PAUSED by a gateway that died."""
+    task = await store.create_task(db_session, _submit(run_when_available=True), executor_online=True)
+    task = await store.update_task_state(db_session, task.id, pending_state)
+    recovered = await store.recover_tasks_after_startup(db_session)
+    assert recovered["lost"] == 1
+    reloaded = await store.get_task(db_session, task.id)
+    assert reloaded.state == TaskState.LOST.value

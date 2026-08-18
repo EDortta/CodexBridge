@@ -1,4 +1,4 @@
-"""Agent sessions, their logs, and the one control the protocol actually has.
+"""Agent sessions, their logs, and lifecycle control.
 
 A "session" here is a `TaskModel`: one `codex exec` run on an executor. The
 mobile vocabulary and the internal one differ on purpose — the client should not
@@ -7,16 +7,10 @@ in the issues API.
 
 ## What this issue does NOT deliver, and why
 
-Issue #9 proposes `pause`, `resume` and `restart` alongside `stop`. The agent
-protocol (`shared/protocol.py:AgentMessageType`) has `task.dispatch`, `task.ack`,
-`task.log`, `task.result`, `task.cancel`, `task.cancelled` and `error`. There is
-no pause, no resume, and no restart: the executor cannot be told to do any of
-them, so an endpoint offering them would be a button that reports success and
-changes nothing.
-
-They need a protocol change and executor support, which is a different piece of
-work. `stop` maps to `task.cancel`, which exists and is already exercised by the
-MCP client, so it is the one control here.
+Issue #16 extends the agent protocol with `task.pause`, `task.resume` and
+`task.restart`. Those controls are not optimistic: the HTTP response reports a
+transitional state (`pausing`, `resuming`, `restarting`) until the executor
+acknowledges the control with `task.ack`.
 
 ## Redaction
 
@@ -44,7 +38,7 @@ from gateway.app.db.session import get_session
 from gateway.app.services import store
 from gateway.app.services.audit import record_event
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
-from shared.protocol import AgentMessageType, TaskState
+from shared.protocol import AgentMessageType, ApprovalDecision, TaskState
 from shared.security import sanitize_log_line
 
 
@@ -58,8 +52,23 @@ SESSIONS_ENDPOINT = "/api/v1/sessions"
 STOPPABLE = {
     TaskState.QUEUED.value,
     TaskState.WAITING_EXECUTOR.value,
+    TaskState.PAUSING.value,
+    TaskState.PAUSED.value,
+    TaskState.RESUMING.value,
+    TaskState.RESTARTING.value,
     TaskState.RUNNING.value,
     TaskState.AWAITING_APPROVAL.value,
+}
+
+PAUSABLE = {TaskState.RUNNING.value}
+RESUMABLE = {TaskState.PAUSED.value}
+RESTARTABLE = {TaskState.RUNNING.value, TaskState.PAUSED.value}
+FINISHED_RESTARTABLE = {
+    TaskState.COMPLETED.value,
+    TaskState.FAILED.value,
+    TaskState.CANCELLED.value,
+    TaskState.EXPIRED.value,
+    TaskState.LOST.value,
 }
 
 # Redaction applied to every log line leaving this API, on top of whatever was
@@ -391,6 +400,228 @@ async def stop_session(
     return body
 
 
+@router.post("/sessions/{session_id}/pause", tags=["sessions"])
+async def pause_session(
+    session_id: str,
+    response: Response,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.SESSIONS_PAUSE)),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return await _control_session(
+        session_id=session_id,
+        response=response,
+        if_match=if_match,
+        idempotency_key=idempotency_key,
+        principal=principal,
+        session=session,
+        allowed_states=PAUSABLE,
+        pending_state=TaskState.PAUSING,
+        control_type=AgentMessageType.TASK_PAUSE,
+        control_name="pause",
+    )
+
+
+@router.post("/sessions/{session_id}/resume", tags=["sessions"])
+async def resume_session(
+    session_id: str,
+    response: Response,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.SESSIONS_RESUME)),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return await _control_session(
+        session_id=session_id,
+        response=response,
+        if_match=if_match,
+        idempotency_key=idempotency_key,
+        principal=principal,
+        session=session,
+        allowed_states=RESUMABLE,
+        pending_state=TaskState.RESUMING,
+        control_type=AgentMessageType.TASK_RESUME,
+        control_name="resume",
+    )
+
+
+@router.post("/sessions/{session_id}/restart", tags=["sessions"])
+async def restart_session(
+    session_id: str,
+    response: Response,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.SESSIONS_RESTART)),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return await _control_session(
+        session_id=session_id,
+        response=response,
+        if_match=if_match,
+        idempotency_key=idempotency_key,
+        principal=principal,
+        session=session,
+        allowed_states=RESTARTABLE,
+        pending_state=TaskState.RESTARTING,
+        control_type=AgentMessageType.TASK_RESTART,
+        control_name="restart",
+        allow_finished_restart=True,
+    )
+
+
+async def _control_session(
+    *,
+    session_id: str,
+    response: Response,
+    if_match: str | None,
+    idempotency_key: str | None,
+    principal: AuthenticatedPrincipal,
+    session: AsyncSession,
+    allowed_states: set[str],
+    pending_state: TaskState,
+    control_type: AgentMessageType,
+    control_name: str,
+    allow_finished_restart: bool = False,
+) -> dict:
+    from gateway.app.main import hub  # imported late: main includes this router
+
+    projects = visible_projects(principal)
+    task = await store.get_task_for_projects(session, session_id, projects)
+    if task is None:
+        raise _not_found()
+
+    fingerprint = idempotency.fingerprint(f"{control_name}:{session_id}".encode())
+    claim = None
+    endpoint = f"{SESSIONS_ENDPOINT}/{control_name}"
+    if idempotency_key:
+        outcome = await idempotency.reserve(
+            session,
+            key=idempotency_key,
+            endpoint=endpoint,
+            actor_id=principal.user_id,
+            request_fingerprint=fingerprint,
+        )
+        if isinstance(outcome, idempotency.ReplayedResponse):
+            response.status_code = outcome.status_code
+            response.headers["Idempotent-Replay"] = "true"
+            fresh = await store.get_task_for_projects(session, session_id, projects)
+            if fresh is not None:
+                response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(fresh.revision)
+            return outcome.body
+        claim = outcome
+
+    try:
+        concurrency.require_if_match(if_match, task.revision)
+        if allow_finished_restart and task.state in FINISHED_RESTARTABLE:
+            if (
+                task.state == TaskState.CANCELLED.value
+                and task.approval_state == ApprovalDecision.REJECTED.value
+            ):
+                raise ApiError(
+                    status_code=409,
+                    code=CONFLICT,
+                    message="A rejected session cannot be restarted without a new approval decision.",
+                    headers={concurrency.ETAG_HEADER: concurrency.etag_for(task.revision)},
+                )
+            executor_online = hub.is_connected(task.executor_id)
+            if not executor_online and not task.run_when_available:
+                raise ApiError(
+                    status_code=409,
+                    code=CONFLICT,
+                    message="The executor for this session is disconnected, so it cannot be restarted now.",
+                    headers={concurrency.ETAG_HEADER: concurrency.etag_for(task.revision)},
+                )
+            updated = await store.restart_finished_task(
+                session,
+                task.id,
+                executor_online=executor_online,
+            )
+            if updated.state == TaskState.QUEUED.value:
+                dispatch_payload = await hub.dispatch_next(task.executor_id)
+                if dispatch_payload is not None:
+                    await hub.send(
+                        task.executor_id,
+                        hub_envelope(
+                            task.executor_id,
+                            AgentMessageType.TASK_DISPATCH.value,
+                            dispatch_payload,
+                        ),
+                    )
+                    await session.refresh(updated)
+            await record_event(
+                session,
+                "task",
+                task.id,
+                "task.control_requested",
+                {
+                    "actor_id": principal.user_id,
+                    "actor_email": principal.email,
+                    "control": control_name,
+                    "via": "http_api",
+                },
+            )
+            await session.commit()
+        else:
+            if task.state not in allowed_states:
+                raise ApiError(
+                    status_code=409,
+                    code=CONFLICT,
+                    message=f"A session in state {task.state!r} cannot be {control_name}d.",
+                    headers={concurrency.ETAG_HEADER: concurrency.etag_for(task.revision)},
+                )
+            if not hub.is_connected(task.executor_id):
+                raise ApiError(
+                    status_code=409,
+                    code=CONFLICT,
+                    message=f"The executor for this session is disconnected, so it cannot be {control_name}d live.",
+                    headers={concurrency.ETAG_HEADER: concurrency.etag_for(task.revision)},
+                )
+            updated = await store.update_task_state(session, task.id, pending_state)
+            await hub.send(
+                task.executor_id,
+                hub_envelope(task.executor_id, control_type.value, {"task_id": task.id}),
+            )
+            await record_event(
+                session,
+                "task",
+                task.id,
+                "task.control_requested",
+                {
+                    "actor_id": principal.user_id,
+                    "actor_email": principal.email,
+                    "control": control_name,
+                    "via": "http_api",
+                },
+            )
+            await session.commit()
+    except Exception:
+        if claim is not None:
+            await idempotency.release(
+                session,
+                key=idempotency_key,
+                endpoint=endpoint,
+                actor_id=principal.user_id,
+                claim=claim,
+            )
+        raise
+
+    body = _session_dto(updated)
+    if claim is not None:
+        await idempotency.complete(
+            session,
+            key=idempotency_key,
+            endpoint=endpoint,
+            actor_id=principal.user_id,
+            status_code=200,
+            body=body,
+            claim=claim,
+            request_fingerprint=fingerprint,
+        )
+    response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(updated.revision)
+    return body
+
+
 async def _dispatch_cancel(hub: AgentHub, task) -> bool:
     """Tell the executor, if it is listening. Returns whether it was told.
 
@@ -398,13 +629,14 @@ async def _dispatch_cancel(hub: AgentHub, task) -> bool:
     operator unable to stop a session exactly when the executor is unreachable.
 
     But the session being marked cancelled here is **not** the same as the run
-    stopping. Nothing replays `task.cancel` on reconnect — `recover_tasks_after_startup`
-    runs at gateway startup only, and skips already-cancelled tasks — so a
-    disconnected executor keeps running its `codex exec` to completion. An
-    earlier version of this docstring claimed a reconnect recovery that does not
-    exist; the response now reports `executorNotified` instead, so the operator
-    is told the difference rather than shown a stop that did not happen.
-    Replaying the cancel is issue #17.
+    stopping instantly. As of issue #16, `AgentHub.register()` resends
+    `task.cancel` the next time this executor reconnects
+    (`store.list_tasks_requiring_cancel_replay`), so the gap is bounded by
+    however long the executor stays disconnected — not open forever the way an
+    earlier version of this docstring claimed (a reconnect recovery that did
+    not exist at the time, tracked as issue #17). The response still reports
+    `executorNotified`, so the operator is told whether the executor heard
+    about it *yet*, not whether the run has actually stopped.
     """
     if not hub.is_connected(task.executor_id):
         return False

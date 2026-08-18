@@ -88,6 +88,27 @@ SESSIONS_STOP = Action(
     summary="Cancel a queued or running session.",
 )
 
+SESSIONS_PAUSE = Action(
+    name="sessions.pause",
+    category=OPERATIONAL,
+    scope=CANCEL_SCOPE,
+    summary="Pause a running session on a connected executor.",
+)
+
+SESSIONS_RESUME = Action(
+    name="sessions.resume",
+    category=OPERATIONAL,
+    scope=CANCEL_SCOPE,
+    summary="Resume a paused session on a connected executor.",
+)
+
+SESSIONS_RESTART = Action(
+    name="sessions.restart",
+    category=OPERATIONAL,
+    scope=CANCEL_SCOPE,
+    summary="Restart a running or paused session on a connected executor.",
+)
+
 SESSIONS_READ_ALL_PROJECTS = Action(
     name="sessions.readAllProjects",
     category=ADMINISTRATIVE,
@@ -102,6 +123,9 @@ CATALOGUE: tuple[Action, ...] = (
     SESSIONS_READ_LOGS,
     SESSIONS_EXPLAIN_ERROR,
     SESSIONS_STOP,
+    SESSIONS_PAUSE,
+    SESSIONS_RESUME,
+    SESSIONS_RESTART,
     SESSIONS_READ_ALL_PROJECTS,
 )
 

@@ -464,16 +464,15 @@ the word "task" from a URL and meet it again meaning something else in the
 issues API.
 
 `GET /api/v1/sessions`, `GET .../{id}`, `GET .../{id}/logs`,
-`POST .../{id}/stop`, `POST .../{id}/explain-error`.
+`POST .../{id}/stop`, `POST .../{id}/pause`, `POST .../{id}/resume`,
+`POST .../{id}/restart`, `POST .../{id}/explain-error`.
 
-### What #9 asked for and did not get
+### What #16 adds
 
-`pause`, `resume` and `restart` are **not** implemented. The agent protocol has
-`task.dispatch`, `task.ack`, `task.log`, `task.result`, `task.cancel`,
-`task.cancelled` and `error` — nothing else. An endpoint offering pause would be
-a button that reports success and changes nothing, which is the failure the
-capability flags exist to prevent. Issue #16 carries the protocol work and the
-decision of whether the controls should exist at all.
+`pause`, `resume` and `restart` are implemented for **connected** executors.
+They are not optimistic writes: the HTTP response moves the session into a
+transitional state (`pausing`, `resuming`, `restarting`) and the stable state
+arrives only when the executor acknowledges the control with `task.ack`.
 
 `stop` maps to `task.cancel`, which exists and the MCP client already uses.
 

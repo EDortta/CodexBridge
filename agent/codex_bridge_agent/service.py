@@ -71,6 +71,45 @@ class AgentService:
                                     {"task_id": envelope.payload["task_id"]},
                                 ).model_dump_json()
                             )
+                    elif envelope.type == AgentMessageType.TASK_PAUSE:
+                        paused = await self.runner.pause(envelope.payload["task_id"])
+                        await websocket.send(
+                            self._envelope(
+                                AgentMessageType.TASK_ACK,
+                                {
+                                    "task_id": envelope.payload["task_id"],
+                                    "control": "pause",
+                                    "accepted": paused,
+                                    "state": TaskState.PAUSED.value if paused else None,
+                                },
+                            ).model_dump_json()
+                        )
+                    elif envelope.type == AgentMessageType.TASK_RESUME:
+                        resumed = await self.runner.resume(envelope.payload["task_id"])
+                        await websocket.send(
+                            self._envelope(
+                                AgentMessageType.TASK_ACK,
+                                {
+                                    "task_id": envelope.payload["task_id"],
+                                    "control": "resume",
+                                    "accepted": resumed,
+                                    "state": TaskState.RUNNING.value if resumed else None,
+                                },
+                            ).model_dump_json()
+                        )
+                    elif envelope.type == AgentMessageType.TASK_RESTART:
+                        restarted = await self.runner.restart(envelope.payload["task_id"])
+                        await websocket.send(
+                            self._envelope(
+                                AgentMessageType.TASK_ACK,
+                                {
+                                    "task_id": envelope.payload["task_id"],
+                                    "control": "restart",
+                                    "accepted": restarted,
+                                    "state": TaskState.RUNNING.value if restarted else None,
+                                },
+                            ).model_dump_json()
+                        )
             finally:
                 heartbeat_task.cancel()
 

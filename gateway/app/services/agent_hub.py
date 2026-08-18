@@ -15,6 +15,16 @@ from gateway.app.services import store
 from shared.protocol import AgentEnvelope, AgentMessageType, TaskState
 
 
+# Which control message to resend on reconnect for each pending state a task
+# can be stuck in. Kept next to list_tasks_requiring_control_replay's states
+# in store.py — both name the same three transitional states on purpose.
+_CONTROL_REPLAY_MESSAGE: dict[TaskState, AgentMessageType] = {
+    TaskState.PAUSING: AgentMessageType.TASK_PAUSE,
+    TaskState.RESUMING: AgentMessageType.TASK_RESUME,
+    TaskState.RESTARTING: AgentMessageType.TASK_RESTART,
+}
+
+
 @dataclass
 class AgentConnection:
     executor_id: str
@@ -42,6 +52,23 @@ class AgentHub:
             self.running_tasks.setdefault(executor_id, set())
         async with self.session_factory() as session:
             await store.mark_executor_connected(session, executor_id, True)
+            replay = await store.list_tasks_requiring_cancel_replay(session, executor_id)
+            control_replay = await store.list_tasks_requiring_control_replay(session, executor_id)
+        if replay:
+            self.running_tasks.setdefault(executor_id, set()).update(task.id for task in replay)
+            for task in replay:
+                await self.send(
+                    executor_id,
+                    hub_envelope(executor_id, AgentMessageType.TASK_CANCEL.value, {"task_id": task.id}),
+                )
+        if control_replay:
+            self.running_tasks.setdefault(executor_id, set()).update(task.id for task in control_replay)
+            for task in control_replay:
+                message_type = _CONTROL_REPLAY_MESSAGE[TaskState(task.state)]
+                await self.send(
+                    executor_id,
+                    hub_envelope(executor_id, message_type.value, {"task_id": task.id}),
+                )
 
     async def unregister(self, executor_id: str) -> None:
         async with self._lock:

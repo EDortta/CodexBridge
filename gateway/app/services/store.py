@@ -279,7 +279,13 @@ async def recover_tasks_after_startup(session: AsyncSession) -> dict[str, int]:
             task.revision += 1
             await record_event(session, "task", task.id, "task.recovered", {"state": task.state})
             recovered["expired"] += 1
-        elif task.state == TaskState.RUNNING.value:
+        elif task.state in {
+            TaskState.RUNNING.value,
+            TaskState.PAUSING.value,
+            TaskState.PAUSED.value,
+            TaskState.RESUMING.value,
+            TaskState.RESTARTING.value,
+        }:
             task.state = TaskState.LOST.value
             task.completed_at = now
             task.revision += 1
@@ -311,6 +317,50 @@ async def store_result(session: AsyncSession, task_id: str, result: dict, final_
     task.completed_at = datetime.now(timezone.utc)
     task.revision += 1
     await record_event(session, "task", task.id, "task.result", {"state": task.state})
+    await session.commit()
+    await session.refresh(task)
+    return task
+
+
+async def restart_finished_task(
+    session: AsyncSession,
+    task_id: str,
+    *,
+    executor_online: bool,
+) -> TaskModel:
+    task = await session.get(TaskModel, task_id)
+    if task is None:
+        raise ValueError("unknown_task")
+    if task.state not in {
+        TaskState.COMPLETED.value,
+        TaskState.FAILED.value,
+        TaskState.CANCELLED.value,
+        TaskState.EXPIRED.value,
+        TaskState.LOST.value,
+    }:
+        raise ValueError("task_not_finished")
+
+    await session.execute(delete(TaskLogModel).where(TaskLogModel.task_id == task.id))
+    task.state = (
+        TaskState.QUEUED.value if executor_online else TaskState.WAITING_EXECUTOR.value
+    )
+    task.started_at = None
+    task.completed_at = None
+    task.last_error = None
+    task.result_json = None
+    task.command_json = None
+    task.revision += 1
+    await record_event(
+        session,
+        "task",
+        task.id,
+        "task.restarted",
+        {
+            "state": task.state,
+            "executor_online": executor_online,
+            "continued_session_id": task.session_id,
+        },
+    )
     await session.commit()
     await session.refresh(task)
     return task
@@ -754,3 +804,49 @@ async def get_recent_logs(
     statement = statement.order_by(TaskLogModel.offset.desc()).limit(limit)
     result = await session.execute(statement)
     return list(reversed(list(result.scalars())))
+
+
+async def list_tasks_requiring_cancel_replay(session: AsyncSession, executor_id: str) -> list[TaskModel]:
+    """Cancelled tasks whose executor has not yet acknowledged the cancellation."""
+    acknowledged = (
+        select(AuditEventModel.entity_id)
+        .where(AuditEventModel.entity_type == "task")
+        .where(AuditEventModel.event_type == "task.cancel_acknowledged")
+    )
+    result = await session.execute(
+        select(TaskModel)
+        .where(TaskModel.executor_id == executor_id)
+        .where(TaskModel.state == TaskState.CANCELLED.value)
+        .where(TaskModel.result_json.is_(None))
+        .where(~TaskModel.id.in_(acknowledged))
+        .order_by(TaskModel.created_at.asc())
+    )
+    return list(result.scalars())
+
+
+_CONTROL_REPLAY_STATES = (
+    TaskState.PAUSING.value,
+    TaskState.RESUMING.value,
+    TaskState.RESTARTING.value,
+)
+
+
+async def list_tasks_requiring_control_replay(session: AsyncSession, executor_id: str) -> list[TaskModel]:
+    """Tasks stuck in a pending pause/resume/restart, waiting for a `task.ack`
+    the executor never sent before it disconnected.
+
+    Unlike cancellation, PAUSING/RESUMING/RESTARTING are exclusively
+    transitional: the only way out of one is the TASK_ACK handler in
+    `gateway/app/main.py`, on accept or on reject. So the state column itself
+    is the up-to-date signal that nothing has resolved it yet, and this needs
+    no `audit_events` join the way `list_tasks_requiring_cancel_replay` does —
+    CANCELLED is also reachable as a stable end state by other paths, these
+    three are not.
+    """
+    result = await session.execute(
+        select(TaskModel)
+        .where(TaskModel.executor_id == executor_id)
+        .where(TaskModel.state.in_(_CONTROL_REPLAY_STATES))
+        .order_by(TaskModel.created_at.asc())
+    )
+    return list(result.scalars())

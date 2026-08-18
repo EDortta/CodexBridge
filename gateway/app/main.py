@@ -40,6 +40,7 @@ from gateway.app.db.schema_guard import check_schema
 from gateway.app.db.session import SessionLocal, engine, get_session
 from gateway.app.mcp.server import handle_mcp_call
 from gateway.app.services import metrics, store
+from gateway.app.services.audit import record_event
 from gateway.app.services.agent_hub import AgentHub
 from shared.protocol import EXECUTOR_TOKEN_HEADER, AgentEnvelope, AgentMessageType, TaskState
 from shared.security import sanitize_log_line, secure_compare
@@ -500,6 +501,118 @@ async def mcp_endpoint(
     return Response(content=json.dumps(payload), media_type="application/json")
 
 
+# What a rejected task.ack means for state, per control. See handle_task_ack
+# for why each of these is correct rather than a guess.
+_CONTROL_REJECTION_FALLBACK: dict[str, tuple[TaskState, str | None]] = {
+    "pause": (TaskState.RUNNING, None),
+    "resume": (TaskState.PAUSED, None),
+    "restart": (TaskState.FAILED, "The executor could not restart this session: no running process was found."),
+}
+
+
+async def handle_task_ack(session: AsyncSession, envelope: AgentEnvelope) -> None:
+    """Handles one `task.ack` from the `/agent/ws` message loop.
+
+    A standalone function rather than inlined in the loop so it is directly
+    testable against a real session and a constructed envelope, without
+    driving a real websocket through it (council 2026-08-18: the ownership
+    check, the state validation and the rejection rollback below all need
+    coverage that does not depend on a live socket's timing).
+    """
+    task_id = envelope.payload.get("task_id")
+    accepted = bool(envelope.payload.get("accepted"))
+    control = envelope.payload.get("control")
+    raw_state = envelope.payload.get("state")
+
+    if task_id is None:
+        # The same class of bug the state-validation fix above closes: a
+        # direct-subscript read on a caller-controlled payload raises
+        # uncaught, killing the /agent/ws loop before it ever reaches
+        # `hub.unregister` below (council 2026-08-18, "the adversarial
+        # user", round 2 — the sibling this function's own state guard did
+        # not cover). There is no task_id to record an audit event against,
+        # so this one is logged rather than written to `audit_events`.
+        logging.getLogger(__name__).warning(
+            "task.ack with no task_id from executor %s", envelope.executor_id
+        )
+        return
+
+    task = await store.get_task(session, task_id)
+    if task is None or task.executor_id != envelope.executor_id:
+        # An executor may only ack tasks assigned to it. Without this check,
+        # any connected executor could name any task_id in a task.ack and
+        # move that session's state — a forged control acknowledgment for a
+        # session it never touched (council 2026-08-18, "the adversarial
+        # user").
+        await record_event(
+            session,
+            "task",
+            task_id,
+            "task.ack_refused",
+            {
+                "executor_id": envelope.executor_id,
+                "control": control,
+                "reason": "unknown_task" if task is None else "not_owner",
+            },
+        )
+        await session.commit()
+        return
+
+    resolved_state: TaskState | None = None
+    if accepted:
+        try:
+            resolved_state = TaskState(raw_state) if raw_state is not None else None
+        except ValueError:
+            resolved_state = None
+        if resolved_state is None:
+            # A malformed ack (accepted with no state, or a state string that
+            # is not one of ours) used to raise an uncaught ValueError here,
+            # which killed the message loop without reaching `hub.unregister`
+            # — the executor stayed "connected" in the database with no
+            # socket behind it (council 2026-08-18, "the adversarial user").
+            # Log and move on instead.
+            await record_event(
+                session,
+                "task",
+                task_id,
+                "task.ack_refused",
+                {
+                    "executor_id": envelope.executor_id,
+                    "control": control,
+                    "reason": "invalid_state",
+                    "state": raw_state,
+                },
+            )
+            await session.commit()
+            return
+        await store.update_task_state(session, task_id, resolved_state)
+    elif control in _CONTROL_REJECTION_FALLBACK:
+        # A rejected ack used to leave the task parked in
+        # PAUSING/RESUMING/RESTARTING forever — nothing else in the codebase
+        # ever revisits those states outside a full gateway restart (council
+        # 2026-08-18, "the second caller"). `CodexRunner.pause`/`resume` only
+        # refuse before touching the process, so reverting to the state the
+        # control assumed is exact; `CodexRunner.restart` only refuses when it
+        # has no process to restart at all, so there is nothing to revert to
+        # and the session is reported failed instead.
+        fallback_state, fallback_error = _CONTROL_REJECTION_FALLBACK[control]
+        await store.update_task_state(session, task_id, fallback_state, error=fallback_error)
+
+    await record_event(
+        session,
+        "task",
+        task_id,
+        "task.control_acknowledged",
+        {
+            "executor_id": envelope.executor_id,
+            "control": control,
+            "accepted": accepted,
+            "state": raw_state,
+        },
+    )
+    await session.commit()
+
+
 @app.websocket("/agent/ws")
 async def agent_ws(
     websocket: WebSocket,
@@ -565,6 +678,8 @@ async def agent_ws(
                     continue
                 if envelope.type == AgentMessageType.HEARTBEAT:
                     await store.mark_executor_connected(session, envelope.executor_id, True)
+                elif envelope.type == AgentMessageType.TASK_ACK:
+                    await handle_task_ack(session, envelope)
                 elif envelope.type == AgentMessageType.TASK_LOG:
                     await store.append_log(
                         session,
@@ -591,6 +706,14 @@ async def agent_ws(
                         )
                 elif envelope.type == AgentMessageType.TASK_CANCELLED:
                     await store.update_task_state(session, envelope.payload["task_id"], TaskState.CANCELLED)
+                    await record_event(
+                        session,
+                        "task",
+                        envelope.payload["task_id"],
+                        "task.cancel_acknowledged",
+                        {"executor_id": envelope.executor_id},
+                    )
+                    await session.commit()
                     await hub.mark_task_finished(envelope.executor_id, envelope.payload["task_id"])
     except WebSocketDisconnect:
         await hub.unregister(executor_id)
