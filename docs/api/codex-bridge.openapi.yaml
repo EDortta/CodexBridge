@@ -520,7 +520,10 @@ paths:
         reconnect now resends whichever control a task is still waiting on.
         `executorNotified: false` still means the executor did not hear about
         it *yet*; it is resolved on the next reconnect rather than left open
-        indefinitely.
+        indefinitely. The replay itself is bounded — `cancel_replay_max_age_seconds`
+        (default 24h) — so an executor that reappears long after the
+        cancellation is not chased with a `task.cancel` for a run that has
+        almost certainly already finished.
       security:
         - bearerAuth: []
       parameters:
@@ -1612,7 +1615,12 @@ components:
             `task.cancel` the next time that executor reconnects (issue #16),
             but until then a disconnected executor keeps running its
             `codex exec`. Show the difference; do not present a `false` here
-            as an immediately stopped run.
+            as an immediately stopped run. That resend is bounded by
+            `cancel_replay_max_age_seconds` (default 24h) since the
+            cancellation — an executor that stays disconnected longer than
+            that (a long weekend, a stuck redeploy) is not chased with
+            `task.cancel` on reconnect, and the session simply stays
+            `cancelled` in the gateway.
 
     LogLine:
       type: object

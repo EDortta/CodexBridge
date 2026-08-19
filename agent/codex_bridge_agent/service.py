@@ -63,50 +63,68 @@ class AgentService:
                     if envelope.type == AgentMessageType.TASK_DISPATCH:
                         asyncio.create_task(self._handle_dispatch(websocket, envelope))
                     elif envelope.type == AgentMessageType.TASK_CANCEL:
-                        cancelled = await self.runner.cancel(envelope.payload["task_id"])
-                        if cancelled:
-                            await websocket.send(
-                                self._envelope(
-                                    AgentMessageType.TASK_CANCELLED,
-                                    {"task_id": envelope.payload["task_id"]},
-                                ).model_dump_json()
-                            )
+                        task_id = envelope.payload["task_id"]
+                        await self.runner.cancel(task_id)
+                        # Unconditional ack. A cancel's postcondition — "not
+                        # running here" — holds whether a live process was
+                        # actually terminated or the runner never heard of
+                        # the task at all (a fresh runner after a restart,
+                        # replaying a durable CANCELLED write on reconnect —
+                        # issue #17). The old `if cancelled:` guard left the
+                        # gateway waiting for an ack a restarted runner could
+                        # never send, pinning the executor's one concurrency
+                        # slot for the life of the gateway process.
+                        await websocket.send(
+                            self._envelope(
+                                AgentMessageType.TASK_CANCELLED,
+                                {"task_id": task_id},
+                            ).model_dump_json()
+                        )
                     elif envelope.type == AgentMessageType.TASK_PAUSE:
-                        paused = await self.runner.pause(envelope.payload["task_id"])
+                        task_id = envelope.payload["task_id"]
+                        known = self.runner.is_known(task_id)
+                        paused = await self.runner.pause(task_id)
                         await websocket.send(
                             self._envelope(
                                 AgentMessageType.TASK_ACK,
                                 {
-                                    "task_id": envelope.payload["task_id"],
+                                    "task_id": task_id,
                                     "control": "pause",
                                     "accepted": paused,
                                     "state": TaskState.PAUSED.value if paused else None,
+                                    "known": known,
                                 },
                             ).model_dump_json()
                         )
                     elif envelope.type == AgentMessageType.TASK_RESUME:
-                        resumed = await self.runner.resume(envelope.payload["task_id"])
+                        task_id = envelope.payload["task_id"]
+                        known = self.runner.is_known(task_id)
+                        resumed = await self.runner.resume(task_id)
                         await websocket.send(
                             self._envelope(
                                 AgentMessageType.TASK_ACK,
                                 {
-                                    "task_id": envelope.payload["task_id"],
+                                    "task_id": task_id,
                                     "control": "resume",
                                     "accepted": resumed,
                                     "state": TaskState.RUNNING.value if resumed else None,
+                                    "known": known,
                                 },
                             ).model_dump_json()
                         )
                     elif envelope.type == AgentMessageType.TASK_RESTART:
-                        restarted = await self.runner.restart(envelope.payload["task_id"])
+                        task_id = envelope.payload["task_id"]
+                        known = self.runner.is_known(task_id)
+                        restarted = await self.runner.restart(task_id)
                         await websocket.send(
                             self._envelope(
                                 AgentMessageType.TASK_ACK,
                                 {
-                                    "task_id": envelope.payload["task_id"],
+                                    "task_id": task_id,
                                     "control": "restart",
                                     "accepted": restarted,
                                     "state": TaskState.RUNNING.value if restarted else None,
+                                    "known": known,
                                 },
                             ).model_dump_json()
                         )
@@ -121,85 +139,98 @@ class AgentService:
     async def _handle_dispatch(self, websocket, envelope: AgentEnvelope) -> None:
         task_id = envelope.payload["task_id"]
         project_id = envelope.payload["project_id"]
-        project = self.projects.get(project_id)
-        if project is None:
-            await websocket.send(
-                self._envelope(
-                    AgentMessageType.TASK_RESULT,
-                    {
-                        "task_id": task_id,
-                        "final_state": TaskState.FAILED.value,
-                        "error": "unknown_project",
-                    },
-                ).model_dump_json()
-            )
-            return
-        root = ensure_within_root(project.path, project.path)
-        request = SubmitTaskRequest(
-            executor_id=self.settings.executor_id,
-            project_id=project_id,
-            instruction=envelope.payload["instruction"],
-            mode=TaskMode(envelope.payload["mode"]),
-            timeout_seconds=int(envelope.payload["timeout_seconds"]),
-            priority=TaskPriority.NORMAL,
-            run_when_available=True,
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
-        )
-        decision = evaluate_task_policy(request)
-        if not decision.approved and decision.level.value == "sensitive":
-            await websocket.send(
-                self._envelope(
-                    AgentMessageType.TASK_RESULT,
-                    {
-                        "task_id": task_id,
-                        "final_state": TaskState.FAILED.value,
-                        "error": "sensitive_policy_blocked",
-                    },
-                ).model_dump_json()
-            )
-            return
-        offset = 0
-
-        async def send_log(stream: str, line: str) -> None:
-            nonlocal offset
-            offset += 1
-            await websocket.send(
-                self._envelope(
-                    AgentMessageType.TASK_LOG,
-                    {"task_id": task_id, "offset": offset, "stream": stream, "line": line},
-                ).model_dump_json()
-            )
-
+        # Known to the runner for the task's whole observable lifetime here —
+        # from the moment this dispatch is accepted until its result has been
+        # sent — not just while `CodexRunner.running` holds a live process.
+        # `is_known` backs the gateway's `known=False` ghost-task branch: a
+        # `task.pause`/`task.restart` landing before `run_task` ever spawns a
+        # process, or after it exits but before this method reports the
+        # result, used to read as "runner never heard of this task" and got a
+        # live (or just-finished) task marked CANCELLED out from under it
+        # (issue #17 council round 2, "the second caller").
+        self.runner.mark_dispatched(task_id)
         try:
-            result = await self.runner.run_task(
-                task_id=task_id,
-                project_root=Path(root),
-                instruction=f"{BASE_PROMPT}\n\nUser task:\n{envelope.payload['instruction']}",
+            project = self.projects.get(project_id)
+            if project is None:
+                await websocket.send(
+                    self._envelope(
+                        AgentMessageType.TASK_RESULT,
+                        {
+                            "task_id": task_id,
+                            "final_state": TaskState.FAILED.value,
+                            "error": "unknown_project",
+                        },
+                    ).model_dump_json()
+                )
+                return
+            root = ensure_within_root(project.path, project.path)
+            request = SubmitTaskRequest(
+                executor_id=self.settings.executor_id,
+                project_id=project_id,
+                instruction=envelope.payload["instruction"],
+                mode=TaskMode(envelope.payload["mode"]),
                 timeout_seconds=int(envelope.payload["timeout_seconds"]),
-                continue_session_id=envelope.payload.get("continue_session_id"),
-                send_log=send_log,
+                priority=TaskPriority.NORMAL,
+                run_when_available=True,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
             )
-        except Exception as exc:
-            await send_log("stderr", f"Codex execution failed before completion: {exc}")
-            result = {
-                "task_id": task_id,
-                "final_state": TaskState.FAILED.value,
-                "error": str(exc),
-                "return_code": -1,
-                "duration_seconds": 0,
-                "command": [],
-                "command_redacted": [],
-                "codex_session_id": None,
-                "codex_version": "",
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "last_message": "",
-                "pre_git": {},
-                "post_git": {},
-                "tests_ran": [],
-                "no_changes": True,
-                "raw_events": [],
-            }
-        await websocket.send(self._envelope(AgentMessageType.TASK_RESULT, result).model_dump_json())
+            decision = evaluate_task_policy(request)
+            if not decision.approved and decision.level.value == "sensitive":
+                await websocket.send(
+                    self._envelope(
+                        AgentMessageType.TASK_RESULT,
+                        {
+                            "task_id": task_id,
+                            "final_state": TaskState.FAILED.value,
+                            "error": "sensitive_policy_blocked",
+                        },
+                    ).model_dump_json()
+                )
+                return
+            offset = 0
+
+            async def send_log(stream: str, line: str) -> None:
+                nonlocal offset
+                offset += 1
+                await websocket.send(
+                    self._envelope(
+                        AgentMessageType.TASK_LOG,
+                        {"task_id": task_id, "offset": offset, "stream": stream, "line": line},
+                    ).model_dump_json()
+                )
+
+            try:
+                result = await self.runner.run_task(
+                    task_id=task_id,
+                    project_root=Path(root),
+                    instruction=f"{BASE_PROMPT}\n\nUser task:\n{envelope.payload['instruction']}",
+                    timeout_seconds=int(envelope.payload["timeout_seconds"]),
+                    continue_session_id=envelope.payload.get("continue_session_id"),
+                    send_log=send_log,
+                )
+            except Exception as exc:
+                await send_log("stderr", f"Codex execution failed before completion: {exc}")
+                result = {
+                    "task_id": task_id,
+                    "final_state": TaskState.FAILED.value,
+                    "error": str(exc),
+                    "return_code": -1,
+                    "duration_seconds": 0,
+                    "command": [],
+                    "command_redacted": [],
+                    "codex_session_id": None,
+                    "codex_version": "",
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "last_message": "",
+                    "pre_git": {},
+                    "post_git": {},
+                    "tests_ran": [],
+                    "no_changes": True,
+                    "raw_events": [],
+                }
+            await websocket.send(self._envelope(AgentMessageType.TASK_RESULT, result).model_dump_json())
+        finally:
+            self.runner.forget(task_id)
 
     def _envelope(self, message_type: AgentMessageType, payload: dict) -> AgentEnvelope:
         return AgentEnvelope(

@@ -33,6 +33,40 @@ class CodexRunner:
     def __init__(self, settings: AgentSettings):
         self.settings = settings
         self.running: dict[str, RunningTask] = {}
+        self.known_tasks: set[str] = set()
+
+    def is_known(self, task_id: str) -> bool:
+        """Whether this runner has any record of the task at all.
+
+        The signal the gateway needs to tell "already resolved on a live
+        process" apart from "this runner never heard of it" — e.g. a fresh
+        runner after a restart replaying a control message for a task it
+        lost all memory of (issue #17). `pause`/`resume`/`restart` returning
+        `False` collapses both "unknown" and "known but wrong sub-state"
+        into one boolean, which is not enough for the gateway to tell a
+        ghost task (no process anywhere, revert the state is a lie) from a
+        transient rejection (process is alive, revert the state is exact).
+
+        Backed by `known_tasks`, not `self.running`. `self.running` only
+        holds a task while its process is alive — empty during dispatch
+        setup (before `run_task` spawns it) and during result teardown
+        (after it exits, before the caller reports the result) even on a
+        live executor that never restarted. A control message landing in
+        either window used to read as "runner never heard of this task",
+        and the gateway's ghost-task branch marked a task that was still
+        running, or had just finished successfully, CANCELLED out from
+        under it (issue #17 council round 2, "the second caller").
+        `known_tasks` is keyed to the task's whole observable lifetime in
+        the agent — see `AgentService._handle_dispatch`'s
+        `mark_dispatched`/`forget` pair, which brackets it.
+        """
+        return task_id in self.known_tasks
+
+    def mark_dispatched(self, task_id: str) -> None:
+        self.known_tasks.add(task_id)
+
+    def forget(self, task_id: str) -> None:
+        self.known_tasks.discard(task_id)
 
     async def cancel(self, task_id: str) -> bool:
         item = self.running.get(task_id)

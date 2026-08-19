@@ -12,7 +12,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from gateway.app.models.entities import ExecutorModel
 from gateway.app.services import store
-from shared.protocol import AgentEnvelope, AgentMessageType, TaskState
+from shared.protocol import (
+    AgentEnvelope,
+    AgentMessageType,
+    DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
+    DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
+    TaskState,
+)
 
 
 # Which control message to resend on reconnect for each pending state a task
@@ -33,8 +39,15 @@ class AgentConnection:
 
 
 class AgentHub:
-    def __init__(self, session_factory: async_sessionmaker):
+    def __init__(
+        self,
+        session_factory: async_sessionmaker,
+        cancel_replay_max_age_seconds: int = DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
+        control_replay_max_age_seconds: int = DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
+    ):
         self.session_factory = session_factory
+        self.cancel_replay_max_age_seconds = cancel_replay_max_age_seconds
+        self.control_replay_max_age_seconds = control_replay_max_age_seconds
         self.connections: dict[str, AgentConnection] = {}
         self.running_tasks: dict[str, set[str]] = {}
         self._lock = asyncio.Lock()
@@ -52,8 +65,12 @@ class AgentHub:
             self.running_tasks.setdefault(executor_id, set())
         async with self.session_factory() as session:
             await store.mark_executor_connected(session, executor_id, True)
-            replay = await store.list_tasks_requiring_cancel_replay(session, executor_id)
-            control_replay = await store.list_tasks_requiring_control_replay(session, executor_id)
+            replay = await store.list_tasks_requiring_cancel_replay(
+                session, executor_id, max_age_seconds=self.cancel_replay_max_age_seconds
+            )
+            control_replay = await store.list_tasks_requiring_control_replay(
+                session, executor_id, max_age_seconds=self.control_replay_max_age_seconds
+            )
         if replay:
             self.running_tasks.setdefault(executor_id, set()).update(task.id for task in replay)
             for task in replay:
@@ -108,7 +125,27 @@ class AgentHub:
             }
 
     async def mark_task_finished(self, executor_id: str, task_id: str) -> None:
+        """Releases the slot `task_id` held and, if the executor is still
+        connected, immediately dispatches whatever is next in its queue.
+
+        The dispatch used to be hand-rolled at each caller that frees a slot;
+        only the `TASK_RESULT` branch in `gateway/app/main.py` remembered to
+        do it. `task.cancelled`'s ack, the `known=False` control-ack ghost
+        resolution, HTTP `/stop` and MCP `cancel_codex_task` all free a slot
+        through this same method and none of them re-dispatched — a
+        connected, idle executor sat on queued work until an unrelated event
+        (a later reconnect, a new submit) nudged the queue, the exact
+        starvation issue #17 itself is about (issue #17 council round 2, "the
+        sweep skeptic" / "the second caller"). Putting the dispatch here means
+        every caller gets it, including ones not yet written.
+        """
         self.running_tasks.setdefault(executor_id, set()).discard(task_id)
+        dispatch_payload = await self.dispatch_next(executor_id)
+        if dispatch_payload is not None:
+            await self.send(
+                executor_id,
+                hub_envelope(executor_id, AgentMessageType.TASK_DISPATCH.value, dispatch_payload),
+            )
 
 
 def hub_envelope(executor_id: str, message_type: str, payload: dict) -> AgentEnvelope:

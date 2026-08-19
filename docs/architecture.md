@@ -80,7 +80,7 @@ apontada aqui até que alguém decida renomear.
 6. Quando o executor está disponível, o gateway envia `task.dispatch`.
 7. O agente confirma `task.ack`, executa `codex exec` localmente e transmite `task.log` (com `offset` incremental) e `task.result`.
 8. O gateway persiste tudo e responde aos tools MCP.
-9. `cancel_codex_task` envia `task.cancel` ao agente ou marca a tarefa antes da execução.
+9. `cancel_codex_task` marca a tarefa como `cancelled` incondicionalmente para qualquer estado cancelável (fila, aprovação pendente, execução, pausa/retomada/reinício pendentes); envia `task.cancel` ao agente apenas se ele estiver conectado no momento. Se estiver offline, o cancelamento é reenviado quando o executor reconectar (`AgentHub.register`, limitado por `cancel_replay_max_age_seconds`).
 
 ## Trade-offs principais
 

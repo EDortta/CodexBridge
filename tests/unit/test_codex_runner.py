@@ -89,6 +89,32 @@ async def test_restart_resumes_a_paused_process_before_terminating_it() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancel_refuses_an_unknown_task() -> None:
+    """The gateway replays `task.cancel` on reconnect for a task the executor
+    may no longer be running at all (issue #17) — it must not raise, just
+    report there was nothing to cancel."""
+    runner = CodexRunner(AgentSettings())
+    assert await runner.cancel("missing") is False
+
+
+def test_is_known_reflects_mark_dispatched_not_the_running_process_dict() -> None:
+    """council round 2 on #17, "the second caller": `is_known` used to check
+    membership in `self.running`, which only holds a task while its process
+    is alive — empty before `run_task` spawns one and after it exits. A task
+    marked dispatched is known even with no process ever having existed for
+    it, and stays known until explicitly forgotten."""
+    runner = CodexRunner(AgentSettings())
+    runner.mark_dispatched("t1")
+
+    assert runner.is_known("t1") is True
+    assert "t1" not in runner.running
+
+    runner.forget("t1")
+
+    assert runner.is_known("t1") is False
+
+
+@pytest.mark.asyncio
 async def test_cancel_resumes_a_paused_process_before_terminating_it() -> None:
     runner, item, process = _runner_with_task(paused=True)
     assert await runner.cancel("t1") is True

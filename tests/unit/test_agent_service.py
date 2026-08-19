@@ -19,15 +19,25 @@ class DummyWebSocket:
 
 
 class FailingRunner:
+    def mark_dispatched(self, _: str) -> None:
+        pass
+
+    def forget(self, _: str) -> None:
+        pass
+
     async def run_task(self, **_: object) -> dict:
         raise FileNotFoundError("codex-not-found")
 
 
 class ControlRunner:
-    def __init__(self, *, pause: bool = True, resume: bool = True, restart: bool = True) -> None:
+    def __init__(self, *, pause: bool = True, resume: bool = True, restart: bool = True, known: bool = True) -> None:
         self.pause_result = pause
         self.resume_result = resume
         self.restart_result = restart
+        self.known_result = known
+
+    def is_known(self, _: str) -> bool:
+        return self.known_result
 
     async def pause(self, _: str) -> bool:
         return self.pause_result
@@ -202,3 +212,162 @@ async def test_pause_resume_and_restart_controls_acknowledge_over_the_socket(mon
     assert [ack.payload["control"] for ack in acks] == ["pause", "resume", "restart"]
     assert [ack.payload["accepted"] for ack in acks] == [True, True, True]
     assert [ack.payload["state"] for ack in acks] == ["paused", "running", "running"]
+    assert [ack.payload["known"] for ack in acks] == [True, True, True]
+
+
+@pytest.mark.asyncio
+async def test_cancel_of_an_unknown_task_still_acks_over_the_socket(monkeypatch) -> None:
+    """issue #17 council round 1, "the claim auditor" / "the second caller":
+    a fresh `CodexRunner` (e.g. an executor host that just restarted, or a
+    reconnect replay for a task that was never dispatched at all) returns
+    `False` from `cancel()`. The old `if cancelled:` guard sent nothing back
+    in that case, so the gateway waited forever for a `task.cancelled` that
+    could never arrive — pinning the executor's concurrency slot for the
+    life of the gateway process. A cancel's postcondition ("not running
+    here") holds either way, so the ack must be unconditional."""
+    from agent.codex_bridge_agent import service as service_module
+    from agent.codex_bridge_agent.codex_runner import CodexRunner
+
+    service = AgentService(AgentSettings())
+    service.runner = CodexRunner(AgentSettings())  # empty: knows no tasks
+
+    incoming = [service._envelope(AgentMessageType.TASK_CANCEL, {"task_id": "ghost-task"}).model_dump_json()]
+    socket = _FakeAgentSocket(incoming)
+    monkeypatch.setattr(service_module.websockets, "connect", _FakeConnect(socket))
+
+    await service._run_once()
+
+    acks = [
+        AgentEnvelope.model_validate_json(payload)
+        for payload in socket.sent
+        if AgentEnvelope.model_validate_json(payload).type == AgentMessageType.TASK_CANCELLED
+    ]
+    assert len(acks) == 1
+    assert acks[0].payload["task_id"] == "ghost-task"
+
+
+@pytest.mark.asyncio
+async def test_pause_of_an_unknown_task_reports_known_false(monkeypatch) -> None:
+    """The control-message sibling of the cancel case above (issue #17
+    council round 1, "the sweep skeptic"): before `known` existed, a fresh
+    runner rejecting a `task.pause` for a task it never heard of looked
+    identical, over the wire, to a live runner rejecting one for a real
+    reason (already paused). The gateway could not tell "revert to RUNNING,
+    the process is still alive" from "there is no process at all"."""
+    from agent.codex_bridge_agent import service as service_module
+    from agent.codex_bridge_agent.codex_runner import CodexRunner
+
+    service = AgentService(AgentSettings())
+    service.runner = CodexRunner(AgentSettings())  # empty: knows no tasks
+
+    incoming = [service._envelope(AgentMessageType.TASK_PAUSE, {"task_id": "ghost-task"}).model_dump_json()]
+    socket = _FakeAgentSocket(incoming)
+    monkeypatch.setattr(service_module.websockets, "connect", _FakeConnect(socket))
+
+    await service._run_once()
+
+    acks = [
+        AgentEnvelope.model_validate_json(payload)
+        for payload in socket.sent
+        if AgentEnvelope.model_validate_json(payload).type == AgentMessageType.TASK_ACK
+    ]
+    assert len(acks) == 1
+    assert acks[0].payload["accepted"] is False
+    assert acks[0].payload["known"] is False
+
+
+class _RecordingRunner:
+    """Records call order to prove `_handle_dispatch` brackets a task's whole
+    observable lifetime with `mark_dispatched`/`forget`, not just the span
+    `run_task` itself is on the stack for."""
+
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    def mark_dispatched(self, task_id: str) -> None:
+        self.calls.append(f"mark_dispatched:{task_id}")
+
+    def forget(self, task_id: str) -> None:
+        self.calls.append(f"forget:{task_id}")
+
+    async def run_task(self, *, task_id: str, **_: object) -> dict:
+        self.calls.append(f"run_task:start:{task_id}")
+        self.calls.append(f"run_task:end:{task_id}")
+        return {
+            "task_id": task_id,
+            "final_state": "completed",
+            "return_code": 0,
+            "duration_seconds": 0,
+            "command": [],
+            "command_redacted": [],
+            "codex_session_id": None,
+            "codex_version": "",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "last_message": "",
+            "pre_git": {},
+            "post_git": {},
+            "tests_ran": [],
+            "no_changes": True,
+            "raw_events": [],
+        }
+
+
+class _OrderedWebSocket:
+    """Same recording list as `_RecordingRunner`, so send order interleaves
+    with runner calls in one timeline."""
+
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+        self.messages: list[str] = []
+
+    async def send(self, payload: str) -> None:
+        self.messages.append(payload)
+        envelope_type = AgentEnvelope.model_validate_json(payload).type.value
+        self.calls.append(f"send:{envelope_type}")
+
+
+@pytest.mark.asyncio
+async def test_handle_dispatch_forgets_the_task_only_after_the_result_is_sent(tmp_path: Path) -> None:
+    """finding 14 (council round 2, "the second caller"): before this fix,
+    nothing called `mark_dispatched`/`forget` at all — `is_known` read
+    `CodexRunner.running` directly, empty during dispatch setup and popped by
+    `run_task`'s own `finally` before `_handle_dispatch` ever built the
+    `task.result` to send. A control message landing in either gap saw a live
+    (or just-finished) task as unknown to the runner. `mark_dispatched` must
+    run before anything that could reach `run_task`, and `forget` only after
+    the result has actually been sent.
+    """
+    calls: list[str] = []
+    service = AgentService(AgentSettings())
+    service.runner = _RecordingRunner(calls)
+    service.projects = {
+        "codexbridge": ProjectRegistration(
+            project_id="codexbridge",
+            name="CodexBridge",
+            path=str(tmp_path),
+        )
+    }
+    websocket = _OrderedWebSocket(calls)
+    envelope = AgentEnvelope(
+        message_id="dispatch-1",
+        executor_id="devel3",
+        sent_at=datetime.now(timezone.utc),
+        type=AgentMessageType.TASK_DISPATCH,
+        payload={
+            "task_id": "task-1",
+            "project_id": "codexbridge",
+            "instruction": "Analyze repository",
+            "mode": "analyze",
+            "timeout_seconds": 60,
+        },
+    )
+
+    await service._handle_dispatch(websocket, envelope)
+
+    assert calls == [
+        "mark_dispatched:task-1",
+        "run_task:start:task-1",
+        "run_task:end:task-1",
+        "send:task.result",
+        "forget:task-1",
+    ]

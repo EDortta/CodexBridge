@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.models.entities import (
@@ -22,6 +22,8 @@ from gateway.app.services.audit import record_event
 from shared.policy import evaluate_task_policy
 from shared.protocol import (
     ApprovalDecision,
+    DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
+    DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
     ExecutorRegistration,
     ProjectRegistration,
     SubmitTaskRequest,
@@ -806,18 +808,36 @@ async def get_recent_logs(
     return list(reversed(list(result.scalars())))
 
 
-async def list_tasks_requiring_cancel_replay(session: AsyncSession, executor_id: str) -> list[TaskModel]:
-    """Cancelled tasks whose executor has not yet acknowledged the cancellation."""
+async def list_tasks_requiring_cancel_replay(
+    session: AsyncSession,
+    executor_id: str,
+    *,
+    max_age_seconds: int = DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
+    now: datetime | None = None,
+) -> list[TaskModel]:
+    """Cancelled tasks whose executor has not yet acknowledged the cancellation.
+
+    Bounded by `max_age_seconds` since `task.state_changed` to CANCELLED
+    (`completed_at`): an executor that reconnects long after a cancellation
+    was issued has almost certainly already finished or been redeployed, and
+    replaying past that point is stale noise, not a correctness need (issue
+    #17). A task with no `completed_at` yet cannot happen for a CANCELLED
+    task (`update_task_state` sets it in the same write), so the comparison
+    never has to handle a null.
+    """
     acknowledged = (
         select(AuditEventModel.entity_id)
         .where(AuditEventModel.entity_type == "task")
         .where(AuditEventModel.event_type == "task.cancel_acknowledged")
     )
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=max_age_seconds)
     result = await session.execute(
         select(TaskModel)
         .where(TaskModel.executor_id == executor_id)
         .where(TaskModel.state == TaskState.CANCELLED.value)
         .where(TaskModel.result_json.is_(None))
+        .where(TaskModel.completed_at >= cutoff)
         .where(~TaskModel.id.in_(acknowledged))
         .order_by(TaskModel.created_at.asc())
     )
@@ -831,7 +851,13 @@ _CONTROL_REPLAY_STATES = (
 )
 
 
-async def list_tasks_requiring_control_replay(session: AsyncSession, executor_id: str) -> list[TaskModel]:
+async def list_tasks_requiring_control_replay(
+    session: AsyncSession,
+    executor_id: str,
+    *,
+    max_age_seconds: int = DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
+    now: datetime | None = None,
+) -> list[TaskModel]:
     """Tasks stuck in a pending pause/resume/restart, waiting for a `task.ack`
     the executor never sent before it disconnected.
 
@@ -839,14 +865,35 @@ async def list_tasks_requiring_control_replay(session: AsyncSession, executor_id
     transitional: the only way out of one is the TASK_ACK handler in
     `gateway/app/main.py`, on accept or on reject. So the state column itself
     is the up-to-date signal that nothing has resolved it yet, and this needs
-    no `audit_events` join the way `list_tasks_requiring_cancel_replay` does —
-    CANCELLED is also reachable as a stable end state by other paths, these
-    three are not.
+    no `audit_events` join the way `list_tasks_requiring_cancel_replay` does
+    to know a task is *unacknowledged* — CANCELLED is also reachable as a
+    stable end state by other paths, these three are not.
+
+    Bounded by `max_age_seconds` since the most recent `task.state_changed`
+    event for the task, the same way cancel replay is bounded by
+    `completed_at` — this sibling query used to have no bound at all, so a
+    year-old pending control was replayed on every single reconnect forever
+    (issue #17 council, "the sweep skeptic"). There is no dedicated
+    "entered this state at" column, so the last `task.state_changed` row is
+    the transition timestamp: `update_task_state` writes one on every state
+    write, including the write that put the task into PAUSING/RESUMING/
+    RESTARTING in the first place.
     """
+    last_state_change = (
+        select(func.max(AuditEventModel.created_at))
+        .where(AuditEventModel.entity_type == "task")
+        .where(AuditEventModel.entity_id == TaskModel.id)
+        .where(AuditEventModel.event_type == "task.state_changed")
+        .correlate(TaskModel)
+        .scalar_subquery()
+    )
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=max_age_seconds)
     result = await session.execute(
         select(TaskModel)
         .where(TaskModel.executor_id == executor_id)
         .where(TaskModel.state.in_(_CONTROL_REPLAY_STATES))
+        .where(last_state_change >= cutoff)
         .order_by(TaskModel.created_at.asc())
     )
     return list(result.scalars())

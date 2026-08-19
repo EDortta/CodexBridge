@@ -38,7 +38,7 @@ from gateway.app.db.session import get_session
 from gateway.app.services import store
 from gateway.app.services.audit import record_event
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
-from shared.protocol import AgentMessageType, ApprovalDecision, TaskState
+from shared.protocol import AgentMessageType, ApprovalDecision, STOPPABLE_TASK_STATES, TaskState
 from shared.security import sanitize_log_line
 
 
@@ -49,16 +49,11 @@ SESSIONS_ENDPOINT = "/api/v1/sessions"
 # States from which a stop is meaningful. Cancelling an already-finished session
 # is not an error the client caused, but it is not a no-op either: reporting
 # success would tell the operator an action happened that did not.
-STOPPABLE = {
-    TaskState.QUEUED.value,
-    TaskState.WAITING_EXECUTOR.value,
-    TaskState.PAUSING.value,
-    TaskState.PAUSED.value,
-    TaskState.RESUMING.value,
-    TaskState.RESTARTING.value,
-    TaskState.RUNNING.value,
-    TaskState.AWAITING_APPROVAL.value,
-}
+#
+# Defined once in `shared/protocol.py` and shared with the MCP
+# `cancel_codex_task` tool (`gateway/app/mcp/server.py`) so the two surfaces
+# cannot silently drift apart the way they did before issue #17's review.
+STOPPABLE = STOPPABLE_TASK_STATES
 
 PAUSABLE = {TaskState.RUNNING.value}
 RESUMABLE = {TaskState.PAUSED.value}
@@ -631,12 +626,20 @@ async def _dispatch_cancel(hub: AgentHub, task) -> bool:
     But the session being marked cancelled here is **not** the same as the run
     stopping instantly. As of issue #16, `AgentHub.register()` resends
     `task.cancel` the next time this executor reconnects
-    (`store.list_tasks_requiring_cancel_replay`), so the gap is bounded by
-    however long the executor stays disconnected — not open forever the way an
-    earlier version of this docstring claimed (a reconnect recovery that did
-    not exist at the time, tracked as issue #17). The response still reports
-    `executorNotified`, so the operator is told whether the executor heard
-    about it *yet*, not whether the run has actually stopped.
+    (`store.list_tasks_requiring_cancel_replay`) — but only within
+    `cancel_replay_max_age_seconds` (default 24h, `gateway/app/core/config.py`)
+    of the cancellation, not for however long the executor stays disconnected.
+    An earlier version of this docstring claimed the gap was unbounded by
+    reconnect time (true before the replay existed at all, issue #17); a later
+    one claimed the opposite — unbounded in the executor's favour, no ceiling
+    at all — which stopped being true the moment the TTL shipped. Past the
+    window the task stays CANCELLED with no further replay: the executor
+    resolves an unknown cancel on its own either way (`CodexRunner.cancel`
+    returning `False` still gets an unconditional `task.cancelled` back,
+    issue #17 council), so the TTL trims stale noise rather than leaving
+    anything unresolved. The response still reports `executorNotified`, so
+    the operator is told whether the executor heard about it *yet*, not
+    whether the run has actually stopped.
     """
     if not hub.is_connected(task.executor_id):
         return False

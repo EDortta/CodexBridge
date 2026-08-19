@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.app.models.entities import ExecutorModel
 from gateway.app.services import store
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
+from gateway.app.services.audit import record_event
 from gateway.app.mcp.tools import tool_definitions
 from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.version import APP_VERSION
@@ -17,6 +18,7 @@ from shared.protocol import (
     AgentEnvelope,
     AgentMessageType,
     ApprovalDecision,
+    STOPPABLE_TASK_STATES,
     SubmitTaskRequest,
     TaskMode,
     TaskPriority,
@@ -212,8 +214,60 @@ async def handle_mcp_call(
         require_task_access(task)
         if task.state in {TaskState.QUEUED.value, TaskState.WAITING_EXECUTOR.value, TaskState.AWAITING_APPROVAL.value}:
             task = await store.update_task_state(session, task.id, TaskState.CANCELLED)
-        elif task.state == TaskState.RUNNING.value and hub.is_connected(task.executor_id):
-            await hub.send(task.executor_id, hub_envelope(task.executor_id, "task.cancel", {"task_id": task.id}))
+            await record_event(
+                session,
+                "task",
+                task.id,
+                "task.stopped_by_actor",
+                {
+                    "actor_id": principal.user_id,
+                    "actor_email": principal.email,
+                    "via": "mcp",
+                    "executor_notified": False,
+                },
+            )
+            await session.commit()
+        elif task.state in STOPPABLE_TASK_STATES:
+            # Covers RUNNING and the four control-transitional states
+            # (PAUSING/PAUSED/RESUMING/RESTARTING), all of which hold an
+            # executor concurrency slot the same way RUNNING does. Issue #17's
+            # own premise is that a disconnected executor still gets a durable
+            # CANCELLED write, so a later reconnect replays `task.cancel` via
+            # `AgentHub.register`. Sending only fired inside
+            # `hub.is_connected(...)`; when the executor was offline this
+            # branch matched nothing at all — no state write, no cancel sent,
+            # and (state never becoming CANCELLED) nothing for the replay
+            # query to ever find. The HTTP `/stop` endpoint's `STOPPABLE` set
+            # (`gateway/app/api/routes/sessions.py`, shared via
+            # `shared.protocol.STOPPABLE_TASK_STATES`) already wrote CANCELLED
+            # unconditionally for all eight of these states; this branch used
+            # to mirror only RUNNING, so a paused session survived a cancel
+            # through MCP untouched — the review that closed out #17 caught
+            # the gap and this branch was widened to match.
+            notified = hub.is_connected(task.executor_id)
+            if notified:
+                await hub.send(task.executor_id, hub_envelope(task.executor_id, "task.cancel", {"task_id": task.id}))
+            task = await store.update_task_state(session, task.id, TaskState.CANCELLED)
+            await hub.mark_task_finished(task.executor_id, task.id)
+            # HTTP `/stop` records who stopped a session
+            # (`gateway/app/api/routes/sessions.py`, `task.stopped_by_actor`);
+            # this branch wrote only `task.state_changed`, with no actor, so
+            # "who cancelled this session" depended on which door was used —
+            # unanswerable from the audit trail for the MCP one (issue #17
+            # council, "the second caller").
+            await record_event(
+                session,
+                "task",
+                task.id,
+                "task.stopped_by_actor",
+                {
+                    "actor_id": principal.user_id,
+                    "actor_email": principal.email,
+                    "via": "mcp",
+                    "executor_notified": notified,
+                },
+            )
+            await session.commit()
         payload = {"task_id": task.id, "state": task.state}
         result = _text_result(f"Cancellation requested for task {task.id}.", payload)
     elif tool_name == "approve_codex_task":

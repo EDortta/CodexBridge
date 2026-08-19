@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 79 file(s) · 542 symbol(s) indexed
-- Languages: config (2), python (75), shell (2)
+- 81 file(s) · 577 symbol(s) indexed
+- Languages: config (2), python (77), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -114,6 +114,7 @@ tests/
     test_auth.py  — "The mobile credential lifecycle — issue #4."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
+    test_reconnect_replay_resolves.py  — "Issue #17 council round 1 — the headline scenario named by findings 1, 4"
     test_sessions.py  — "Agent sessions, logs and control — issue #9."
     test_store_and_mcp.py
   unit/
@@ -121,6 +122,7 @@ tests/
     test_agent_service.py
     test_apply_migrations.py  — "The migration runner, exercised against real throwaway databases."
     test_codex_runner.py  — "CodexRunner's pause/resume/restart/cancel state machine — issue #16 council."
+    test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
     test_main_import.py
     test_policy.py
     test_rate_limiter_bounds.py  — "The limiter's key space must be bounded, or it becomes the resource exhausted."
@@ -137,6 +139,9 @@ tests/
 - **`RunningTask`** *(class)*
 - **`CodexRunner`** *(class)*
   - `__init__(self, settings)` *(method)*
+  - `is_known(self, task_id)` *(method)* — "Whether this runner has any record of the task at all."
+  - `mark_dispatched(self, task_id)` *(method)*
+  - `forget(self, task_id)` *(method)*
   - `cancel(self, task_id)` *(async method)*
   - `pause(self, task_id)` *(async method)*
   - `resume(self, task_id)` *(async method)*
@@ -401,6 +406,7 @@ tests/
 - `oauth_token(grant_type, code, redirect_uri, client_id, code_verifier, session)` *(async function)*
 - `mcp_endpoint(request, authorization, session)` *(async function)*
 - `handle_task_ack(session, envelope)` *(async function)* — "Handles one `task.ack` from the `/agent/ws` message loop."
+- `handle_task_cancelled(session, envelope)` *(async function)* — "Handles one `task.cancelled` ack from the `/agent/ws` message loop."
 - `agent_ws(websocket, executor_id, token, x_executor_token)` *(async function)*
 
 ### `gateway/app/mcp/server.py`
@@ -428,13 +434,13 @@ tests/
 
 - **`AgentConnection`** *(class)*
 - **`AgentHub`** *(class)*
-  - `__init__(self, session_factory)` *(method)*
+  - `__init__(self, session_factory, cancel_replay_max_age_seconds, control_replay_max_age_seconds)` *(method)*
   - `is_connected(self, executor_id)` *(method)*
   - `register(self, executor_id, websocket)` *(async method)*
   - `unregister(self, executor_id)` *(async method)*
   - `send(self, executor_id, envelope)` *(async method)*
   - `dispatch_next(self, executor_id)` *(async method)*
-  - `mark_task_finished(self, executor_id, task_id)` *(async method)*
+  - `mark_task_finished(self, executor_id, task_id)` *(async method)* — "Releases the slot `task_id` held and, if the executor is still"
 - `hub_envelope(executor_id, message_type, payload)` — "Build a message for an executor."
 
 ### `gateway/app/services/audit.py`
@@ -563,6 +569,10 @@ tests/
 - `test_a_rejected_pause_or_resume_reverts_to_the_state_it_assumed(factory, pending, control, expected_state)` *(async function)*
 - `test_a_rejected_restart_is_reported_as_failed_not_left_pending(factory)` *(async function)*
 - `test_an_accepted_ack_updates_state_and_is_recorded(factory)` *(async function)*
+- `test_a_rejected_ack_from_a_runner_that_lost_the_task_releases_the_slot(factory, monkeypatch, control)` *(async function)* — "issue #17 council round 1, "the sweep skeptic": before `known`"
+- `test_a_rejected_ack_from_a_runner_that_lost_the_task_is_not_replayed_again(factory, monkeypatch, control)` *(async function)* — "finding 11 (council round 2 on #17, "the claim auditor"): the branch"
+- `test_a_rejected_ack_from_a_runner_that_lost_the_task_dispatches_the_queue(factory, monkeypatch)` *(async function)* — "finding 10 (council round 2 on #17, "the sweep skeptic"): freeing the"
+- `test_an_older_agent_with_no_known_field_keeps_the_pre_existing_fallback(factory, monkeypatch)` *(async function)* — "Additive per design-standards.md §4: an agent build that predates the"
 
 ### `tests/integration/test_agent_hub.py`
 
@@ -574,6 +584,10 @@ tests/
 - `test_register_replays_a_pending_pause_that_never_got_an_ack(factory)` *(async function)* — "council 2026-08-18, "the sweep skeptic" / "the second caller": a task"
 - `test_register_replays_pending_resume_and_restart_too(factory)` *(async function)*
 - `test_acknowledged_cancel_is_not_replayed_and_allows_dispatch(factory)` *(async function)*
+- `test_cancel_replay_expires_after_max_age(factory)` *(async function)* — "A cancellation issued long ago is not chased on reconnect (issue #17):"
+- `test_cancel_replay_still_happens_within_max_age(factory)` *(async function)*
+- `test_control_replay_expires_after_max_age(factory)` *(async function)* — "issue #17 council round 1, "the sweep skeptic": unlike cancel replay,"
+- `test_control_replay_still_happens_within_max_age(factory)` *(async function)*
 
 ### `tests/integration/test_agent_ws_handshake.py`
 
@@ -753,6 +767,18 @@ tests/
 - `test_zero_cache_seconds_is_floored(monkeypatch)` — "A TTL of 0 would restore the uncached DoS, so it is not honoured."
 - `test_every_served_api_route_carries_the_rate_limiter()` — "`main.py` claimed every future /api route inherits the limiter. It does not."
 
+### `tests/integration/test_reconnect_replay_resolves.py`
+
+> Issue #17 council round 1 — the headline scenario named by findings 1, 4
+
+- **`DummyGatewaySocket`** *(class)*
+  - `__init__(self)` *(method)*
+  - `send_json(self, payload)` *(async method)*
+- `factory()` *(async function)*
+- `test_issue_17_headline_scenario_no_longer_stalls_the_queue(factory, monkeypatch)` *(async function)*
+- `test_rejected_approval_of_a_never_dispatched_task_does_not_pin_the_slot(factory, monkeypatch)` *(async function)* — "The second scenario in finding 1: a task that was never dispatched at"
+- `test_cancel_ack_immediately_dispatches_the_next_queued_task(factory, monkeypatch)` *(async function)* — "finding 10 (council round 2 on #17, "the sweep skeptic"): the two tests"
+
 ### `tests/integration/test_sessions.py`
 
 > Agent sessions, logs and control — issue #9.
@@ -807,6 +833,7 @@ tests/
   - `is_connected(self, executor_id)` *(method)*
   - `dispatch_next(self, executor_id)` *(async method)*
   - `send(self, executor_id, envelope)` *(async method)*
+  - `mark_task_finished(self, executor_id, task_id)` *(async method)*
 - `db_session()` *(async function)*
 - `test_offline_task_rejected_without_queue(db_session)` *(async function)*
 - `test_offline_task_queued_when_allowed(db_session)` *(async function)*
@@ -815,6 +842,10 @@ tests/
 - `test_mcp_submit_task_rejects_project_outside_user_scope(db_session)` *(async function)*
 - `test_task_logs_and_status_are_limited_to_task_owner(db_session)` *(async function)*
 - `test_approval_moves_task_back_to_queue(db_session)` *(async function)*
+- `test_mcp_cancel_of_a_disconnected_running_task_writes_cancelled(db_session)` *(async function)* — "Issue #17's own context claims the HTTP `/stop` endpoint and the MCP"
+- `test_mcp_cancel_of_a_connected_running_task_sends_and_writes_cancelled(db_session)` *(async function)*
+- `test_mcp_cancel_of_a_pending_control_state_writes_cancelled(db_session, pending_state)` *(async function)* — "Review of #17's own delivery: `cancel_codex_task` matched only RUNNING,"
+- `test_mcp_cancel_records_who_cancelled_it(db_session, initial_state, connect_executor, slot_was_held)` *(async function)* — "issue #17 council round 1, "the second caller": HTTP `/stop` records"
 - `test_startup_recovery_marks_running_as_lost(db_session)` *(async function)*
 - `test_startup_recovery_marks_pending_control_states_as_lost(db_session, pending_state)` *(async function)* — "council 2026-08-18, round 2, "the second caller": issue #16 added these"
 
@@ -835,15 +866,21 @@ tests/
   - `__init__(self)` *(method)*
   - `send(self, payload)` *(async method)*
 - **`FailingRunner`** *(class)*
+  - `mark_dispatched(self, _)` *(method)*
+  - `forget(self, _)` *(method)*
   - `run_task(self, **_)` *(async method)*
 - **`ControlRunner`** *(class)*
   - `__init__(self)` *(method)*
+  - `is_known(self, _)` *(method)*
   - `pause(self, _)` *(async method)*
   - `resume(self, _)` *(async method)*
   - `restart(self, _)` *(async method)*
 - `test_dispatch_failure_returns_task_result(tmp_path)` *(async function)*
 - `test_machine_token_travels_in_a_header_not_the_url(monkeypatch)` *(async function)* — "The token in the query string was logged verbatim 107 times (#15)."
 - `test_pause_resume_and_restart_controls_acknowledge_over_the_socket(monkeypatch)` *(async function)* — "Drives the real `_run_once` dispatch loop, not a copy of it."
+- `test_cancel_of_an_unknown_task_still_acks_over_the_socket(monkeypatch)` *(async function)* — "issue #17 council round 1, "the claim auditor" / "the second caller":"
+- `test_pause_of_an_unknown_task_reports_known_false(monkeypatch)` *(async function)* — "The control-message sibling of the cancel case above (issue #17"
+- `test_handle_dispatch_forgets_the_task_only_after_the_result_is_sent(tmp_path)` *(async function)* — "finding 14 (council round 2, "the second caller"): before this fix,"
 
 ### `tests/unit/test_apply_migrations.py`
 
@@ -874,11 +911,21 @@ tests/
 - `test_resume_signals_sigcont_and_clears_paused()` *(async function)*
 - `test_resume_refuses_when_not_paused()` *(async function)*
 - `test_restart_resumes_a_paused_process_before_terminating_it()` *(async function)*
+- `test_cancel_refuses_an_unknown_task()` *(async function)* — "The gateway replays `task.cancel` on reconnect for a task the executor"
+- `test_is_known_reflects_mark_dispatched_not_the_running_process_dict()` — "council round 2 on #17, "the second caller": `is_known` used to check"
 - `test_cancel_resumes_a_paused_process_before_terminating_it()` *(async function)*
 - `test_cancel_after_restart_clears_the_pending_restart()` *(async function)* — "council 2026-08-18, "the second caller", reproduced live: restart()"
 - `test_terminate_gracefully_resumes_a_paused_process_before_terminating()` *(async function)*
 - `test_terminate_gracefully_does_not_signal_cont_when_not_paused()` *(async function)*
 - `test_terminate_gracefully_falls_back_to_kill_if_still_stuck()` *(async function)* — "The safety net behind the SIGCONT fix: a process that does not end"
+
+### `tests/unit/test_config_settings.py`
+
+> issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`
+
+- `test_a_replay_window_far_past_the_overflow_point_is_rejected_at_startup(field)`
+- `test_a_replay_window_at_the_documented_ceiling_is_accepted(field)`
+- `test_a_negative_replay_window_is_rejected(field)`
 
 ### `tests/unit/test_main_import.py`
 

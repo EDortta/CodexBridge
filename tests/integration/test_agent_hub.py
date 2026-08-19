@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.app.db.base import Base
+from gateway.app.models.entities import AuditEventModel
 from gateway.app.services import store
 from gateway.app.services.audit import record_event
 from gateway.app.services.agent_hub import AgentHub
@@ -141,3 +143,72 @@ async def test_acknowledged_cancel_is_not_replayed_and_allows_dispatch(factory) 
     assert websocket.sent == []
     assert dispatch is not None
     assert dispatch["task_id"] == queued_id
+
+
+@pytest.mark.asyncio
+async def test_cancel_replay_expires_after_max_age(factory) -> None:
+    """A cancellation issued long ago is not chased on reconnect (issue #17):
+    the executor that reappears a week later has almost certainly already
+    finished the run, so replaying `task.cancel` past the configured window
+    would just be stale noise, not a correctness fix."""
+    cancelled_id = await _make_task(factory, instruction="cancel me", state=TaskState.CANCELLED)
+    async with factory() as session:
+        task = await session.get(store.TaskModel, cancelled_id)
+        task.completed_at = datetime.now(timezone.utc) - timedelta(days=2)
+        await session.commit()
+    hub = AgentHub(factory, cancel_replay_max_age_seconds=86400)
+    websocket = DummyWebSocket()
+
+    await hub.register("E1", websocket)
+
+    assert websocket.sent == []
+    assert cancelled_id not in hub.running_tasks["E1"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_replay_still_happens_within_max_age(factory) -> None:
+    cancelled_id = await _make_task(factory, instruction="cancel me", state=TaskState.CANCELLED)
+    async with factory() as session:
+        task = await session.get(store.TaskModel, cancelled_id)
+        task.completed_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        await session.commit()
+    hub = AgentHub(factory, cancel_replay_max_age_seconds=86400)
+    websocket = DummyWebSocket()
+
+    await hub.register("E1", websocket)
+
+    assert [payload["payload"]["task_id"] for payload in websocket.sent] == [cancelled_id]
+
+
+@pytest.mark.asyncio
+async def test_control_replay_expires_after_max_age(factory) -> None:
+    """issue #17 council round 1, "the sweep skeptic": unlike cancel replay,
+    `list_tasks_requiring_control_replay` had no age bound at all — a task
+    stuck in PAUSING a year ago was replayed on every single reconnect,
+    forever."""
+    pausing_id = await _make_task(factory, instruction="pause me", state=TaskState.PAUSING)
+    async with factory() as session:
+        events = (
+            await session.execute(select(AuditEventModel).where(AuditEventModel.entity_id == pausing_id))
+        ).scalars().all()
+        for event in events:
+            event.created_at = datetime.now(timezone.utc) - timedelta(days=365)
+        await session.commit()
+    hub = AgentHub(factory, control_replay_max_age_seconds=86400)
+    websocket = DummyWebSocket()
+
+    await hub.register("E1", websocket)
+
+    assert websocket.sent == []
+    assert pausing_id not in hub.running_tasks["E1"]
+
+
+@pytest.mark.asyncio
+async def test_control_replay_still_happens_within_max_age(factory) -> None:
+    pausing_id = await _make_task(factory, instruction="pause me", state=TaskState.PAUSING)
+    hub = AgentHub(factory, control_replay_max_age_seconds=86400)
+    websocket = DummyWebSocket()
+
+    await hub.register("E1", websocket)
+
+    assert [payload["payload"]["task_id"] for payload in websocket.sent] == [pausing_id]

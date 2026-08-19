@@ -41,6 +41,47 @@ class TaskState(str, Enum):
     LOST = "lost"
 
 
+# States from which a cancel is meaningful, shared by the HTTP `/stop` route
+# and the MCP `cancel_codex_task` tool. A single definition so the two
+# surfaces cannot drift the way they did before issue #17's review caught
+# `cancel_codex_task` silently no-op'ing on `paused`/`pausing`/`resuming`/
+# `restarting` while `/stop` already covered them.
+STOPPABLE_TASK_STATES = frozenset(
+    {
+        TaskState.QUEUED.value,
+        TaskState.WAITING_EXECUTOR.value,
+        TaskState.PAUSING.value,
+        TaskState.PAUSED.value,
+        TaskState.RESUMING.value,
+        TaskState.RESTARTING.value,
+        TaskState.RUNNING.value,
+        TaskState.AWAITING_APPROVAL.value,
+    }
+)
+
+# Default window (seconds) a cancelled-but-unacknowledged task stays worth
+# resending `task.cancel` for on executor reconnect. One literal, referenced
+# by `Settings.cancel_replay_max_age_seconds`, `AgentHub.__init__` and
+# `store.list_tasks_requiring_cancel_replay` so the three cannot drift apart.
+DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS = 86400
+
+# Same idea, for tasks stuck in PAUSING/RESUMING/RESTARTING with no `task.ack`
+# (issue #17 council, "the sweep skeptic"): `list_tasks_requiring_control_replay`
+# used to have no bound at all, unlike its cancel sibling above, so a
+# year-old pending control was replayed on every reconnect forever.
+DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS = 86400
+
+# Upper bound accepted for either replay window. `datetime.now(tz) -
+# timedelta(seconds=...)` raises `OverflowError` well before this — the cap
+# exists so a misconfigured operator gets a rejected setting at startup
+# instead of every `AgentHub.register()` crashing after `websocket.accept()`,
+# which left a dead connection in `hub.connections` with no way to close it
+# (issue #17 council, "the second caller"). 10 years is generous against any
+# realistic "replay indefinitely" intent without going anywhere near the
+# `timedelta` ceiling (~2.7e11 seconds).
+MAX_REPLAY_MAX_AGE_SECONDS = 315360000
+
+
 class PolicyLevel(str, Enum):
     READ = "read"
     CONTROLLED_WRITE = "controlled_write"

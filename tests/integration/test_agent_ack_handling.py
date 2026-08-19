@@ -23,10 +23,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import gateway.app.main as main_module
 from gateway.app.db.base import Base
 from gateway.app.main import handle_task_ack
 from gateway.app.models.entities import AuditEventModel
 from gateway.app.services import store
+from gateway.app.services.agent_hub import AgentConnection, AgentHub
 from shared.protocol import (
     AgentEnvelope,
     AgentMessageType,
@@ -82,13 +84,18 @@ async def _make_task(factory, *, executor_id: str, project_id: str, state: TaskS
         return task.id
 
 
-def _ack_envelope(*, executor_id: str, task_id: str, control: str, accepted: bool, state: str | None) -> AgentEnvelope:
+def _ack_envelope(
+    *, executor_id: str, task_id: str, control: str, accepted: bool, state: str | None, known: bool | None = None
+) -> AgentEnvelope:
+    payload = {"task_id": task_id, "control": control, "accepted": accepted, "state": state}
+    if known is not None:
+        payload["known"] = known
     return AgentEnvelope(
         message_id=f"{control}-{task_id}",
         executor_id=executor_id,
         sent_at=datetime.now(timezone.utc),
         type=AgentMessageType.TASK_ACK,
-        payload={"task_id": task_id, "control": control, "accepted": accepted, "state": state},
+        payload=payload,
     )
 
 
@@ -213,3 +220,133 @@ async def test_an_accepted_ack_updates_state_and_is_recorded(factory) -> None:
 
     assert task.state == TaskState.PAUSED.value
     assert "task.control_acknowledged" in [e.event_type for e in events]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("control", ["pause", "resume", "restart"])
+async def test_a_rejected_ack_from_a_runner_that_lost_the_task_releases_the_slot(
+    factory, monkeypatch, control
+) -> None:
+    """issue #17 council round 1, "the sweep skeptic": before `known`
+    existed, a rejection from a runner that had genuinely lost track of the
+    task (its host restarted) was indistinguishable from a rejection on a
+    live runner for a real reason. `_CONTROL_REJECTION_FALLBACK` reverted to
+    RUNNING/PAUSED — a lie, since nothing is actually running there — and
+    never released `hub.running_tasks`, so the concurrency slot stayed
+    pinned forever: nothing else ever calls `mark_task_finished` for it.
+    """
+    pending_state = {"pause": TaskState.PAUSING, "resume": TaskState.RESUMING, "restart": TaskState.RESTARTING}[control]
+    task_id = await _make_task(factory, executor_id="E1", project_id="p1", state=pending_state)
+
+    hub = AgentHub(factory)
+    hub.running_tasks["E1"] = {task_id}
+    monkeypatch.setattr(main_module, "hub", hub, raising=False)
+
+    async with factory() as session:
+        await handle_task_ack(
+            session,
+            _ack_envelope(
+                executor_id="E1", task_id=task_id, control=control, accepted=False, state=None, known=False
+            ),
+        )
+
+    async with factory() as session:
+        task = await store.get_task(session, task_id)
+
+    assert task.state == TaskState.CANCELLED.value
+    assert task_id not in hub.running_tasks["E1"]
+
+
+class _DummyWebSocket:
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+
+    async def send_json(self, payload: dict) -> None:
+        self.sent.append(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("control", ["pause", "resume", "restart"])
+async def test_a_rejected_ack_from_a_runner_that_lost_the_task_is_not_replayed_again(
+    factory, monkeypatch, control
+) -> None:
+    """finding 11 (council round 2 on #17, "the claim auditor"): the branch
+    above writes CANCELLED for a ghost task but, before this fix, never
+    recorded `task.cancel_acknowledged` — the only thing
+    `store.list_tasks_requiring_cancel_replay` checks to exclude a CANCELLED
+    task from replay. The very next reconnect replayed `task.cancel` for a
+    task the gateway had already resolved, re-pinning the slot right where
+    the queue would restart.
+    """
+    pending_state = {"pause": TaskState.PAUSING, "resume": TaskState.RESUMING, "restart": TaskState.RESTARTING}[control]
+    task_id = await _make_task(factory, executor_id="E1", project_id="p1", state=pending_state)
+
+    hub = AgentHub(factory)
+    hub.running_tasks["E1"] = {task_id}
+    monkeypatch.setattr(main_module, "hub", hub, raising=False)
+
+    async with factory() as session:
+        await handle_task_ack(
+            session,
+            _ack_envelope(
+                executor_id="E1", task_id=task_id, control=control, accepted=False, state=None, known=False
+            ),
+        )
+
+    async with factory() as session:
+        replay = await store.list_tasks_requiring_cancel_replay(session, "E1", max_age_seconds=86400)
+
+    assert replay == []
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_ack_from_a_runner_that_lost_the_task_dispatches_the_queue(factory, monkeypatch) -> None:
+    """finding 10 (council round 2 on #17, "the sweep skeptic"): freeing the
+    slot here used to leave it empty until an unrelated event (a later
+    reconnect, a new submit) nudged `dispatch_next` — the exact starvation
+    issue #17 itself is about, reintroduced by this branch's own ghost-task
+    resolution.
+    """
+    task_id = await _make_task(factory, executor_id="E1", project_id="p1", state=TaskState.PAUSING)
+    queued_id = await _make_task(factory, executor_id="E1", project_id="p1", state=TaskState.WAITING_EXECUTOR)
+
+    hub = AgentHub(factory)
+    hub.running_tasks["E1"] = {task_id}
+    socket = _DummyWebSocket()
+    hub.connections["E1"] = AgentConnection(executor_id="E1", websocket=socket, connected_at=datetime.now(timezone.utc))
+    monkeypatch.setattr(main_module, "hub", hub, raising=False)
+
+    async with factory() as session:
+        await handle_task_ack(
+            session,
+            _ack_envelope(executor_id="E1", task_id=task_id, control="pause", accepted=False, state=None, known=False),
+        )
+
+    assert queued_id in hub.running_tasks["E1"]
+    dispatched = [message for message in socket.sent if message["type"] == "task.dispatch"]
+    assert len(dispatched) == 1
+    assert dispatched[0]["payload"]["task_id"] == queued_id
+
+
+@pytest.mark.asyncio
+async def test_an_older_agent_with_no_known_field_keeps_the_pre_existing_fallback(factory, monkeypatch) -> None:
+    """Additive per design-standards.md §4: an agent build that predates the
+    `known` field omits it entirely, and the gateway must not start treating
+    every one of its rejections as a lost task."""
+    task_id = await _make_task(factory, executor_id="E1", project_id="p1", state=TaskState.PAUSING)
+
+    hub = AgentHub(factory)
+    hub.running_tasks["E1"] = {task_id}
+    monkeypatch.setattr(main_module, "hub", hub, raising=False)
+
+    async with factory() as session:
+        await handle_task_ack(
+            session,
+            _ack_envelope(executor_id="E1", task_id=task_id, control="pause", accepted=False, state=None),
+        )
+
+    async with factory() as session:
+        task = await store.get_task(session, task_id)
+
+    assert task.state == TaskState.RUNNING.value
+    assert task_id in hub.running_tasks["E1"]

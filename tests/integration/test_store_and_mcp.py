@@ -5,9 +5,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from sqlalchemy import select
+
 from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.db.base import Base
 from gateway.app.mcp.server import handle_mcp_call
+from gateway.app.models.entities import AuditEventModel
 from gateway.app.services import store
 from shared.protocol import ApprovalDecision, ExecutorRegistration, ProjectRegistration, SubmitTaskRequest, TaskMode, TaskPriority, TaskState
 
@@ -15,6 +18,8 @@ from shared.protocol import ApprovalDecision, ExecutorRegistration, ProjectRegis
 class DummyHub:
     def __init__(self):
         self.connected: set[str] = set()
+        self.sent: list[tuple[str, object]] = []
+        self.finished: list[tuple[str, str]] = []
 
     def is_connected(self, executor_id: str) -> bool:
         return executor_id in self.connected
@@ -23,7 +28,10 @@ class DummyHub:
         return None
 
     async def send(self, executor_id: str, envelope):
-        return None
+        self.sent.append((executor_id, envelope))
+
+    async def mark_task_finished(self, executor_id: str, task_id: str) -> None:
+        self.finished.append((executor_id, task_id))
 
 
 ADMIN = AuthenticatedPrincipal(
@@ -228,6 +236,157 @@ async def test_approval_moves_task_back_to_queue(db_session: AsyncSession):
     assert task.state == TaskState.AWAITING_APPROVAL.value
     task = await store.decide_task_approval(db_session, task.id, ApprovalDecision.APPROVED, "manual approval")
     assert task.state == TaskState.WAITING_EXECUTOR.value
+
+
+@pytest.mark.asyncio
+async def test_mcp_cancel_of_a_disconnected_running_task_writes_cancelled(db_session: AsyncSession):
+    """Issue #17's own context claims the HTTP `/stop` endpoint and the MCP
+    `cancel_codex_task` tool "both send task.cancel only if the executor is
+    currently connected" and otherwise still write the session cancelled so a
+    later reconnect can replay it. That held for HTTP but not for MCP: a
+    RUNNING task with its executor disconnected matched neither of
+    cancel_codex_task's two branches — no state write, no cancel sent, and
+    (state never becoming CANCELLED) nothing for
+    store.list_tasks_requiring_cancel_replay to ever find. Found while
+    verifying #17, fixed to mirror stop_session's unconditional write."""
+    task = await store.create_task(db_session, _submit(run_when_available=True), executor_online=True)
+    task = await store.update_task_state(db_session, task.id, TaskState.RUNNING)
+
+    hub = DummyHub()  # T610 not in hub.connected — disconnected
+    response = await handle_mcp_call(
+        {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {"name": "cancel_codex_task", "arguments": {"task_id": task.id}},
+        },
+        db_session,
+        hub,
+        ADMIN,
+    )
+
+    reloaded = await store.get_task(db_session, task.id)
+    assert reloaded.state == TaskState.CANCELLED.value
+    assert response["result"]["structuredContent"]["state"] == TaskState.CANCELLED.value
+    assert hub.sent == []  # nothing to send — the executor is not there to send it to
+    assert hub.finished == [("T610", task.id)]  # concurrency slot released immediately, not left for an ack that will never come
+
+    replay = await store.list_tasks_requiring_cancel_replay(db_session, "T610")
+    assert [t.id for t in replay] == [task.id]
+
+
+@pytest.mark.asyncio
+async def test_mcp_cancel_of_a_connected_running_task_sends_and_writes_cancelled(db_session: AsyncSession):
+    task = await store.create_task(db_session, _submit(run_when_available=True), executor_online=True)
+    task = await store.update_task_state(db_session, task.id, TaskState.RUNNING)
+
+    hub = DummyHub()
+    hub.connected.add("T610")
+    await handle_mcp_call(
+        {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {"name": "cancel_codex_task", "arguments": {"task_id": task.id}},
+        },
+        db_session,
+        hub,
+        ADMIN,
+    )
+
+    reloaded = await store.get_task(db_session, task.id)
+    assert reloaded.state == TaskState.CANCELLED.value
+    assert len(hub.sent) == 1
+    assert hub.sent[0][0] == "T610"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pending_state",
+    [TaskState.PAUSING, TaskState.PAUSED, TaskState.RESUMING, TaskState.RESTARTING],
+)
+async def test_mcp_cancel_of_a_pending_control_state_writes_cancelled(
+    db_session: AsyncSession, pending_state: TaskState
+):
+    """Review of #17's own delivery: `cancel_codex_task` matched only RUNNING,
+    so cancelling a PAUSED/PAUSING/RESUMING/RESTARTING session through MCP
+    returned 200 with the session's *unchanged* state, sent no `task.cancel`,
+    wrote nothing, and left nothing for
+    store.list_tasks_requiring_cancel_replay to ever find on reconnect —
+    exactly the failure #17 exists to close, reachable because #16 made these
+    four states possible. The HTTP `/stop` endpoint already covered them
+    (`STOPPABLE`, `gateway/app/api/routes/sessions.py`); the MCP tool now
+    shares the same `shared.protocol.STOPPABLE_TASK_STATES` set."""
+    task = await store.create_task(db_session, _submit(run_when_available=True), executor_online=True)
+    task = await store.update_task_state(db_session, task.id, pending_state)
+
+    hub = DummyHub()
+    hub.connected.add("T610")
+    response = await handle_mcp_call(
+        {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {"name": "cancel_codex_task", "arguments": {"task_id": task.id}},
+        },
+        db_session,
+        hub,
+        ADMIN,
+    )
+
+    reloaded = await store.get_task(db_session, task.id)
+    assert reloaded.state == TaskState.CANCELLED.value
+    assert response["result"]["structuredContent"]["state"] == TaskState.CANCELLED.value
+    assert len(hub.sent) == 1
+    assert hub.sent[0][0] == "T610"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_state", "connect_executor", "slot_was_held"),
+    [
+        (TaskState.RUNNING, True, True),
+        # WAITING_EXECUTOR never held a concurrency slot (never dispatched),
+        # so there is nothing for `mark_task_finished` to release.
+        (TaskState.WAITING_EXECUTOR, False, False),
+    ],
+)
+async def test_mcp_cancel_records_who_cancelled_it(
+    db_session: AsyncSession, initial_state: TaskState, connect_executor: bool, slot_was_held: bool
+):
+    """issue #17 council round 1, "the second caller": HTTP `/stop` records
+    `task.stopped_by_actor` (actor_id/actor_email/via) so "who cancelled this
+    session" is answerable from the audit trail — half of #9's own
+    acceptance criterion. `cancel_codex_task` wrote only the actor-less
+    `task.state_changed`, so the audit answer to that question depended on
+    which door was used to cancel a session."""
+    task = await store.create_task(db_session, _submit(run_when_available=True), executor_online=True)
+    if initial_state != TaskState.WAITING_EXECUTOR:
+        task = await store.update_task_state(db_session, task.id, initial_state)
+
+    hub = DummyHub()
+    if connect_executor:
+        hub.connected.add("T610")
+    await handle_mcp_call(
+        {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {"name": "cancel_codex_task", "arguments": {"task_id": task.id}},
+        },
+        db_session,
+        hub,
+        ADMIN,
+    )
+
+    events = (
+        await db_session.execute(select(AuditEventModel).where(AuditEventModel.entity_id == task.id))
+    ).scalars().all()
+    actor_events = [e for e in events if e.event_type == "task.stopped_by_actor"]
+    assert len(actor_events) == 1
+    assert '"actor_id": "admin"' in actor_events[0].payload_json
+    assert '"via": "mcp"' in actor_events[0].payload_json
+    assert hub.finished == ([("T610", task.id)] if slot_was_held else [])
 
 
 @pytest.mark.asyncio
