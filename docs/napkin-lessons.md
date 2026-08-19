@@ -191,3 +191,197 @@ Questions carried forward:
 - A "the security check was added, but does the ownership guard actually gate on the *acking* identity or the *acted-on* one" question is worth asking on every new WebSocket message-type handler in this codebase, not just this one: `handle_task_ack`'s ownership bug (any executor could forge an ack for any task_id) existed because the handler trusted the payload's own claim about which task it referred to, with no cross-check against who was actually asking. The fix pattern — fetch the real record first, compare its owning field against the authenticated caller, refuse before touching state — is the same shape `require_action`/`visible_projects` already use on the HTTP side; the websocket surface had grown without the equivalent.
 - Extracting an inline `while True:` message-loop branch into its own top-level function (`handle_task_ack`) turned three round-1 findings and one round-2 finding from "hard to test without a live websocket and its timing" into "call the function with a constructed envelope and a real DB session." The first attempt at testing this (before the extraction) used `TestClient.websocket_connect` against an isolated in-memory DB and hung/gave false-negative results for reasons that took real debugging time to trace to `asyncio`'s subprocess/test-transport synchronization, not the code under test — a reminder that when a websocket integration test's failure mode looks like "the message was never processed," the first thing to question is whether the test actually waited for it to be processed, not whether the handler is broken.
 - `asyncio.subprocess.Process.wait()` was unreliable under real system load for a purpose-built integration test that spawned a real child, `SIGSTOP`'d it, and expected a bounded `SIGCONT`+`SIGTERM` sequence to reap it within seconds — the same script run via plain shell `kill` was reliable every time, but via `asyncio.create_subprocess_exec` on a loaded host it was not, even *without* any pause/resume involved. Chased far enough to conclude it was scheduling/load noise, not a bug in the SIGCONT-before-terminate fix itself (which pure state-machine unit tests against a fake process pin directly and deterministically) — but real-subprocess-plus-real-signals integration tests in this codebase should budget for that flakiness rather than trust a single green run, and a fake-process unit test is preferred wherever the logic under test can be expressed as "signals sent, in what order" rather than "did the OS actually converge."
+
+## 2026-08-18 — WK-20260818-gh-17-cancel-replay-ttl
+
+- Before implementing an issue, check whether an *earlier* issue's delivery already closed it as a side effect: #16 (pause/resume/restart reconnect replay) generalized the existing `task.cancel`-only replay into a shared mechanism that also covered #17's core ask, and its own docstrings said so (`gateway/app/api/routes/sessions.py`'s `_dispatch_cancel`, `docs/api/codex-bridge.openapi.yaml`'s `stop` description). `git log -p` on the touched files plus a repo-wide grep for the issue number surfaces this fast; without it, this session would have re-implemented an already-working mechanism instead of finding the one real gap (no TTL on the replay) and the two documentation gaps (`docs/protocol.md` had no reconnect section at all).
+- A config field that is declared but never referenced anywhere (`reconnect_grace_seconds` in `gateway/app/core/config.py`, grep-confirmed zero call sites) is a trap when a task needs "add a timeout/TTL setting" — its name looks like a plausible fit but its value (120s) and total absence of wiring suggest it was scaffolding for a different, unfinished idea. Grep for a candidate setting's usage before repurposing it; adding a new, clearly-named field cost nothing here and avoided silently changing the behavior of whatever `reconnect_grace_seconds` was actually meant for.
+- When inserting new test functions between two statements of an existing test with `Edit`'s exact-match `old_string`/`new_string`, double check the existing file for a trailing line that isn't blank-line-separated from the block being matched — `tests/integration/test_agent_hub.py` had `assert dispatch["task_id"] == queued_id` glued directly under a prior `assert`, one line I didn't include in the match, and it silently reattached itself (by indentation, not by intent) to the end of the last newly-inserted function, becoming a `NameError` instead of a lost assertion. Caught by running the suite immediately after the edit, not by re-reading the diff.
+- Two call sites checking the same state set (`STOPPABLE` in `gateway/app/api/routes/sessions.py`, and the MCP `cancel_codex_task` handler's own copy in `gateway/app/mcp/server.py`) drifted apart silently: one gained four states with #16 (`paused`/`pausing`/`resuming`/`restarting`), the other stayed at the original set, and a misleading code comment claimed parity that a grep across both files would have disproven in seconds. A review caught it; nothing in the test suite would have, because each surface's tests only exercised its own copy of the set. When a set of states/flags is checked at more than one call site for the "same" reason, define it once (`shared.protocol.STOPPABLE_TASK_STATES` now) and import it at both — the alternative is trusting every future editor to update both copies together, which is exactly the guard `AGENTS.md` §3's "a guard belongs inside the dangerous operation, not at the caller" is warning about, one layer up.
+- When a session's own report claims a contract change is "docs-only," verify that by grepping the diff for the endpoint/tool's actual response-construction code, not by re-reading the prose describing it — the `cancel_codex_task` MCP handler's returned `state` field changed for a connected RUNNING task (`running` → `cancelled`, immediate slot release) in the same diff the report described as `contract changed: yes (docs-only)`. The code was correct and intentional; only the report was wrong, and it was wrong because the report was written from what the session meant to do, not from a fresh read of the final diff.
+
+## 2026-08-18 — council round 1 on #17, closure
+
+Round 1 (§4 of `.docs/agents/council.md`): 3 lenses (sweep skeptic, claim auditor,
+second caller), 9 findings raised, 9 survived §2 (each named trigger/wrong
+outcome/location/evidence), 0 questions left open. **Corrected by round 2,
+finding 13**: this entry originally said "all 9 closed with a failing test ...
+no risk acceptances" and contradicted itself 15 lines later — 3 of the 9 were
+not test-closed. The accurate count is 6 closed with a failing test (1, 2, 4,
+7, 8, 9), 2 closed by inspection with no test possible (3 and 5,
+documentation-only — see below), and 1 closed by staging the working tree to
+match what was reviewed (finding 6, no test possible for a git-index state).
+No risk acceptances; no finding contradicted a project rule. New tests:
+`tests/integration/test_reconnect_replay_resolves.py` (findings 1/4/7 —
+`AgentService` now sends `task.cancelled`/`task.ack{known:false}`
+unconditionally, so a fresh `CodexRunner`'s "unknown task" no longer starves
+`hub.running_tasks` forever), `tests/unit/test_config_settings.py` (finding 8 —
+`cancel_replay_max_age_seconds`/`control_replay_max_age_seconds` capped at
+`MAX_REPLAY_MAX_AGE_SECONDS` so an operator-set value near a `timedelta`
+overflow can no longer crash every `AgentHub.register()`), plus additions to
+`test_agent_hub.py` (finding 2 — control replay now bounded like cancel
+replay), `test_agent_ack_handling.py`/`test_agent_service.py` (the `known`
+field distinguishing "runner lost the task" from "runner refuses for a live
+reason"), and `test_store_and_mcp.py` (finding 9 — MCP `cancel_codex_task`
+now records `task.stopped_by_actor` same as HTTP; the state-set-widening half
+of that file's new coverage is finding 6's fix in the review that preceded
+this round, not this round's finding 9). Findings 3 and 5 were
+documentation-only (`docs/operations.md`, `docs/architecture.md`,
+`docs/api/codex-bridge.openapi.yaml`, `gateway/app/api/routes/sessions.py`'s
+`_dispatch_cancel` docstring all claimed the cancel-replay resend was
+unconditional; corrected to name the TTL) and close by inspection, not a
+test — prose has no runtime to assert against. Finding 6 (the staged index
+did not match the reviewed, review-fixed working tree — a plain `git commit`
+would have shipped the pre-review-fix, still-BLOCKER content) closed by
+`git add`ing every changed file so the index equals the working tree; also no
+test possible, verified instead with `git diff --stat` (empty) and
+`git diff --cached --stat`.
+
+Three of the new tests were themselves wrong when this round picked the work
+back up: two `test_agent_service.py` cases and two `test_reconnect_replay_resolves.py`
+cases asserted on `socket.sent[0]`/`len(socket.sent) == 1`, not accounting for
+`AgentService._run_once` sending a `HELLO` envelope before anything else —
+green against the fix by accident would have been red against a broken build
+just as easily, since the index was wrong regardless of what the handler did.
+Fixed by filtering `socket.sent` for the envelope type under test, the same
+pattern the file's own earlier `test_pause_resume_and_restart_controls_...`
+already used two tests above the broken ones — worth grep'ing a file's
+existing passing tests for the shape of a fixture before trusting a newly
+added test that skips it. A fourth, `test_mcp_cancel_records_who_cancelled_it`,
+asserted `hub.mark_task_finished` fires for a `WAITING_EXECUTOR` cancel, which
+never held a concurrency slot in the first place — the assertion was copied
+from the `RUNNING` case's parametrization without adjusting for what changed.
+`docs/codemap.md` was stale for the two new test files (`governancekit --root
+. map` regenerates it; nothing does so automatically, `tests/contract/test_docs_match_the_runtime.py`
+is the only reminder). Verifying findings 1/4/7/2/8/9 by reverting each fix in
+turn and re-running its test is safe only against a disposable copy of the
+tree, never in place with `git checkout --` on a file whose only copy of the
+fix was unstaged — doing that once during this round's verification silently
+discarded `agent/codex_bridge_agent/service.py`'s working-tree-only fix
+(`git checkout --` restores from the index, not from "the version before my
+last edit"), caught immediately by the full suite dropping from 345 to 342
+and recovered by rewriting the file from this transcript's own earlier
+`Read` output — the safer shape is `cp -r <repo> /tmp/<scratch>` with an
+absolute destination and no `cd`, so a later `git checkout` in the scratch
+copy cannot reach the real tree at all.
+
+## 2026-08-18 — council round 2 on #17, closure
+
+Round 2 (§4 of `.docs/agents/council.md`): 2 lenses re-run against the
+round-1 closure (sweep skeptic, claim auditor, second caller — same three as
+round 1, since round 2 is a check on round 1's fixes, not a new selection),
+15 findings raised: findings 1-9 were the auditor's confirmation that round
+1's fixes held (all confirmed holding, no new evidence against them);
+findings 10-15 were new, all survived §2. 0 questions left open, no risk
+acceptances, no finding contradicted a project rule.
+
+The real bug findings 10, 11 and 14 name are one shape repeated three times:
+freeing an executor's concurrency slot (`AgentHub.running_tasks`) and
+resolving a task's CANCELLED state are necessary but not sufficient — the
+queue also has to be nudged, and the ack that resolves a ghost task has to
+be recorded so it is not treated as fresh on the next reconnect. Fixed at
+the root rather than at each call site:
+
+- **Finding 10** — `AgentHub.mark_task_finished` now dispatches the next
+  queued task itself (and sends it, if the executor is still connected)
+  instead of leaving that to whichever caller happens to remember, the way
+  only the `TASK_RESULT` branch in `gateway/app/main.py` did before. This
+  closes the gap for the `TASK_CANCELLED` branch and the `known=False`
+  ghost-resolution branch named by the finding, and for two callers the
+  finding did not name but share the same defect — HTTP `/stop` and MCP
+  `cancel_codex_task` — for free, because the fix lives inside the one
+  method all four already call. New tests:
+  `test_reconnect_replay_resolves.py::test_cancel_ack_immediately_dispatches_the_next_queued_task`,
+  `test_agent_ack_handling.py::test_a_rejected_ack_from_a_runner_that_lost_the_task_dispatches_the_queue`.
+  Two round-1 tests had to change alongside this fix, not because they were
+  wrong but because they asserted the old workaround: both called
+  `hub.dispatch_next` themselves right after `handle_task_cancelled`, which
+  is the one call production never made — now that production makes it
+  inside `mark_task_finished`, the slot is already filled by the time the
+  test's own `dispatch_next` runs, so it correctly returns `None`.
+- **Finding 11** — the `known=False` branch in `handle_task_ack`
+  (`gateway/app/main.py`) wrote CANCELLED but never recorded
+  `task.cancel_acknowledged`, the only row `list_tasks_requiring_cancel_replay`
+  checks to exclude a CANCELLED task from replay — so the next reconnect
+  replayed `task.cancel` for a task the gateway had already resolved. Fixed
+  by recording it. New test:
+  `test_agent_ack_handling.py::test_a_rejected_ack_from_a_runner_that_lost_the_task_is_not_replayed_again`.
+- **Finding 14** — `CodexRunner.is_known` read membership in `self.running`,
+  which only holds a task while its process is alive: empty during dispatch
+  setup (before `collect_git_snapshot`/`create_subprocess_exec`) and popped
+  in `run_task`'s own `finally`, before `_handle_dispatch` ever built the
+  `task.result` to report. A control message landing in either window on a
+  perfectly healthy, still-running (or just-finished) executor read as "runner
+  never heard of this task" and the ghost-task branch (this round's own
+  finding-10/11 code) marked it CANCELLED and over-dispatched a second task
+  into the same slot. Fixed by decoupling "known to the agent" from "has a
+  live process": `CodexRunner.known_tasks` plus `mark_dispatched`/`forget`,
+  called by `AgentService._handle_dispatch` around its *entire* body (project
+  lookup, policy check, `run_task`, and the send), not just around the
+  `run_task` call. New tests:
+  `tests/unit/test_codex_runner.py::test_is_known_reflects_mark_dispatched_not_the_running_process_dict`,
+  `tests/unit/test_agent_service.py::test_handle_dispatch_forgets_the_task_only_after_the_result_is_sent`
+  (asserts call order — `mark_dispatched` before anything that could reach
+  `run_task`, `forget` only after the result is sent — rather than timing a
+  real subprocess, which would be flaky for the same race the finding is
+  about).
+
+Findings 12 and 15 were the same documentation/behaviour mismatch found by
+two lenses independently: `.env.example` and `gateway/app/core/config.py`
+both said "zero or negative disables replay," but round 1's own finding-8 fix
+added `ge=0`, which rejects negative values at startup — true since round 1
+shipped, caught by neither lens until round 2. Closed by inspection, not a
+test: the round-1 test `test_a_negative_replay_window_is_rejected` already
+proves the code's actual behavior; what was wrong was only the comment
+describing it, corrected in both files to say zero disables replay and
+negative is rejected at startup, not "disables replay further."
+
+Finding 13 was about the round-1 record itself overstating its own coverage
+(`docs/napkin-lessons.md`'s prior "council round 1" entry claimed "all 9
+closed with a failing test... no risk acceptances" while conceding fifteen
+lines later that findings 3 and 5 were not) and misattributing finding 6 to a
+test that was actually finding 9's. Both corrected in place above and in
+`RESUME.md`, rather than left to accumulate — the record a future council
+calibrates `.docs/agents/council.md` §4's triggers from has to be accurate to
+be useful for that.
+
+`python3 -m pytest -q` → 352 passed (up from 345 going into this round; +7
+from the five new tests above plus one parametrized over 3 cases). Every new
+test verified failing on a disposable copy of the tree (`rsync` to
+`/tmp/cb-verify`, never `git checkout` in place — see the lesson two entries
+above) with its specific fix reverted, then passing again with the fix
+restored, one fix at a time.
+
+## 2026-08-19 — council on gh-17 (Nothing replays task.cancel when an executor reconnects — a stopped session keeps running)
+
+Two rounds, lenses: the claim auditor, the second caller, the sweep skeptic.
+
+- raised: 15
+- survived §2: 15
+- became tests: 12
+- questions left open: 22
+
+Questions carried forward:
+
+- [the sweep skeptic] docs/codemap.md:480 still documents `list_tasks_requiring_cancel_replay(session, executor_id)` — the pre-diff signature — and its header says 'Generated: 2026-08-18'. Every prior commit touching `gateway/app/services/store.py` (ab45806, 75bc543, ce33e09, b76a391) regenerated the map in the same commit; this delivery does not, and `tests/contract/test_docs_match_the_runtime.py` only checks module presence, not signatures, so nothing fails. Is `governancekit --root . map` part of the delivery commit or not? Not reproduced as a defect: no gate fails and no runtime behaviour depends on it.
+- [the sweep skeptic] docs/api/README.md:503-505 ('the executor learns on reconnect, through the same recovery that already handles a gateway restart') describes a mechanism that `docs/napkin-lessons.md:114` records as invented — `recover_tasks_after_startup` runs only at gateway boot and skips already-cancelled tasks. The sentence predates this diff, but this diff is the one that documents the real mechanism everywhere else. Not reproduced: I did not write a contract test asserting the README against the runtime.
+- [the sweep skeptic] In `gateway/app/mcp/server.py:214-215`, the first branch (QUEUED/WAITING_EXECUTOR/AWAITING_APPROVAL) writes CANCELLED but does not call `hub.mark_task_finished`, while the widened `elif` now does and while HTTP `/stop` calls it for all eight STOPPABLE states unconditionally. Also, MCP cancel records no `task.stopped_by_actor` event, so 'who cancelled this session' is answerable for HTTP stops and not for MCP ones. Intentional asymmetry, or the same drift that `STOPPABLE_TASK_STATES` was extracted to prevent? Not reproduced: I could not construct a state where a QUEUED/WAITING_EXECUTOR/AWAITING_APPROVAL task is already in `running_tasks`.
+- [the sweep skeptic] `cancel_replay_max_age_seconds` is documented in `gateway/app/core/config.py:67-83` and `.env.example` as 'zero or negative disables replay', but nothing validates or tests the boundary — no `ge=` on the field, no test at 0 or -1. Is the disable path a supported configuration or an accident of the comparison? Not reproduced: I did not run the gateway with `CODEX_BRIDGE_CANCEL_REPLAY_MAX_AGE_SECONDS=0`.
+- [the claim auditor] gateway/app/services/store.py:822-824 states "A task with no `completed_at` yet cannot happen for a CANCELLED task (`update_task_state` sets it in the same write), so the comparison never has to handle a null." The conclusion holds today, but the cited reason is incomplete: `decide_task_approval` (store.py:255-257) is a second writer of `state = CANCELLED` that does not go through `update_task_state` — it happens to set `completed_at` on the adjacent line. The next editor who adds a third CANCELLED writer will read this docstring and see only one path to keep in sync; a NULL `completed_at` silently drops the row from replay rather than raising. No wrong outcome reproducible today.
+- [the claim auditor] The widened MCP `cancel_codex_task` (gateway/app/mcp/server.py:216-237) writes CANCELLED and releases the slot but records no actor event, while the HTTP `/stop` path records `task.stopped_by_actor` because, in its own words (sessions.py:350-354), "'who cancelled this session' is unanswerable from the audit trail, which is half of #9's own acceptance criterion." This diff makes the actor-less path reach eight states instead of one. Pre-existing gap, widened here — no reproduction of operator-visible harm attempted.
+- [the claim auditor] handoff.md:82-85 says `store.list_tasks_requiring_cancel_replay` is "called before `dispatch_next` both in `register()` and in `gateway/app/main.py`'s websocket handshake". `grep -rn list_tasks_requiring_cancel_replay gateway` shows a single call site (agent_hub.py:59); main.py reaches it only through `hub.register` (main.py:649, before `dispatch_next` at main.py:659). The substance is right, the "two call sites" reading is not.
+- [the claim auditor] docs/protocol.md:92-101 numbers "Só então despacha a próxima tarefa da fila" as step 4 of `AgentHub.register()`. `register()` never dispatches — main.py:659 does, as its caller. A reader looking for the dispatch inside `register()` will not find it.
+- [the claim auditor] `python3 -m pytest -q` -> 327 passed only when run from the repository root: `Settings.registry_file` resolves `examples/registry.json` against the CWD at import time (gateway/app/core/config.py:23), and four `tests/integration/test_agent_ws_handshake.py` tests fail in any copy run elsewhere — including a clean copy of `development`. Not caused by this diff; it does mean the suite's green depends on where it is invoked from, which no test asserts.
+- [the second caller] Both cancel surfaces call `hub.send(...)` before `store.update_task_state(..., CANCELLED)` (gateway/app/mcp/server.py:234-235, gateway/app/api/routes/sessions.py:340-343 via `_dispatch_cancel`). `AgentHub.send` indexes `self.connections[executor_id]` unguarded, so a disconnect racing between `is_connected()` and `send()` raises and the CANCELLED write never happens — re-opening exactly the #17 gap in the window where the executor is dropping. not reproduced: I could not construct a deterministic interleaving of the disconnect against the send without modifying the code under test.
+- [the second caller] `AgentHub.unregister` does not clear `running_tasks[executor_id]`, and `register` uses `setdefault` rather than resetting it. Is the intended invariant that `running_tasks` outlives a disconnect? If yes, what re-derives it after a gateway restart (in-memory only, and `recover_tasks_after_startup` skips CANCELLED tasks)? If no, is the omission at gateway/app/services/agent_hub.py:57/79-83 deliberate?
+- [the second caller] `decide_task_approval` with `DENIED` writes CANCELLED + `completed_at` (gateway/app/services/store.py:254-256) with no `task.cancel_acknowledged`, so such tasks now match `list_tasks_requiring_cancel_replay` for 24h. AWAITING_APPROVAL is only ever set at creation (store.py:149), i.e. pre-dispatch, so the executor was never told about the task — should denied-at-submission tasks be excluded from the replay set rather than sent a `task.cancel` the executor cannot ack?
+- [the second caller] The `.env.example` and config comments justify the 24h default against `max_timeout_seconds` in `examples/registry.json` (3600s). Is that file the actual production registry, or does the deployed registry (deploy/) carry larger timeouts? not reproduced: I did not have the deployed registry to compare.
+- [the sweep skeptic] Should the gateway restart the queue wherever it releases a slot, rather than only in the TASK_RESULT branch? The same omission covers the ordinary case too — an operator cancelling a running session on a connected executor frees the slot via `handle_task_cancelled` and the next queued task still waits for an unrelated event. That part predates this delivery, but this delivery is what makes it load-bearing, and it is one call (`dispatch_next` + send) at two sites.
+- [the sweep skeptic] `handle_task_ack` was hardened (council 2026-08-18) against an executor acking a task it does not own — task_id missing, unknown task, wrong executor, invalid state (main.py:547-593). The extraction of `handle_task_cancelled` (main.py:645-666) carried none of those guards: it subscripts `payload['task_id']` and calls `update_task_state` unconditionally, which raises `ValueError('unknown_task')` out of the `/agent/ws` loop past `hub.unregister`. Behaviourally unchanged from the inline code it replaced, so I am not filing it as a finding of this round, but the sibling now has four guards and this one has none — and the round-1 fix made the executor send this message far more often.
+- [the sweep skeptic] The four `tests/integration/test_agent_ws_handshake.py` failures on a clean checkout (they pass when the file runs alone, and pass in the working tree, which has a leftover `codex_bridge.db`) are order- or state-dependent, not a content difference between the index and the tree. Worth someone owning before it masks a real failure on CI, where no leftover DB exists.
+- [the claim auditor] `gateway/app/core/config.py:80-88` concedes that a project registered at the `timeout_seconds` ceiling 'can have a run still legitimately in flight when this window closes', then answers that concern with 'What makes the window safe either way is that the executor now resolves an unknown cancel on its own'. That answer does not reach the case it is placed under: past the window no `task.cancel` is sent at all, so there is nothing for the executor to resolve and a genuinely in-flight `codex exec` is never told to die. The same non-sequitur is in `sessions.py:637-640` ('so the TTL trims stale noise rather than leaving anything unresolved'). I could not turn this into a finding: `SubmitTaskRequest.timeout_seconds` is `Field(ge=30, le=86400)` (shared/protocol.py:143), and the window is measured from the cancellation rather than from task start, so the window always closes at or after the run's own timeout — the gap looks structurally unreachable. Is that the actual reason the comment believes the window is safe? If so, the comment names the wrong reason, and the right one (the `le=86400` schema cap, not the unconditional ack) is the one a future editor would need before widening either bound.
+- [the claim auditor] `handle_task_ack`'s new `known=False` branch (gateway/app/main.py:610-628) writes CANCELLED through `store.update_task_state`, which has no transition guard (store.py:209-224 sets `task.state` unconditionally). If a `task.pause` races a task that has just finished — gateway writes PAUSING and sends the pause, the agent's `task.result` lands first and sets COMPLETED, then the agent's `task.ack{accepted:false, known:false}` arrives — the branch overwrites COMPLETED with CANCELLED plus `last_error: 'Executor reconnected with no record of this task; treated as lost.'`. I did not raise this as a fix-introduced regression because the pre-fix path clobbered the same row too (via `_CONTROL_REJECTION_FALLBACK` back to RUNNING, arguably worse), so the class is pre-existing — but the new branch is the first one that also releases the concurrency slot and writes a terminal state, and nothing in the suite pins the ordering. Does `CodexRunner.is_known` keep a record of a task after its result is sent, and if not, is the teardown window worth a guard on `update_task_state` rather than at these two call sites?
+- [the claim auditor] `tests/integration/test_store_and_mcp.py::test_mcp_cancel_records_who_cancelled_it` is parametrized over only `(RUNNING, connected)` and `(WAITING_EXECUTOR, disconnected)` (lines 345-353). The branch it guards was widened to all of `STOPPABLE_TASK_STATES`, and the disconnected-RUNNING case — the one issue #17 is actually about, where `executor_notified` is `false` and `mark_task_finished` still has to fire — is not among the two. Was that deliberate (covered elsewhere by `test_mcp_cancel_of_a_pending_control_state_writes_cancelled` at line 308), or is the actor-recording assertion simply not exercised for any offline executor?
+- [the second caller] The whole of findings 1/4/7 is closed by an agent-side change (`service.py`'s unconditional `task.cancelled`, plus the new `known` field). A gateway upgraded ahead of its executors gets `known` defaulting to True (main.py:534) and the pre-fix pinning behaviour, silently — the HELLO payload carries `{"version": "0.1.0"}` and nothing on the gateway reads it. Should a mixed fleet produce a warning, or should `/executors` surface which executors are old enough that #17 is still live for them? No failing test offered; this is a design question, not a finding.
+- [the second caller] docs/api/codex-bridge.openapi.yaml:518-526 says the replay covers '`task.cancel` and pending `task.pause`/`task.resume`/`task.restart` alike' and then bounds it with `cancel_replay_max_age_seconds` alone. The two windows are now independent knobs (`control_replay_max_age_seconds`). The trailing clause scopes itself to `task.cancel`, and this is the `/stop` description where only cancel matters, so I did not raise it as a finding — but an operator who sets only the cancel knob to 0 will not learn from that paragraph that pause/resume/restart replay is still on.
+- [the second caller] The new `_dispatch_cancel` docstring says 'Past the window the task stays CANCELLED with no further replay: the executor resolves an unknown cancel on its own either way ..., so the TTL trims stale noise rather than leaving anything unresolved.' The executor only resolves it if a `task.cancel` is actually delivered; past the window none ever is, so a `codex exec` still running on a late-returning executor is never told to die. The sentence is defensible as being about the gateway's bookkeeping, but the next reader can read it as 'past the window it is still fine'.

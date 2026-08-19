@@ -6,6 +6,11 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from gateway.app.version import APP_VERSION
+from shared.protocol import (
+    DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
+    DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
+    MAX_REPLAY_MAX_AGE_SECONDS,
+)
 
 
 class Settings(BaseSettings):
@@ -63,6 +68,52 @@ class Settings(BaseSettings):
     max_result_chars: int = 200000
     diff_max_chars: int = 120000
     reconnect_grace_seconds: int = 120
+    # How long a cancelled-but-unacknowledged task stays worth resending
+    # `task.cancel` for on executor reconnect (issue #17). Bounded rather than
+    # indefinite: an executor that reappears long after a cancellation was
+    # issued has almost certainly already finished or been redeployed. The
+    # default here (24h) is not, on its own, generous against every possible
+    # deployment — `ProjectRegistration.max_timeout_seconds` has no enforced
+    # upper bound and the schema accepts up to 86400s
+    # (`shared/protocol.py`), so a project registered at the ceiling can have
+    # a run still legitimately in flight when this window closes. What makes
+    # the window safe either way is that the executor now resolves an unknown
+    # cancel on its own: `CodexRunner.cancel` returning `False` still gets an
+    # unconditional `task.cancelled` back (issue #17 council, "the claim
+    # auditor" / "the second caller") because "not running here" satisfies a
+    # cancel's postcondition regardless of whether a live process was
+    # actually killed — so a replay that fires is never left waiting on an
+    # ack that can't arrive. Past the window, the task is left CANCELLED with
+    # no further replay — trimming stale noise, not correctness.
+    #
+    # Zero disables replay for practically every task (the cutoff lands at
+    # "now", which no past cancellation can satisfy) — unlike
+    # `audit_event_retention_days`, this is not a documented opt-in shape,
+    # just what the comparison does at the boundary. It fails toward the safe
+    # direction (no replay, not "replay everything"). Negative values are
+    # rejected at startup (`ge=0`) rather than treated as "disable further" —
+    # a negative window is nonsensical, and a prior version of this comment
+    # claimed negative values disabled replay too, which stopped being true
+    # the moment `ge=0` shipped (issue #17 council round 2, "the claim
+    # auditor"). Capped at `MAX_REPLAY_MAX_AGE_SECONDS`:
+    # `datetime.now(tz) - timedelta(seconds=...)` raises `OverflowError` for
+    # values anywhere near a `timedelta`'s actual ceiling, and that raise
+    # happens inside `AgentHub.register()` after `websocket.accept()` — every
+    # executor would fail to ever finish registering (issue #17 council, "the
+    # second caller").
+    cancel_replay_max_age_seconds: int = Field(
+        default=DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS, ge=0, le=MAX_REPLAY_MAX_AGE_SECONDS
+    )
+    # Same bound, for tasks stuck in PAUSING/RESUMING/RESTARTING with no
+    # `task.ack` (issue #17 council, "the sweep skeptic": this replay had no
+    # bound at all before, unlike its cancel sibling above). A separate
+    # setting rather than reusing `cancel_replay_max_age_seconds` — the two
+    # already shipped as independent, differently-named env vars once cancel
+    # replay's TTL existed alone, and renaming a shipped knob to widen its
+    # scope is a silent breaking change for whoever already set it.
+    control_replay_max_age_seconds: int = Field(
+        default=DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS, ge=0, le=MAX_REPLAY_MAX_AGE_SECONDS
+    )
     rate_limit_window_seconds: int = 60
     rate_limit_requests_per_window: int = 120
     # Signs mobile-API pagination cursors. Unset means a random per-process

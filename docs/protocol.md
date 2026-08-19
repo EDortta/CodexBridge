@@ -88,3 +88,55 @@ Campos comuns:
 ## Idempotência
 
 O gateway persiste `message_id` em `message_receipts`. Mensagens repetidas do agente são descartadas.
+
+## Reconexão: replay de controle pendente
+
+`AgentHub.register()` roda a cada `hello` aceito, **antes** de qualquer
+`task.dispatch` para esse executor:
+
+1. Marca o executor como conectado.
+2. Busca tarefas desse executor em `cancelled` sem `task.cancel_acknowledged`
+   registrado — o executor nunca confirmou a parada porque estava
+   desconectado quando `task.cancel` foi enviado (issue #17). Reenvia
+   `task.cancel` para cada uma.
+3. Busca tarefas presas em `pausing`/`resuming`/`restarting` — o `task.ack`
+   correspondente nunca chegou porque o executor caiu antes de respondê-lo
+   (issue #16). Reenvia `task.pause`/`task.resume`/`task.restart` conforme
+   o estado.
+4. Só então despacha a próxima tarefa da fila, se houver vaga.
+
+O replay de `task.cancel` é limitado a `cancel_replay_max_age_seconds`
+(padrão 24h, `gateway/app/core/config.py`) contado a partir do momento em que
+a tarefa virou `cancelled`. O replay de `task.pause`/`task.resume`/
+`task.restart` (passo 3) é limitado do mesmo jeito, por
+`control_replay_max_age_seconds` (padrão 24h também, configurável
+separadamente), contado a partir do último `task.state_changed` da tarefa —
+esse limite não existia antes (issue #17 council, "the sweep skeptic"): sem
+ele, uma tarefa presa havia um ano era reenviada a cada reconexão, para
+sempre. Um executor que reaparece depois do prazo quase certamente já
+terminou ou foi reimplantado — o replay existe para fechar a janela normal de
+reconexão, não para reenviar controles de dias atrás. Passado o prazo, a
+tarefa permanece no estado em que estava, sem novo reenvio.
+
+O executor sempre confirma um `task.cancel`, mesmo para um `task_id` que não
+conhece: a tarefa correspondente já pode ter terminado, expirado, ou nunca ter
+sido executada nesta máquina (por exemplo, um `cancel_codex_task` que cancelou
+uma tarefa ainda `queued`/`waiting_executor` nem chegou a ser despachada).
+`CodexRunner.cancel` retorna `False` nesse caso, mas o pós-condição de um
+cancel — "não está rodando aqui" — vale de qualquer forma, então
+`task.cancelled` é enviado de volta incondicionalmente (issue #17 council,
+"the claim auditor" / "the second caller"). Antes disso o agente só
+respondia quando havia um processo de verdade para terminar, e o gateway
+ficava esperando um `task.cancelled` que um runner reiniciado nunca ia
+mandar — prendendo a vaga de concorrência do executor pelo resto do processo
+do gateway.
+
+O mesmo problema existia para `task.pause`/`task.resume`/`task.restart`: o
+`task.ack` sempre foi enviado, mas com `accepted: false` tanto para "sei da
+tarefa e recusei por um motivo real" quanto para "nunca ouvi falar dessa
+tarefa" — o gateway não conseguia distinguir os dois casos. O payload do
+`task.ack` agora inclui `known` (booleano, ausente = `true` para
+compatibilidade com agentes antigos): quando `known` é `false`, o gateway
+resolve a tarefa como `cancelled` e libera a vaga de concorrência, em vez de
+reverter para o estado que o controle assumia (que pressupõe um processo
+vivo em algum lugar, e não há nenhum).

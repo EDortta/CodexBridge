@@ -37,7 +37,7 @@ segundos, não uma falha única.
 
 * tarefas com `run_when_available=false` falham na submissão;
 * tarefas com `run_when_available=true` ficam em `waiting_executor`;
-* `cancel_codex_task` pode cancelar antes da execução;
+* `cancel_codex_task` cancela em qualquer estado cancelável (fila, aprovação pendente, execução, pausa/retomada/reinício pendentes), marcando a tarefa `cancelled` de imediato; o `task.cancel` só é entregue ao agente na hora se ele estiver conectado, senão é reenviado na reconexão — limitado a `cancel_replay_max_age_seconds` (padrão 24h) desde o cancelamento; passado esse prazo não há novo reenvio;
 * no retorno do agente, o gateway reavalia e redispara a próxima tarefa elegível.
 
 ## Ambiente atual levantado em 2026-07-28

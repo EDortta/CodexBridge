@@ -75,7 +75,11 @@ app = FastAPI(
 # outer layer would answer a contract path with plain text and no request id.
 install_api_conventions(app)
 
-hub = AgentHub(SessionLocal)
+hub = AgentHub(
+    SessionLocal,
+    cancel_replay_max_age_seconds=settings.cancel_replay_max_age_seconds,
+    control_replay_max_age_seconds=settings.control_replay_max_age_seconds,
+)
 rate_limiter = MemoryRateLimiter(settings.rate_limit_requests_per_window, settings.rate_limit_window_seconds)
 
 # `/health` and `/ready` are unauthenticated and unlimited on purpose: the
@@ -523,6 +527,12 @@ async def handle_task_ack(session: AsyncSession, envelope: AgentEnvelope) -> Non
     accepted = bool(envelope.payload.get("accepted"))
     control = envelope.payload.get("control")
     raw_state = envelope.payload.get("state")
+    # Whether the runner has any record of the task at all, as opposed to
+    # knowing it but refusing for a real reason (already paused, nothing to
+    # restart). Older agents that predate this field are treated as "known"
+    # — the fallback behaviour every version before this one already had
+    # (issue #17 council, "the sweep skeptic" / "the second caller").
+    known = bool(envelope.payload.get("known", True))
 
     if task_id is None:
         # The same class of bug the state-validation fix above closes: a
@@ -586,7 +596,7 @@ async def handle_task_ack(session: AsyncSession, envelope: AgentEnvelope) -> Non
             await session.commit()
             return
         await store.update_task_state(session, task_id, resolved_state)
-    elif control in _CONTROL_REJECTION_FALLBACK:
+    elif control in _CONTROL_REJECTION_FALLBACK and known:
         # A rejected ack used to leave the task parked in
         # PAUSING/RESUMING/RESTARTING forever — nothing else in the codebase
         # ever revisits those states outside a full gateway restart (council
@@ -597,6 +607,38 @@ async def handle_task_ack(session: AsyncSession, envelope: AgentEnvelope) -> Non
         # and the session is reported failed instead.
         fallback_state, fallback_error = _CONTROL_REJECTION_FALLBACK[control]
         await store.update_task_state(session, task_id, fallback_state, error=fallback_error)
+    elif control in _CONTROL_REJECTION_FALLBACK and not known:
+        # The runner has no record of this task at all — a reconnect replay
+        # (`AgentHub.register`) reaching a fresh runner that lost its
+        # in-memory state, e.g. after the executor host restarted (issue
+        # #17). None of `_CONTROL_REJECTION_FALLBACK`'s states are honest
+        # here: "revert to RUNNING/PAUSED" assumes the process is still
+        # alive somewhere, and on this runner it never was. Resolve it the
+        # way an unknown `task.cancel` now does — CANCELLED, and the
+        # concurrency slot released — instead of leaving `running_tasks`
+        # pinned by an id nothing will ever acknowledge again
+        # (`gateway/app/services/agent_hub.py`, `mark_task_finished` is the
+        # only remover).
+        await store.update_task_state(
+            session,
+            task_id,
+            TaskState.CANCELLED,
+            error="Executor reconnected with no record of this task; treated as lost.",
+        )
+        await hub.mark_task_finished(envelope.executor_id, task_id)
+        # Without this, `list_tasks_requiring_cancel_replay` (store.py) has no
+        # `task.cancel_acknowledged` row to exclude this id by, so the very
+        # next reconnect treats this already-resolved ghost as a fresh
+        # cancellation to replay — resending `task.cancel` for a task already
+        # reported cancelled and re-pinning the slot right where the queue
+        # would restart (issue #17 council round 2, "the claim auditor").
+        await record_event(
+            session,
+            "task",
+            task_id,
+            "task.cancel_acknowledged",
+            {"executor_id": envelope.executor_id},
+        )
 
     await record_event(
         session,
@@ -611,6 +653,30 @@ async def handle_task_ack(session: AsyncSession, envelope: AgentEnvelope) -> Non
         },
     )
     await session.commit()
+
+
+async def handle_task_cancelled(session: AsyncSession, envelope: AgentEnvelope) -> None:
+    """Handles one `task.cancelled` ack from the `/agent/ws` message loop.
+
+    Standalone for the same reason `handle_task_ack` is (see its docstring):
+    directly testable against a real session and a constructed envelope,
+    without driving a real websocket through it. Extracted rather than left
+    inline so issue #17's fix — the agent now sends this unconditionally,
+    including for a task the runner never heard of — has something to prove
+    itself against on the gateway side: that receiving it actually releases
+    `hub.running_tasks`, not just that the agent sent it.
+    """
+    task_id = envelope.payload["task_id"]
+    await store.update_task_state(session, task_id, TaskState.CANCELLED)
+    await record_event(
+        session,
+        "task",
+        task_id,
+        "task.cancel_acknowledged",
+        {"executor_id": envelope.executor_id},
+    )
+    await session.commit()
+    await hub.mark_task_finished(envelope.executor_id, task_id)
 
 
 @app.websocket("/agent/ws")
@@ -691,29 +757,13 @@ async def agent_ws(
                 elif envelope.type == AgentMessageType.TASK_RESULT:
                     final_state = TaskState(envelope.payload["final_state"])
                     await store.store_result(session, envelope.payload["task_id"], envelope.payload, final_state)
+                    # `mark_task_finished` dispatches the next queued task
+                    # itself now (`AgentHub.mark_task_finished`) — this used
+                    # to be the one branch that remembered to do it by hand,
+                    # which is exactly the shape design-standards.md §3 warns
+                    # about: the other callers that free a slot did not.
                     await hub.mark_task_finished(envelope.executor_id, envelope.payload["task_id"])
-                    next_payload = await hub.dispatch_next(envelope.executor_id)
-                    if next_payload is not None:
-                        await hub.send(
-                            executor_id,
-                            AgentEnvelope(
-                                message_id=f"dispatch-{next_payload['task_id']}",
-                                executor_id=executor_id,
-                                sent_at=datetime.now(timezone.utc),
-                                type=AgentMessageType.TASK_DISPATCH,
-                                payload=next_payload,
-                            ),
-                        )
                 elif envelope.type == AgentMessageType.TASK_CANCELLED:
-                    await store.update_task_state(session, envelope.payload["task_id"], TaskState.CANCELLED)
-                    await record_event(
-                        session,
-                        "task",
-                        envelope.payload["task_id"],
-                        "task.cancel_acknowledged",
-                        {"executor_id": envelope.executor_id},
-                    )
-                    await session.commit()
-                    await hub.mark_task_finished(envelope.executor_id, envelope.payload["task_id"])
+                    await handle_task_cancelled(session, envelope)
     except WebSocketDisconnect:
         await hub.unregister(executor_id)
