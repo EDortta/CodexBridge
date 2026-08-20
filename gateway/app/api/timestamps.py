@@ -29,3 +29,17 @@ def utc_z(value: datetime | None) -> str | None:
 def now_z() -> str:
     """The current instant, in the same form."""
     return utc_z(datetime.now(timezone.utc))
+
+
+def cursor_z(value: datetime) -> str:
+    """Cursor form of a timestamp: ISO 8601, always carrying microseconds.
+
+    `str(datetime)` omits the fractional part when it is zero, so a cursor
+    built on a whole-second timestamp matches nothing and silently truncates
+    the list it paginates. This round-trips through `datetime.fromisoformat`,
+    which is what a keyset-pagination query compares against — `utc_z`'s
+    trailing `Z` does not parse back with that function.
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()

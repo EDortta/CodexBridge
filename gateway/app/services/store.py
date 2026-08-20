@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.models.entities import (
     AuditEventModel,
+    EpicModel,
     ExecutorModel,
+    IssueModel,
     MessageReceiptModel,
     OAuthAccessTokenModel,
     OAuthAuthorizationCodeModel,
@@ -19,6 +21,15 @@ from gateway.app.models.entities import (
     TaskModel,
 )
 from gateway.app.services.audit import record_event
+from gateway.app.services.issue_types import (
+    DEFAULT_EPIC_STATUS,
+    DEFAULT_ISSUE_PRIORITY,
+    DEFAULT_ISSUE_STATUS,
+    EPIC_STATUSES,
+    ISSUE_PRIORITIES,
+    ISSUE_STATUSES,
+    IssuePlanningError,
+)
 from shared.policy import evaluate_task_policy
 from shared.protocol import (
     ApprovalDecision,
@@ -1361,3 +1372,363 @@ async def list_task_events_page(
     statement = statement.order_by(AuditEventModel.created_at.asc(), AuditEventModel.id.asc()).limit(limit + 1)
     result = await session.execute(statement)
     return list(result.scalars())
+
+
+# --------------------------------------------------------------------------
+# Epics and issues (issue #8) — provider-neutral planning entities owned by
+# this gateway. See gateway/app/services/issue_types.py's module docstring
+# for why they are not part of the executor protocol.
+# --------------------------------------------------------------------------
+
+
+def _normalize_labels(labels: list[str] | None) -> list[str]:
+    if not labels:
+        return []
+    # Ordered de-dupe: a client that sends the same label twice should not see
+    # it twice on every future read.
+    seen: dict[str, None] = {}
+    for label in labels:
+        cleaned = label.strip()
+        if cleaned:
+            seen.setdefault(cleaned, None)
+    return list(seen)
+
+
+async def _validate_dependencies(
+    session: AsyncSession, *, project_id: str, issue_id: str | None, dependencies: list[str]
+) -> list[str]:
+    """The de-duplicated dependency ids, or raise if any is not usable.
+
+    An issue cannot depend on itself, and every dependency must be an issue in
+    the same project — a dependency the caller cannot see would leak that
+    identifier's existence into a project they have no access to.
+    """
+    ordered = list(dict.fromkeys(dependencies))
+    if issue_id is not None and issue_id in ordered:
+        raise IssuePlanningError("/dependencies", "self_dependency", "An issue cannot depend on itself.")
+    if not ordered:
+        return []
+    result = await session.execute(
+        select(IssueModel.id, IssueModel.project_id).where(IssueModel.id.in_(ordered))
+    )
+    found = {row.id: row.project_id for row in result}
+    missing = [dep for dep in ordered if dep not in found]
+    wrong_project = [dep for dep in ordered if dep in found and found[dep] != project_id]
+    if missing or wrong_project:
+        raise IssuePlanningError(
+            "/dependencies",
+            "unknown_issue",
+            "Every dependency must be an existing issue in the same project.",
+        )
+    return ordered
+
+
+async def create_epic(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    title: str,
+    description: str | None,
+    status: str | None,
+    actor_user_id: str,
+    actor_email: str | None,
+) -> EpicModel:
+    project = await session.get(ProjectModel, project_id)
+    if project is None or not project.enabled:
+        raise IssuePlanningError("/projectId", "unknown_project", "No such project.")
+    title = title.strip()
+    if not title:
+        raise IssuePlanningError("/title", "required", "title must not be empty.")
+    status = status or DEFAULT_EPIC_STATUS
+    if status not in EPIC_STATUSES:
+        raise IssuePlanningError("/status", "invalid_status", f"status must be one of {sorted(EPIC_STATUSES)}.")
+    now = datetime.now(timezone.utc)
+    epic = EpicModel(
+        id=str(uuid4()),
+        project_id=project_id,
+        title=title,
+        description=description,
+        status=status,
+        created_by_user_id=actor_user_id,
+        created_by_email=actor_email,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(epic)
+    await record_event(
+        session, "epic", epic.id, "epic.created",
+        {"project_id": project_id, "status": status, "actor_id": actor_user_id},
+    )
+    await session.commit()
+    await session.refresh(epic)
+    return epic
+
+
+async def get_epic(session: AsyncSession, epic_id: str) -> EpicModel | None:
+    return await session.get(EpicModel, epic_id)
+
+
+async def get_epic_for_projects(
+    session: AsyncSession, epic_id: str, project_ids: list[str] | None
+) -> EpicModel | None:
+    """An epic the caller may see, or None. Mirrors `get_task_for_projects`."""
+    epic = await session.get(EpicModel, epic_id)
+    if epic is None:
+        return None
+    if project_ids is not None and epic.project_id not in project_ids:
+        return None
+    return epic
+
+
+async def list_epics_page(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    status: list[str] | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[EpicModel]:
+    """Epics in one project, newest first, over-fetched by one.
+
+    Scoped to a single `project_id` rather than a caller's whole visible set:
+    the route already checked that project against `visible_projects` before
+    calling this, the same order sessions.py enforces project scope in the
+    query rather than after loading.
+    """
+    statement = select(EpicModel).where(EpicModel.project_id == project_id)
+    if status:
+        statement = statement.where(EpicModel.status.in_(status))
+    if after is not None:
+        created_at, epic_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                EpicModel.created_at < created_at,
+                and_(EpicModel.created_at == created_at, EpicModel.id < epic_id),
+            )
+        )
+    statement = statement.order_by(EpicModel.created_at.desc(), EpicModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def create_issue(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    epic_id: str | None,
+    title: str,
+    description: str | None,
+    status: str | None,
+    priority: str | None,
+    labels: list[str] | None,
+    assignee_user_id: str | None,
+    assignee_email: str | None,
+    dependencies: list[str] | None,
+    blocked_reason: str | None,
+    actor_user_id: str,
+    actor_email: str | None,
+) -> IssueModel:
+    project = await session.get(ProjectModel, project_id)
+    if project is None or not project.enabled:
+        raise IssuePlanningError("/projectId", "unknown_project", "No such project.")
+    title = title.strip()
+    if not title:
+        raise IssuePlanningError("/title", "required", "title must not be empty.")
+    status = status or DEFAULT_ISSUE_STATUS
+    if status not in ISSUE_STATUSES:
+        raise IssuePlanningError("/status", "invalid_status", f"status must be one of {sorted(ISSUE_STATUSES)}.")
+    priority = priority or DEFAULT_ISSUE_PRIORITY
+    if priority not in ISSUE_PRIORITIES:
+        raise IssuePlanningError(
+            "/priority", "invalid_priority", f"priority must be one of {sorted(ISSUE_PRIORITIES)}."
+        )
+    if epic_id is not None:
+        epic = await session.get(EpicModel, epic_id)
+        if epic is None or epic.project_id != project_id:
+            raise IssuePlanningError("/epicId", "unknown_epic", "epicId must name an epic in the same project.")
+    ordered_dependencies = await _validate_dependencies(
+        session, project_id=project_id, issue_id=None, dependencies=dependencies or []
+    )
+    now = datetime.now(timezone.utc)
+    issue = IssueModel(
+        id=str(uuid4()),
+        project_id=project_id,
+        epic_id=epic_id,
+        title=title,
+        description=description,
+        status=status,
+        priority=priority,
+        labels_json=json.dumps(_normalize_labels(labels), ensure_ascii=True),
+        assignee_user_id=assignee_user_id,
+        assignee_email=assignee_email,
+        dependencies_json=json.dumps(ordered_dependencies, ensure_ascii=True),
+        blocked_reason=blocked_reason,
+        created_by_user_id=actor_user_id,
+        created_by_email=actor_email,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(issue)
+    await record_event(
+        session, "issue", issue.id, "issue.created",
+        {"project_id": project_id, "epic_id": epic_id, "status": status, "actor_id": actor_user_id},
+    )
+    await session.commit()
+    await session.refresh(issue)
+    return issue
+
+
+async def get_issue(session: AsyncSession, issue_id: str) -> IssueModel | None:
+    return await session.get(IssueModel, issue_id)
+
+
+async def get_issue_for_projects(
+    session: AsyncSession, issue_id: str, project_ids: list[str] | None
+) -> IssueModel | None:
+    issue = await session.get(IssueModel, issue_id)
+    if issue is None:
+        return None
+    if project_ids is not None and issue.project_id not in project_ids:
+        return None
+    return issue
+
+
+async def list_issues_page(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    status: list[str] | None = None,
+    priority: list[str] | None = None,
+    epic_id: str | None = None,
+    assignee_user_id: str | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[IssueModel]:
+    statement = select(IssueModel).where(IssueModel.project_id == project_id)
+    if status:
+        statement = statement.where(IssueModel.status.in_(status))
+    if priority:
+        statement = statement.where(IssueModel.priority.in_(priority))
+    if epic_id is not None:
+        statement = statement.where(IssueModel.epic_id == epic_id)
+    if assignee_user_id is not None:
+        statement = statement.where(IssueModel.assignee_user_id == assignee_user_id)
+    if after is not None:
+        created_at, issue_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                IssueModel.created_at < created_at,
+                and_(IssueModel.created_at == created_at, IssueModel.id < issue_id),
+            )
+        )
+    statement = statement.order_by(IssueModel.created_at.desc(), IssueModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+UNSET = object()
+
+
+async def update_issue(
+    session: AsyncSession,
+    issue_id: str,
+    *,
+    title: object = UNSET,
+    description: object = UNSET,
+    status: object = UNSET,
+    priority: object = UNSET,
+    labels: object = UNSET,
+    assignee_user_id: object = UNSET,
+    assignee_email: object = UNSET,
+    dependencies: object = UNSET,
+    blocked_reason: object = UNSET,
+    actor_user_id: str,
+    actor_email: str | None,
+) -> IssueModel:
+    issue = await session.get(IssueModel, issue_id)
+    if issue is None:
+        raise ValueError("unknown_issue")
+
+    if title is not UNSET:
+        cleaned = (title or "").strip()
+        if not cleaned:
+            raise IssuePlanningError("/title", "required", "title must not be empty.")
+        issue.title = cleaned
+    if description is not UNSET:
+        issue.description = description
+    if status is not UNSET:
+        if status not in ISSUE_STATUSES:
+            raise IssuePlanningError(
+                "/status", "invalid_status", f"status must be one of {sorted(ISSUE_STATUSES)}."
+            )
+        issue.status = status
+    if priority is not UNSET:
+        if priority not in ISSUE_PRIORITIES:
+            raise IssuePlanningError(
+                "/priority", "invalid_priority", f"priority must be one of {sorted(ISSUE_PRIORITIES)}."
+            )
+        issue.priority = priority
+    if labels is not UNSET:
+        issue.labels_json = json.dumps(_normalize_labels(labels), ensure_ascii=True)
+    if assignee_user_id is not UNSET:
+        issue.assignee_user_id = assignee_user_id
+    if assignee_email is not UNSET:
+        issue.assignee_email = assignee_email
+    if dependencies is not UNSET:
+        ordered = await _validate_dependencies(
+            session, project_id=issue.project_id, issue_id=issue.id, dependencies=dependencies or []
+        )
+        issue.dependencies_json = json.dumps(ordered, ensure_ascii=True)
+    if blocked_reason is not UNSET:
+        issue.blocked_reason = blocked_reason
+
+    issue.updated_by_user_id = actor_user_id
+    issue.updated_by_email = actor_email
+    issue.updated_at = datetime.now(timezone.utc)
+    issue.revision += 1
+    await record_event(
+        session, "issue", issue.id, "issue.updated",
+        {"actor_id": actor_user_id, "status": issue.status, "priority": issue.priority},
+    )
+    await session.commit()
+    await session.refresh(issue)
+    return issue
+
+
+async def link_issue_to_epic(
+    session: AsyncSession,
+    *,
+    issue_id: str,
+    epic_id: str,
+    actor_user_id: str,
+    actor_email: str | None,
+) -> IssueModel:
+    """Attach `issue_id` to `epic_id`. Both must already exist in one project.
+
+    Callers check project visibility on the issue (and load the epic) before
+    this runs; the project match here is the invariant the write itself must
+    never violate, independent of who is allowed to trigger it.
+    """
+    issue = await session.get(IssueModel, issue_id)
+    if issue is None:
+        raise ValueError("unknown_issue")
+    epic = await session.get(EpicModel, epic_id)
+    if epic is None or epic.project_id != issue.project_id:
+        raise IssuePlanningError("/epicId", "unknown_epic", "epicId must name an epic in the same project.")
+
+    issue.epic_id = epic_id
+    issue.updated_by_user_id = actor_user_id
+    issue.updated_by_email = actor_email
+    issue.updated_at = datetime.now(timezone.utc)
+    issue.revision += 1
+    await record_event(
+        session, "issue", issue.id, "issue.linked_to_epic",
+        {"epic_id": epic_id, "actor_id": actor_user_id},
+    )
+    await session.commit()
+    await session.refresh(issue)
+    return issue

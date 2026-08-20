@@ -44,7 +44,9 @@ class Settings(BaseSettings):
     oauth_issuer_url: str | None = None
     oauth_allowed_client_ids: str = "chatgpt-codexbridge"
     oauth_allowed_redirect_uri_prefixes: str = "https://chatgpt.com,https://chat.openai.com,https://auth.openai.com"
-    oauth_default_scopes: str = "codexbridge.read codexbridge.task.submit codexbridge.task.cancel"
+    oauth_default_scopes: str = (
+        "codexbridge.read codexbridge.task.submit codexbridge.task.cancel codexbridge.issues.write"
+    )
     oauth_access_token_ttl_seconds: int = 3600
     oauth_authorization_code_ttl_seconds: int = 600
     # Absolute lifetime of a mobile sign-in (issue #4). Rotation carries this

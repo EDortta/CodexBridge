@@ -49,6 +49,15 @@ version_router = APIRouter()
 # `tests/contract/test_openapi_document.py` asserts it equals the document's
 # `info.version`, so the two cannot drift — a client that pins a contract version
 # has no other way to tell what the server actually speaks.
+#
+# 1.3.0 -> 1.4.0 is the sum of four independently-developed issues, combined on
+# `integration/gh-5-6-7-8-contract-align` (each branch bumped this same line for
+# a different reason; only one bump survives the merge, this comment is what
+# would not): `GET /api/v1/projects` + `/{id}` + `/{id}/summary` (issue #5),
+# `GET/POST /api/v1/decisions/**` (issue #6), `GET/POST /api/v1/missions/**`
+# (issue #7), and `GET/POST/PATCH /api/v1/epics/**` + `/api/v1/issues/**`
+# (issue #8). See each section of `docs/api/README.md` for the field-level
+# detail; none of the four alone is what "1.4.0" means.
 API_CONTRACT_VERSION = "1.4.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the

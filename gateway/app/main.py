@@ -13,6 +13,8 @@ from gateway.app.api.idempotency import purge_expired
 from gateway.app.api.rate_limit import RateLimitDependency, client_key
 from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import decisions, missions, probes, projects, sessions
+from gateway.app.api.routes import epics as epics_routes
+from gateway.app.api.routes import issues as issues_routes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.core.agent_auth import TokenSource, resolve_executor_token
 from gateway.app.core.config import settings
@@ -121,6 +123,12 @@ app.include_router(missions.router, dependencies=[Depends(RateLimitDependency(ra
 # unauthenticated, so its bucket is the caller's address, and it is the one
 # endpoint where guessing repeatedly is the whole attack.
 app.include_router(auth_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# Provider-neutral planning entities for CodexBridgeMobile (issue #8): epics,
+# issues, and the one relationship between them. Same limiter, same
+# authorization plumbing as sessions and auth above.
+app.include_router(epics_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+app.include_router(issues_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:

@@ -33,11 +33,12 @@ left untouched as the historical record, not merge candidates. See
 
 **All four are now combined** on `integration/gh-5-6-7-8-contract-align`
 (off `development` at `81312bb`): the `migrations/0005` number collision
-(#6 vs #8) and the `API_CONTRACT_VERSION` (`1.4.0`) changelog-comment overlap
-are resolved there — see `handoff.md`'s 2026-08-20 "integration-gh-5-6-7-8"
-entry for exactly what changed and the combined suite result. That branch is
-also committed, **not pushed, not merged**; the four originals above are left
-untouched.
+(#6 vs #8 — `0006_epics_issues.sql` is #8's file now, `schema_guard.py`
+updated to match) and the `API_CONTRACT_VERSION` (`1.4.0`) changelog-comment
+overlap are resolved there — see `handoff.md`'s 2026-08-20
+"integration-gh-5-6-7-8" entry for exactly what changed and the combined
+suite result. That branch is also committed, **not pushed, not merged**; the
+four originals above are left untouched.
 
 Not yet attempted: #10, #11, #13, #14 (placeholder branches, 0 commits ahead
 of `development`).
@@ -52,6 +53,7 @@ of `development`).
 | #10 (conversations), #11 (artifacts), #13 (event stream), #14 (contract tests) — no attempt yet; empty placeholder branches exist for #10/#11/#13 | next session |
 | Postgres never exercised (production is SQLite) | next session |
 | pre-existing `test_agent_ws_handshake.py` order-dependency (4 tests fail in full-suite runs, pass alone) on plain `development` itself | next session |
+| gh-7's own branch carries a duplicate empty `/health:` path key in its `openapi.yaml` (own-branch bug, found while integrating, dropped from the integration branch, not fixed on gh-7 itself) | next session, if gh-7 is ever merged standalone |
 
 ## Checks
 
