@@ -495,3 +495,44 @@ observation: "the design prose in them is often sound... even where the
 branch as a whole never shipped"). The fix in all three cases was a fresh
 branch off current `development` carrying forward only the real new work,
 not a redesign.
+
+## 2026-08-20 — integrating gh-5/gh-6/gh-7/gh-8 onto one branch
+
+`git merge`'s default strategy is not the right tool for judging how many
+*real* conflicts two branches have. Merging gh-6 then gh-7 into
+`store.py` and `docs/api/codex-bridge.openapi.yaml` produced conflict
+regions that interleaved two different functions' bodies (`list_decisions_page`
+vs `list_missions_page` — same shape: project-scope filter, a few `if`s,
+cursor pagination, order-by-limit) across three separate marker blocks, and
+39 marker lines in `openapi.yaml` for the gh-8 merge alone. Line-based diff
+aligns on textual similarity, not on "these are two unrelated functions that
+happen to look alike" — and structurally-similar additive code (every
+`list_*_page` store function in this codebase looks like every other one on
+purpose, per the existing pagination convention) is exactly what defeats it.
+
+Fix: `git show <ref>:<path>` the exact base/ours/theirs blobs and run `git
+merge-file --diff3 -p ours base theirs` directly, bypassing `git merge`'s
+rename/move heuristics entirely. Same inputs, same merge-base, but every
+affected file collapsed from double-digit marker counts to the true number
+of conflicts (1-2 regions, always "both sides inserted new content at the
+same point" with an empty common ancestor) — visible immediately from
+`|||||||` showing nothing between it and the following `=======`. Worth
+reaching for this the moment a conflict's markers look like they are
+slicing through the *middle* of what should be two whole, independent
+units (two functions, two OpenAPI paths, two schemas) rather than sitting
+between them.
+
+Real, not cosmetic, gain from doing it this way: hand-splicing the noisy
+markers would have risked quietly merging half of one function into
+another's body — a bug that imports cleanly, may even pass a subset of
+tests, and would not show up until the specific code path only the missing
+half guarded against was exercised.
+
+Second-order finding, only visible after reconstructing the clean
+`openapi.yaml`: gh-7's own branch (unrelated to this merge) carries a
+duplicate, empty `/health:` path key immediately before the real one — an
+own-branch bug from whenever gh-7 was written, invisible until something
+diffed its paths list against a clean base. Dropped from the integration
+branch; not fixed on gh-7 itself, since an integration branch should not
+alter what its source branches contain. Filed in this session's `RESUME.md`
+for whoever eventually merges gh-7 standalone.
