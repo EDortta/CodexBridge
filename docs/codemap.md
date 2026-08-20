@@ -1,17 +1,16 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-18 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
+> Generated: 2026-08-20 · Root: `/tmp/cb-gh8-fresh`
+> Refresh: `governancekit --root /tmp/cb-gh8-fresh map`
 
 ## Summary
 
-- 81 file(s) · 577 symbol(s) indexed
-- Languages: config (2), python (77), shell (2)
+- 85 file(s) · 643 symbol(s) indexed
+- Languages: config (2), python (81), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
 
-- `AGENTS.md`
 - `docs/required-reading.md`
 - `docs/project-rules.md`
 - `docs/software-overview.md`
@@ -60,6 +59,8 @@ gateway/
       routes/
         __init__.py  — "HTTP routers for the mobile contract surface."
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
+        epics.py  — "Epics — issue #8."
+        issues.py  — "Issues — issue #8."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
         sessions.py  — "Agent sessions, their logs, and lifecycle control."
       scope.py  — "Which requests the API's cross-cutting rules apply to."
@@ -87,6 +88,7 @@ gateway/
       __init__.py
       agent_hub.py
       audit.py
+      issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
       metrics.py
       store.py
     version.py  — "The single statement of this application's version."
@@ -112,6 +114,7 @@ tests/
     test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
+    test_epics_issues.py  — "Epics and issues — issue #8."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
     test_reconnect_replay_resolves.py  — "Issue #17 council round 1 — the headline scenario named by findings 1, 4"
@@ -266,6 +269,26 @@ tests/
 - `revoke(request, response, body, session)` *(async function)* — "Sign out: end the grant now rather than at expiry."
 - `current_actor(response, principal)` *(async function)* — "Who is calling, and what this build will let them do."
 
+### `gateway/app/api/routes/epics.py`
+
+> Epics — issue #8.
+
+- **`CreateEpicRequest`** *(class)*
+- `list_epics(project_id, response, status, cursor, limit, principal, session)` *(async function)* — "Epics in one project, newest first."
+- `create_epic(payload, response, idempotency_key, principal, session)` *(async function)*
+- `link_issue(epic_id, issue_id, response, if_match, idempotency_key, principal, session)` *(async function)* — "Attach an issue to an epic. Both must be in a project the caller may see."
+
+### `gateway/app/api/routes/issues.py`
+
+> Issues — issue #8.
+
+- **`CreateIssueRequest`** *(class)*
+- **`UpdateIssueRequest`** *(class)*
+- `list_issues(project_id, response, status, priority, epic_id, assignee_user_id, cursor, limit, principal, session)` *(async function)* — "Issues in one project, newest first, optionally filtered."
+- `get_issue_detail(issue_id, response, principal, session)` *(async function)*
+- `create_issue(payload, response, idempotency_key, principal, session)` *(async function)*
+- `update_issue(issue_id, payload, response, if_match, principal, session)` *(async function)* — "Change status, priority, labels, assignee, dependencies or blocked reason."
+
 ### `gateway/app/api/routes/probes.py`
 
 > Liveness, readiness and version — what a client asks before anything else.
@@ -308,6 +331,7 @@ tests/
 
 - `utc_z(value)` — "`value` as an RFC 3339 UTC instant ending in `Z`, or None."
 - `now_z()` — "The current instant, in the same form."
+- `cursor_z(value)` — "Cursor form of a timestamp: ISO 8601, always carrying microseconds."
 
 ### `gateway/app/core/agent_auth.py`
 
@@ -422,6 +446,8 @@ tests/
 - **`ExecutorModel`** *(class)*
 - **`ProjectModel`** *(class)*
 - **`TaskModel`** *(class)*
+- **`EpicModel`** *(class)*
+- **`IssueModel`** *(class)*
 - **`TaskLogModel`** *(class)*
 - **`AuditEventModel`** *(class)*
 - **`MessageReceiptModel`** *(class)*
@@ -446,6 +472,13 @@ tests/
 ### `gateway/app/services/audit.py`
 
 - `record_event(session, entity_type, entity_id, event_type, payload)` *(async function)*
+
+### `gateway/app/services/issue_types.py`
+
+> Closed vocabularies for epics and issues, and the error they fail with.
+
+- **`IssuePlanningError`** *(class)* — "A create/update input that fails validation inside the store itself."
+  - `__init__(self, field, code, message)` *(method)*
 
 ### `gateway/app/services/metrics.py`
 
@@ -485,6 +518,16 @@ tests/
 - `get_recent_logs(session, task_id)` *(async function)* — "The most recent log lines, oldest-first within the slice."
 - `list_tasks_requiring_cancel_replay(session, executor_id)` *(async function)* — "Cancelled tasks whose executor has not yet acknowledged the cancellation."
 - `list_tasks_requiring_control_replay(session, executor_id)` *(async function)* — "Tasks stuck in a pending pause/resume/restart, waiting for a `task.ack`"
+- `create_epic(session)` *(async function)*
+- `get_epic(session, epic_id)` *(async function)*
+- `get_epic_for_projects(session, epic_id, project_ids)` *(async function)* — "An epic the caller may see, or None. Mirrors `get_task_for_projects`."
+- `list_epics_page(session)` *(async function)* — "Epics in one project, newest first, over-fetched by one."
+- `create_issue(session)` *(async function)*
+- `get_issue(session, issue_id)` *(async function)*
+- `get_issue_for_projects(session, issue_id, project_ids)` *(async function)*
+- `list_issues_page(session)` *(async function)*
+- `update_issue(session, issue_id)` *(async function)*
+- `link_issue_to_epic(session)` *(async function)* — "Attach `issue_id` to `epic_id`. Both must already exist in one project."
 
 ### `scripts/apply_migrations.py`
 
@@ -714,6 +757,52 @@ tests/
 - `test_the_guard_flags_a_new_administrative_action(monkeypatch)` — "The guard is only worth having if it fires — so fire it."
 - `test_the_report_and_the_endpoints_agree(api, who)` *(async function)* — "The claim the whole endpoint exists for."
 - `test_the_administrative_action_describes_what_the_list_endpoint_does(api)` *(async function)* — "`sessions.readAllProjects` is administrative because it crosses projects."
+
+### `tests/integration/test_epics_issues.py`
+
+> Epics and issues — issue #8.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)*
+- `auth(token)`
+- `make_epic(factory, project_id, title)` *(async function)*
+- `make_issue(factory, project_id, **kwargs)` *(async function)*
+- `test_epics_and_issues_require_a_token(api)` *(async function)*
+- `test_reader_cannot_create_epics_or_issues(api)` *(async function)*
+- `test_reader_can_still_list_and_read(api)` *(async function)*
+- `test_a_project_outside_the_caller_visibility_is_not_found(api)` *(async function)* — "404, never 403 — confirming existence is what probing is for."
+- `test_an_epic_or_issue_in_an_invisible_project_is_not_found(api)` *(async function)*
+- `test_create_epic(api)` *(async function)*
+- `test_create_epic_rejects_an_empty_title(api)` *(async function)*
+- `test_create_epic_rejects_an_unknown_status(api)` *(async function)*
+- `test_a_retried_epic_create_does_not_create_a_second_epic(api)` *(async function)*
+- `test_create_issue_defaults_status_and_priority(api)` *(async function)*
+- `test_create_issue_normalizes_and_dedupes_labels(api)` *(async function)*
+- `test_create_issue_rejects_an_unknown_priority(api)` *(async function)*
+- `test_create_issue_with_an_epic_from_another_project_is_rejected(api)` *(async function)*
+- `test_create_issue_with_an_unknown_dependency_is_rejected(api)` *(async function)*
+- `test_create_issue_with_a_dependency_in_another_project_is_rejected(api)` *(async function)*
+- `test_create_issue_records_valid_dependencies(api)` *(async function)*
+- `test_get_issue_returns_an_etag(api)` *(async function)*
+- `test_the_issue_body_never_carries_the_project_path(api)` *(async function)*
+- `test_list_issues_filters_by_status_priority_epic_and_assignee(api)` *(async function)*
+- `test_the_issue_list_cursor_walks_every_issue_once(api)` *(async function)*
+- `test_an_issue_cursor_from_a_different_project_is_rejected(api)` *(async function)*
+- `test_update_requires_if_match(api)` *(async function)*
+- `test_update_with_a_stale_etag_is_refused(api)` *(async function)*
+- `test_update_changes_only_the_mentioned_fields(api)` *(async function)*
+- `test_update_can_explicitly_clear_a_nullable_field(api)` *(async function)*
+- `test_update_rejects_an_unknown_status(api)` *(async function)*
+- `test_update_rejects_a_self_dependency(api)` *(async function)*
+- `test_update_does_not_accept_an_epic_id(api)` *(async function)* — "epicId is deliberately absent from the update body — see the link endpoint."
+- `test_link_issue_to_epic(api)` *(async function)*
+- `test_link_requires_if_match(api)` *(async function)*
+- `test_link_rejects_an_epic_from_a_different_project(api)` *(async function)*
+- `test_a_reader_cannot_link(api)` *(async function)*
+- `test_a_retried_link_does_not_relink_twice(api)` *(async function)*
+- `test_a_failed_link_does_not_keep_the_key_claimed(api)` *(async function)*
+- `test_the_epic_list_cursor_walks_every_epic_once(api)` *(async function)*
+- `test_list_epics_filters_by_status(api)` *(async function)*
 
 ### `tests/integration/test_oauth_authorize.py`
 

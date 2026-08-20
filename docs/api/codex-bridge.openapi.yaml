@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.3.0
+  version: 1.4.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -752,6 +752,338 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/projects/{projectId}/epics:
+    get:
+      operationId: listEpics
+      tags: [epics]
+      summary: Epics in one project, newest first
+      description: |
+        `projectId` outside the caller's visible projects answers `404`, never
+        `403` — the same probing-prevention rule a single hidden session
+        answers with.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ProjectId'
+        - name: status
+          in: query
+          required: false
+          description: Repeatable. Restricts to these epic statuses.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/EpicStatus'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of epics.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Epic'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/projects/{projectId}/issues:
+    get:
+      operationId: listIssues
+      tags: [issues]
+      summary: Issues in one project, newest first
+      description: |
+        Filters combine with AND. `projectId` outside the caller's visible
+        projects answers `404`, never `403`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ProjectId'
+        - name: status
+          in: query
+          required: false
+          description: Repeatable. Restricts to these issue statuses.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/IssueStatus'
+        - name: priority
+          in: query
+          required: false
+          description: Repeatable. Restricts to these priorities.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/IssuePriority'
+        - name: epicId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: assigneeUserId
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 255
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of issues.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Issue'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/issues/{issueId}:
+    get:
+      operationId: getIssue
+      tags: [issues]
+      summary: One issue
+      description: |
+        Returns an `ETag` derived from the issue's revision. Send it back as
+        `If-Match` on `PATCH` or on the epic-link endpoint.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: issueId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The issue.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    patch:
+      operationId: updateIssue
+      tags: [issues]
+      summary: Change status, priority, labels, assignee, dependencies or blocked reason
+      description: |
+        A field the caller does not mention is left untouched; a field sent
+        explicitly as `null` is cleared. `epicId` cannot be changed here —
+        `POST /api/v1/epics/{epicId}/issues/{issueId}` is the one way to move
+        an issue between epics, so there is exactly one mechanism to test and
+        audit instead of two that can disagree.
+
+        Requires `If-Match`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: issueId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateIssueRequest'
+      responses:
+        '200':
+          description: The issue after the update.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/issues:
+    post:
+      operationId: createIssue
+      tags: [issues]
+      summary: Create an issue
+      description: |
+        `projectId` outside the caller's visible projects answers `404`, never
+        `403`. With `Idempotency-Key`, a retry returns the first response
+        rather than creating a second issue.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIssueRequest'
+      responses:
+        '201':
+          description: The created issue.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/epics:
+    post:
+      operationId: createEpic
+      tags: [epics]
+      summary: Create an epic
+      description: |
+        `projectId` outside the caller's visible projects answers `404`, never
+        `403`. With `Idempotency-Key`, a retry returns the first response
+        rather than creating a second epic.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEpicRequest'
+      responses:
+        '201':
+          description: The created epic.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Epic'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/epics/{epicId}/issues/{issueId}:
+    post:
+      operationId: linkIssueToEpic
+      tags: [epics]
+      summary: Attach an issue to an epic
+      description: |
+        Both `epicId` and `issueId` must be in a project the caller may see, or
+        the response is `404`. Requires `If-Match` on the issue's current
+        revision. With `Idempotency-Key`, a retry replays the first response.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: epicId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: issueId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The issue after linking.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
 
   /health:
     get:
@@ -1621,6 +1953,201 @@ components:
             that (a long weekend, a stuck redeploy) is not chased with
             `task.cancel` on reconnect, and the session simply stays
             `cancelled` in the gateway.
+
+    EpicStatus:
+      type: string
+      enum: [open, in_progress, done, cancelled]
+
+    IssueStatus:
+      type: string
+      enum: [open, in_progress, blocked, in_review, done, cancelled]
+
+    IssuePriority:
+      type: string
+      enum: [low, medium, high, urgent]
+
+    Epic:
+      type: object
+      description: |
+        A group of issues within one project. This build owns epics itself —
+        there is no GitHub sync — so every epic returned today came from
+        `POST /api/v1/epics`, never from an external tracker.
+      required: [id, projectId, title, status, revision, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        title:
+          type: string
+          maxLength: 255
+        description:
+          type: [string, 'null']
+          maxLength: 20000
+        status:
+          $ref: '#/components/schemas/EpicStatus'
+        revision:
+          type: integer
+          description: Monotonic; the `ETag` is derived from it.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        createdBy:
+          type: [string, 'null']
+          description: Email, or id when no email is on record, of who created this.
+        updatedBy:
+          type: [string, 'null']
+          description: Who last changed this. Absent when it has never been updated.
+
+    Issue:
+      type: object
+      description: |
+        One unit of work, optionally grouped under an `epicId`. Provider-neutral
+        by construction: nothing here is a GitHub node id, a GraphQL shape, or
+        anything else a mobile client would have to unlearn if the backing
+        system changed.
+      required: [id, projectId, title, status, priority, revision, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        epicId:
+          type: [string, 'null']
+          description: The epic this issue belongs to, or `null` when ungrouped.
+        title:
+          type: string
+          maxLength: 255
+        description:
+          type: [string, 'null']
+          maxLength: 20000
+        status:
+          $ref: '#/components/schemas/IssueStatus'
+        priority:
+          $ref: '#/components/schemas/IssuePriority'
+        labels:
+          type: array
+          items:
+            type: string
+        assigneeUserId:
+          type: [string, 'null']
+        assigneeEmail:
+          type: [string, 'null']
+        dependencies:
+          type: array
+          description: Ids of issues this one is blocked on.
+          items:
+            $ref: '#/components/schemas/Id'
+        blockedReason:
+          type: [string, 'null']
+        revision:
+          type: integer
+          description: Monotonic; the `ETag` is derived from it.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        createdBy:
+          type: [string, 'null']
+        updatedBy:
+          type: [string, 'null']
+
+    CreateEpicRequest:
+      type: object
+      required: [projectId, title]
+      properties:
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          maxLength: 20000
+        status:
+          $ref: '#/components/schemas/EpicStatus'
+          description: Defaults to `open` when omitted.
+
+    CreateIssueRequest:
+      type: object
+      required: [projectId, title]
+      properties:
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        epicId:
+          type: string
+          description: Must name an epic already in `projectId`, or the request is rejected.
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          maxLength: 20000
+        status:
+          $ref: '#/components/schemas/IssueStatus'
+          description: Defaults to `open` when omitted.
+        priority:
+          $ref: '#/components/schemas/IssuePriority'
+          description: Defaults to `medium` when omitted.
+        labels:
+          type: array
+          items:
+            type: string
+        assigneeUserId:
+          type: string
+          maxLength: 255
+        assigneeEmail:
+          type: string
+          maxLength: 255
+        dependencies:
+          type: array
+          description: Ids of issues this one is blocked on, all within `projectId`.
+          items:
+            $ref: '#/components/schemas/Id'
+        blockedReason:
+          type: string
+          maxLength: 20000
+
+    UpdateIssueRequest:
+      type: object
+      description: |
+        Every field is optional. A field the caller does not mention is left
+        unchanged; a field sent explicitly as `null` is cleared. There is no
+        `epicId` here — see the `PATCH` operation's description.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: [string, 'null']
+          maxLength: 20000
+        status:
+          $ref: '#/components/schemas/IssueStatus'
+        priority:
+          $ref: '#/components/schemas/IssuePriority'
+        labels:
+          type: array
+          items:
+            type: string
+        assigneeUserId:
+          type: [string, 'null']
+          maxLength: 255
+        assigneeEmail:
+          type: [string, 'null']
+          maxLength: 255
+        dependencies:
+          type: array
+          description: Replaces the whole set. Ids must all be within the issue's project.
+          items:
+            $ref: '#/components/schemas/Id'
+        blockedReason:
+          type: [string, 'null']
+          maxLength: 20000
+
 
     LogLine:
       type: object

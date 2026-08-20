@@ -38,6 +38,10 @@ READ_SCOPE = "codexbridge.read"
 SUBMIT_SCOPE = "codexbridge.task.submit"
 CANCEL_SCOPE = "codexbridge.task.cancel"
 ADMIN_SCOPE = "codexbridge.admin"
+# Creating or changing planning entities (epics, issues, epic-issue links).
+# Distinct from CANCEL_SCOPE: stopping a session and writing a project plan are
+# different capabilities an operator may grant separately.
+ISSUES_WRITE_SCOPE = "codexbridge.issues.write"
 
 READ = "read"
 OPERATIONAL = "operational"
@@ -116,16 +120,64 @@ SESSIONS_READ_ALL_PROJECTS = Action(
     summary="See sessions in every project, not only the actor's own.",
 )
 
+EPICS_READ = Action(
+    name="epics.read",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="List epics and read one, within the actor's projects.",
+)
+
+ISSUES_READ = Action(
+    name="issues.read",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="List issues and read one, within the actor's projects.",
+)
+
+EPICS_CREATE = Action(
+    name="epics.create",
+    category=OPERATIONAL,
+    scope=ISSUES_WRITE_SCOPE,
+    summary="Create an epic in one of the actor's projects.",
+)
+
+ISSUES_CREATE = Action(
+    name="issues.create",
+    category=OPERATIONAL,
+    scope=ISSUES_WRITE_SCOPE,
+    summary="Create an issue in one of the actor's projects.",
+)
+
+ISSUES_UPDATE = Action(
+    name="issues.update",
+    category=OPERATIONAL,
+    scope=ISSUES_WRITE_SCOPE,
+    summary="Change status, priority, labels, assignee or dependencies of an issue.",
+)
+
+EPICS_LINK_ISSUE = Action(
+    name="epics.linkIssue",
+    category=OPERATIONAL,
+    scope=ISSUES_WRITE_SCOPE,
+    summary="Attach an issue to an epic.",
+)
+
 # Order is the reported order. Grouped by class, read first, so a client that
 # renders the list without sorting produces something sensible.
 CATALOGUE: tuple[Action, ...] = (
     SESSIONS_READ,
     SESSIONS_READ_LOGS,
     SESSIONS_EXPLAIN_ERROR,
+    EPICS_READ,
+    ISSUES_READ,
     SESSIONS_STOP,
     SESSIONS_PAUSE,
     SESSIONS_RESUME,
     SESSIONS_RESTART,
+    EPICS_CREATE,
+    ISSUES_CREATE,
+    ISSUES_UPDATE,
+    EPICS_LINK_ISSUE,
     SESSIONS_READ_ALL_PROJECTS,
 )
 

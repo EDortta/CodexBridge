@@ -40,6 +40,8 @@ ADOPT_HINT = (
 REQUIRED_TABLES: dict[str, str] = {
     "idempotency_records": "0002_api_foundation.sql",
     "oauth_refresh_tokens": "0003_mobile_auth.sql",
+    "epics": "0005_epics_issues.sql",
+    "issues": "0005_epics_issues.sql",
 }
 
 REQUIRED_COLUMNS: dict[str, dict[str, str]] = {

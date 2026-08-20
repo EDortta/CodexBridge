@@ -508,6 +508,113 @@ which is when they most want to.
 
 ---
 
+## Epics and Issues (issue #8)
+
+`GET /api/v1/projects/{projectId}/epics`, `GET .../issues`,
+`GET /api/v1/issues/{issueId}`, `POST /api/v1/issues`,
+`PATCH /api/v1/issues/{issueId}`, `POST /api/v1/epics`,
+`POST /api/v1/epics/{epicId}/issues/{issueId}`.
+
+An **epic** groups issues within one project. An **issue** carries status,
+priority, labels, an assignee, dependencies (other issue ids it is blocked on)
+and a blocked reason. Both are addressed by `Id` like every other resource in
+this contract, never by anything a client would have to unlearn if the backing
+system changed.
+
+### This build owns epics and issues; there is no GitHub sync
+
+Every epic and issue returned today was created through this API — `POST
+/api/v1/epics` or `POST /api/v1/issues` — never mirrored from GitHub or any
+other tracker. `EpicModel.provider` and `IssueModel.provider` are `"local"` on
+every row this build writes and are not part of the mobile DTO: they are the
+seam a future adapter would use to tell a gateway-authored row from a mirrored
+one, the same way `ProjectModel` already mirrors `registry.json` rather than
+owning it. Building a `GitHubIssueProvider` with no second caller ahead of an
+actual sync requirement would be exactly the speculative architecture
+expansion `docs/limits.md` rules out — the column is the whole boundary, on
+purpose, until a sync exists to widen it.
+
+### What issue #8 asked for and did not get
+
+"Planning-review metadata and related missions, conversations and decisions"
+is in the issue's stated scope and is **not implemented**. No entity named
+mission, conversation or decision existed anywhere else in this codebase when
+this issue was written, and the issue does not specify their shape, storage,
+or relationship to an issue beyond the one sentence naming them. Inventing
+three new subsystems to fill that gap would be speculative architecture the
+issue itself does not describe, not the smallest durable change it asks for —
+and "mission" now separately exists as issue #7's mission-control view of
+`TaskModel`, not a new entity, so wiring an `Issue` to *that* is itself a
+choice a future issue should make deliberately rather than this one making it
+implicitly. A future issue that defines what a "decision" or "mission"
+reference from an issue actually means can add it the same way `epicId` was
+added here.
+
+### Two ways to change an issue, on purpose kept to one relationship
+
+`PATCH /api/v1/issues/{issueId}` changes title, description, status, priority,
+labels, assignee and dependencies. It deliberately does **not** accept
+`epicId`: `POST /api/v1/epics/{epicId}/issues/{issueId}` is the one mechanism
+that moves an issue between epics. Accepting `epicId` in both places would be
+two code paths that can disagree about what "moving an issue" means and drift
+from each other the first time one of them is changed.
+
+The link endpoint requires `If-Match` on the **issue's** current revision,
+because that is the entity it mutates. Both the epic and the issue must be in
+a project the caller may see, or the response is `404` — never `403`, for the
+same reason a hidden session is `404`.
+
+### Dependencies are validated, not just stored
+
+An issue's `dependencies` are other issue ids it is blocked on. `POST
+/api/v1/issues` and `PATCH /api/v1/issues/{issueId}` both reject a dependency
+that does not name an existing issue in the same project, and reject an issue
+depending on itself. This is enforced in `gateway/app/services/store.py`, not
+only in the route: a guard duplicated at every future caller is a guard one of
+them will eventually forget (`design-standards.md` §3). `epicId` on create is
+validated the same way — it must name an epic already in the same project.
+
+### Project scope, same rule as sessions
+
+`projectId` — whether it is a path segment on the list endpoints or a body
+field on the two creates — outside the caller's visible projects answers
+`404`, never `403`. An unregistered `projectId` and one the caller simply
+cannot see are indistinguishable to the caller, by the same probing-prevention
+rule `get_task_for_projects` already applies to a single hidden session.
+
+### Actor and history metadata
+
+Every epic and issue records who created it and, once changed, who last
+updated it — `createdBy` / `updatedBy` in the response, an email when one is
+on record and the user id otherwise. This is the same shape `Session` already
+uses for `requestedBy` rather than the `Actor` object `GET /api/v1/auth/me`
+returns: one is a single reporter string, the other is a caller's own identity
+with a `kind` that is always `user` here, and introducing the second shape for
+one field this issue does not otherwise need would be the shape the sessions
+precedent already argues against.
+
+### Writes and idempotency
+
+`POST /api/v1/epics`, `POST /api/v1/issues` and the link endpoint all accept
+`Idempotency-Key`, the same reserve-then-complete flow `POST
+/api/v1/sessions/{sessionId}/stop` uses: a client that lost the network after
+creating an issue can retry without risking a second issue. `PATCH` does not
+carry it — a repeated identical `PATCH` is naturally idempotent at the field
+level, and `If-Match` already refuses a retry that arrived after a concurrent
+change.
+
+### The write scope is separate from cancel
+
+Creating or changing a plan (`codexbridge.issues.write`) and cancelling a
+session (`codexbridge.task.cancel`) are different capabilities an operator may
+grant separately — see `permissions.ISSUES_WRITE_SCOPE`'s comment. The scope
+is now in `Settings.oauth_default_scopes`'s ceiling (`gateway/app/core/config.py`),
+which only widens what an OAuth-issued token can ever request; an account
+still needs the scope listed in its own `users.json` entry to actually receive
+it on sign-in.
+
+---
+
 ## Cross-cutting rules every endpoint inherits
 
 Implemented in `gateway/app/api/` (issue #12). An endpoint does not re-invent

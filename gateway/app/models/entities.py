@@ -62,6 +62,62 @@ class TaskModel(Base):
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
 
 
+class EpicModel(Base):
+    __tablename__ = "epics"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    # Which system owns this row. "local" is the only value this build writes:
+    # there is no GitHub sync yet, and this column is the seam a future one
+    # would use to tell a gateway-authored epic from a mirrored one, the same
+    # way ProjectModel already mirrors registry.json rather than owning it.
+    provider: Mapped[str] = mapped_column(String(32), default="local", server_default="local")
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32))
+    created_by_user_id: Mapped[str] = mapped_column(String(255))
+    created_by_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_by_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_by_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Bumped by every mutator in gateway/app/services/store.py. Same role as
+    # TaskModel.revision: the ETag optimistic-concurrency check compares
+    # against this, not against a timestamp.
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+
+
+class IssueModel(Base):
+    __tablename__ = "issues"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    epic_id: Mapped[str | None] = mapped_column(String(128), ForeignKey("epics.id"), nullable=True)
+    provider: Mapped[str] = mapped_column(String(32), default="local", server_default="local")
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32))
+    priority: Mapped[str] = mapped_column(String(32))
+    labels_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    assignee_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    assignee_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Issue ids this issue is blocked on, JSON-encoded. Not a join table: the
+    # scope here is "record and surface dependencies", not a full graph API,
+    # and a join table with no second consumer is the architecture expansion
+    # docs/limits.md rules out.
+    dependencies_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[str] = mapped_column(String(255))
+    created_by_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_by_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_by_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+
+
 class TaskLogModel(Base):
     __tablename__ = "task_logs"
 

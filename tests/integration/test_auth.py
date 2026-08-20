@@ -6,9 +6,10 @@ easy to claim and easy to get wrong: that a revocation actually takes effect on
 the credential store the *other* transport reads, and that what
 `GET /api/v1/auth/me` tells a client it may do is what the endpoints do.
 
-The sessions router is mounted alongside the auth router on purpose. A
-permission report tested against itself proves only that a dictionary was
-copied; tested against the endpoint it describes, it proves the claim.
+The sessions, epics and issues routers are mounted alongside the auth router
+on purpose. A permission report tested against itself proves only that a
+dictionary was copied; tested against the endpoints it describes, it proves
+the claim.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from gateway.app.api import permissions
 from gateway.app.api.routes import auth as auth_routes
+from gateway.app.api.routes import epics as epics_routes
+from gateway.app.api.routes import issues as issues_routes
 from gateway.app.api.routes import sessions as sessions_routes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.db.base import Base
@@ -150,6 +153,8 @@ async def api(users_file, monkeypatch):
     install_api_conventions(app)
     app.include_router(auth_routes.router)
     app.include_router(sessions_routes.router)
+    app.include_router(epics_routes.router)
+    app.include_router(issues_routes.router)
 
     async def override():
         async with factory() as s:
@@ -1001,6 +1006,16 @@ ENDPOINT_FOR_ACTION = {
     "sessions.pause": ("POST", "/api/v1/sessions/{id}/pause"),
     "sessions.resume": ("POST", "/api/v1/sessions/{id}/resume"),
     "sessions.restart": ("POST", "/api/v1/sessions/{id}/restart"),
+    # These six don't need a task/epic/issue to exist behind {id} — a
+    # permission dependency runs before the route body ever looks the id up,
+    # so a 403 for a caller lacking the scope, or a non-403 for one that has
+    # it, is reliable regardless of what {id} resolves to.
+    "epics.read": ("GET", "/api/v1/projects/p1/epics"),
+    "issues.read": ("GET", "/api/v1/projects/p1/issues"),
+    "issues.create": ("POST", "/api/v1/issues"),
+    "issues.update": ("PATCH", "/api/v1/issues/{id}"),
+    "epics.create": ("POST", "/api/v1/epics"),
+    "epics.linkIssue": ("POST", "/api/v1/epics/e1/issues/{id}"),
 }
 
 # Actions with no endpoint of their own, each naming the test that covers it
