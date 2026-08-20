@@ -81,6 +81,13 @@ SESSIONS_EXPLAIN_ERROR = Action(
     summary="Read the recorded evidence for why a session failed.",
 )
 
+PROJECTS_READ = Action(
+    name="projects.read",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="List projects and read a project's operational summary, within the actor's projects.",
+)
+
 SESSIONS_STOP = Action(
     name="sessions.stop",
     category=OPERATIONAL,
@@ -122,6 +129,7 @@ CATALOGUE: tuple[Action, ...] = (
     SESSIONS_READ,
     SESSIONS_READ_LOGS,
     SESSIONS_EXPLAIN_ERROR,
+    PROJECTS_READ,
     SESSIONS_STOP,
     SESSIONS_PAUSE,
     SESSIONS_RESUME,

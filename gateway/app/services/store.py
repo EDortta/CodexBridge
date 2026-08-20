@@ -26,6 +26,7 @@ from shared.protocol import (
     DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
     ExecutorRegistration,
     ProjectRegistration,
+    STOPPABLE_TASK_STATES,
     SubmitTaskRequest,
     TaskState,
 )
@@ -107,6 +108,178 @@ async def list_projects_for_executor(session: AsyncSession, executor_id: str) ->
         return []
     result = await session.execute(select(ProjectModel).where(ProjectModel.id.in_(allowed)).order_by(ProjectModel.id))
     return list(result.scalars())
+
+
+def _project_query(
+    *, project_ids: list[str] | None, search: str | None, enabled: bool | None
+):
+    """The shared filter for the project listing endpoints, unpaginated.
+
+    `list_projects_page` (cursor-paginated, for the common case) and
+    `list_projects_filtered` (unpaginated, for the `attention` filter — see its
+    docstring) both build on this so the two cannot drift on what "matching"
+    means.
+    """
+    statement = select(ProjectModel)
+    if project_ids is not None:
+        if not project_ids:
+            return None
+        statement = statement.where(ProjectModel.id.in_(project_ids))
+    if search:
+        pattern = f"%{search.strip().lower()}%"
+        statement = statement.where(
+            or_(func.lower(ProjectModel.id).like(pattern), func.lower(ProjectModel.name).like(pattern))
+        )
+    if enabled is not None:
+        statement = statement.where(ProjectModel.enabled == enabled)
+    return statement
+
+
+async def list_projects_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    search: str | None = None,
+    enabled: bool | None = None,
+    after: str | None = None,
+    limit: int = 50,
+) -> list[ProjectModel]:
+    """Projects the caller may see, ordered by id, over-fetched by one.
+
+    `ProjectModel` carries no creation timestamp, so `id` — unique and stable —
+    is the only sortable, cursor-safe ordering available. Same over-fetch
+    contract as `list_tasks_page`: callers read `limit + 1` rows so `hasMore` is
+    authoritative without a second COUNT.
+    """
+    statement = _project_query(project_ids=project_ids, search=search, enabled=enabled)
+    if statement is None:
+        return []
+    if after is not None:
+        statement = statement.where(ProjectModel.id > after)
+    statement = statement.order_by(ProjectModel.id.asc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def list_projects_filtered(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    search: str | None = None,
+    enabled: bool | None = None,
+) -> list[ProjectModel]:
+    """Every matching project, ordered by id, with no page limit.
+
+    Used only for the `attention` filter (`gateway/app/api/routes/projects.py`).
+    "Needs attention" is derived from executor liveness and pending-decision
+    counts, neither of which is a stored, indexable column — so it cannot be
+    pushed into the `WHERE` clause `list_projects_page` uses for everything
+    else. The registry this reads is operator-curated and expected to hold at
+    most a few hundred rows, so computing the derived field for every candidate
+    and paginating the result in Python is the honest trade here, not a
+    scalability promise.
+    """
+    statement = _project_query(project_ids=project_ids, search=search, enabled=enabled)
+    if statement is None:
+        return []
+    statement = statement.order_by(ProjectModel.id.asc())
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def get_project_for_caller(
+    session: AsyncSession, project_id: str, project_ids: list[str] | None
+) -> ProjectModel | None:
+    """A project the caller may see, or None.
+
+    None covers "does not exist" and "not yours" alike, same rule
+    `get_task_for_projects` applies: the caller turns both into `not_found`,
+    because a `403` would confirm the identifier exists to someone who was not
+    given it.
+    """
+    project = await session.get(ProjectModel, project_id)
+    if project is None:
+        return None
+    if project_ids is not None and project_id not in project_ids:
+        return None
+    return project
+
+
+async def executors_by_project(
+    session: AsyncSession, project_ids: list[str] | None = None
+) -> dict[str, list[ExecutorModel]]:
+    """`{project_id: [executors allowed to run it]}`, ordered by executor id.
+
+    The reverse of `list_projects_for_executor`: that one reads one executor's
+    `allowed_projects` from its metadata, this reads every executor's metadata
+    once and groups by the project ids found there. There is no join table —
+    the allowlist lives inside `ExecutorModel.metadata_json` — so this loads
+    every executor and filters in Python; the executor registry is
+    operator-curated and small, so one pass over all of it is cheaper than one
+    query per project. `project_ids=None` groups every project any executor
+    names; passing a list restricts the grouping to those ids without changing
+    the one query executed.
+    """
+    executors = await list_executors(session)
+    wanted = set(project_ids) if project_ids is not None else None
+    grouped: dict[str, list[ExecutorModel]] = {}
+    for executor in executors:
+        for project_id in json.loads(executor.metadata_json).get("allowed_projects", []):
+            if wanted is not None and project_id not in wanted:
+                continue
+            grouped.setdefault(project_id, []).append(executor)
+    return grouped
+
+
+async def executors_allowing_project(session: AsyncSession, project_id: str) -> list[ExecutorModel]:
+    """Executors whose allowlist names this one project. See `executors_by_project`."""
+    grouped = await executors_by_project(session, [project_id])
+    return grouped.get(project_id, [])
+
+
+async def project_task_counts(
+    session: AsyncSession, project_ids: list[str] | None
+) -> dict[str, dict[str, int]]:
+    """Per-project task counts, in one grouped query rather than one query per row.
+
+    Returns `{project_id: {"total": n, "pendingDecisions": n, "activeMissions": n}}`.
+    A project absent from tasks entirely is simply absent from the returned
+    dict — callers default to zero.
+
+    `pendingDecisions` counts `AWAITING_APPROVAL` — the same `TaskModel.state`
+    issue #9's sessions API already reports as `interventionRequired`, read
+    under the vocabulary issue #6 (decisions) will eventually give it its own
+    endpoint for. `activeMissions` counts `STOPPABLE_TASK_STATES` — every
+    non-terminal state — under the vocabulary issue #7 (missions) will give the
+    same rows their own endpoint. Both issues are still open; this reads the
+    one entity (`TaskModel`) that already exists rather than inventing a second
+    one to summarize.
+    """
+    if project_ids is not None and not project_ids:
+        return {}
+    statement = select(TaskModel.project_id, TaskModel.state, func.count(TaskModel.id)).group_by(
+        TaskModel.project_id, TaskModel.state
+    )
+    if project_ids is not None:
+        statement = statement.where(TaskModel.project_id.in_(project_ids))
+    result = await session.execute(statement)
+    counts: dict[str, dict[str, int]] = {}
+    for project_id, state, count in result.all():
+        bucket = counts.setdefault(project_id, {"total": 0, "pendingDecisions": 0, "activeMissions": 0})
+        bucket["total"] += count
+        if state == TaskState.AWAITING_APPROVAL.value:
+            bucket["pendingDecisions"] += count
+        if state in STOPPABLE_TASK_STATES:
+            bucket["activeMissions"] += count
+    return counts
+
+
+async def latest_project_activity_at(session: AsyncSession, project_id: str) -> datetime | None:
+    """The most recent task creation time for a project, or None if it has none."""
+    result = await session.execute(
+        select(func.max(TaskModel.created_at)).where(TaskModel.project_id == project_id)
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_task(session: AsyncSession, task_id: str) -> TaskModel | None:
@@ -191,6 +364,39 @@ async def mark_executor_connected(session: AsyncSession, executor_id: str, conne
     executor.connected = connected
     executor.last_seen_at = datetime.now(timezone.utc)
     await session.commit()
+
+
+def executor_is_live(
+    executor: ExecutorModel, *, now: datetime | None = None, grace_seconds: int | None = None
+) -> bool:
+    """Whether an executor should be presented as connected right now.
+
+    `ExecutorModel.connected` is set `True` on HELLO/heartbeat and `False` on a
+    graceful disconnect (`AgentHub.register`/`unregister`), but an abrupt
+    process kill on the executor side runs neither: no heartbeat arrives, and
+    nothing ever flips the column back. A gateway that just booted has an empty
+    in-memory `AgentHub`, so it cannot tell "no one is connected" from "I do not
+    know yet" by asking the hub — and the raw column alone would report that
+    project healthy forever.
+
+    `last_seen_at` is refreshed on every HELLO and heartbeat, so staleness is a
+    fact this can check without owning the socket: a dead executor's timestamp
+    stops advancing and ages out here on its own, bounded by
+    `settings.reconnect_grace_seconds` (default 120s — eight times the agent's
+    15s heartbeat interval, `docs/architecture.md`).
+
+    Used by the projects dashboard (issue #5) to compute project health. Not
+    applied to the existing MCP `executor_status`/`list_executors` tools, which
+    still read the raw column — retrofitting an already-shipped, unrelated
+    surface is out of this issue's scope.
+    """
+    if not executor.connected or executor.last_seen_at is None:
+        return False
+    from gateway.app.core.config import settings
+
+    grace = settings.reconnect_grace_seconds if grace_seconds is None else grace_seconds
+    now = now or datetime.now(timezone.utc)
+    return (now - _as_utc(executor.last_seen_at)) <= timedelta(seconds=grace)
 
 
 async def next_dispatchable_task(session: AsyncSession, executor_id: str) -> TaskModel | None:
