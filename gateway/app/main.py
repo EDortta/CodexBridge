@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.app.api.idempotency import purge_expired
 from gateway.app.api.rate_limit import RateLimitDependency, client_key
 from gateway.app.api.routes import auth as auth_routes
-from gateway.app.api.routes import probes, sessions
+from gateway.app.api.routes import probes, projects, sessions
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.core.agent_auth import TokenSource, resolve_executor_token
 from gateway.app.core.config import settings
@@ -100,6 +100,10 @@ app.include_router(probes.version_router, dependencies=[Depends(RateLimitDepende
 # Agent sessions (issue #9). Same limiter, and authorization per route through
 # gateway/app/api/auth.py against the catalogue in gateway/app/api/permissions.py.
 app.include_router(sessions.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# Projects and the project operational dashboard (issue #5). Same limiter and
+# authorization pattern as sessions.
+app.include_router(projects.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 # The mobile credential lifecycle (issue #4): sign-in, refresh, revocation, and
 # the effective permissions a client reads before it offers a control.

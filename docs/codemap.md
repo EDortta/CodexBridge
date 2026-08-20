@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-18 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-08-20 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 81 file(s) · 577 symbol(s) indexed
-- Languages: config (2), python (77), shell (2)
+- 83 file(s) · 624 symbol(s) indexed
+- Languages: config (2), python (79), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -61,6 +61,7 @@ gateway/
         __init__.py  — "HTTP routers for the mobile contract surface."
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
+        projects.py  — "Projects and the project operational dashboard — issue #5."
         sessions.py  — "Agent sessions, their logs, and lifecycle control."
       scope.py  — "Which requests the API's cross-cutting rules apply to."
       setup.py  — "One call that installs every cross-cutting API behaviour."
@@ -114,6 +115,7 @@ tests/
     test_auth.py  — "The mobile credential lifecycle — issue #4."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
+    test_projects.py  — "Projects and the project operational dashboard — issue #5."
     test_reconnect_replay_resolves.py  — "Issue #17 council round 1 — the headline scenario named by findings 1, 4"
     test_sessions.py  — "Agent sessions, logs and control — issue #9."
     test_store_and_mcp.py
@@ -275,6 +277,14 @@ tests/
 - `health()` *(async function)* — "Liveness. Deliberately touches nothing — see the module docstring."
 - `ready(response)` *(async function)* — "Readiness, with the reason when it is not ready."
 - `api_version()` *(async function)* — "What this server speaks, so a client can refuse before it starts."
+
+### `gateway/app/api/routes/projects.py`
+
+> Projects and the project operational dashboard — issue #5.
+
+- `list_projects_endpoint(response, q, status, attention, cursor, limit, principal, session)` *(async function)* — "Projects the caller may see, ordered by id, optimized for the mobile dashboard."
+- `get_project_detail(project_id, principal, session)` *(async function)*
+- `get_project_summary(project_id, principal, session)` *(async function)* — "The full dashboard payload for one project: status plus the executor breakdown."
 
 ### `gateway/app/api/routes/sessions.py`
 
@@ -457,10 +467,18 @@ tests/
 - `list_executors(session)` *(async function)*
 - `list_projects(session)` *(async function)*
 - `list_projects_for_executor(session, executor_id)` *(async function)*
+- `list_projects_page(session)` *(async function)* — "Projects the caller may see, ordered by id, over-fetched by one."
+- `list_projects_filtered(session)` *(async function)* — "Every matching project, ordered by id, with no page limit."
+- `get_project_for_caller(session, project_id, project_ids)` *(async function)* — "A project the caller may see, or None."
+- `executors_by_project(session, project_ids)` *(async function)* — "`{project_id: [executors allowed to run it]}`, ordered by executor id."
+- `executors_allowing_project(session, project_id)` *(async function)* — "Executors whose allowlist names this one project. See `executors_by_project`."
+- `project_task_counts(session, project_ids)` *(async function)* — "Per-project task counts, in one grouped query rather than one query per row."
+- `latest_project_activity_at(session, project_id)` *(async function)* — "The most recent task creation time for a project, or None if it has none."
 - `get_task(session, task_id)` *(async function)*
 - `list_recent_tasks(session, limit)` *(async function)*
 - `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email)` *(async function)*
 - `mark_executor_connected(session, executor_id, connected)` *(async function)*
+- `executor_is_live(executor)` — "Whether an executor should be presented as connected right now."
 - `next_dispatchable_task(session, executor_id)` *(async function)*
 - `update_task_state(session, task_id, state, error)` *(async function)*
 - `append_log(session, task_id, offset, stream, line)` *(async function)*
@@ -766,6 +784,47 @@ tests/
 - `test_a_concurrent_burst_issues_one_probe(monkeypatch)` *(async function)* — "The cache alone does not help while the first probe is still running."
 - `test_zero_cache_seconds_is_floored(monkeypatch)` — "A TTL of 0 would restore the uncached DoS, so it is not honoured."
 - `test_every_served_api_route_carries_the_rate_limiter()` — "`main.py` claimed every future /api route inherits the limiter. It does not."
+
+### `tests/integration/test_projects.py`
+
+> Projects and the project operational dashboard — issue #5.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)* — "A real app over a real database, seeded with two projects and one executor."
+- `make_task(factory, project_id, instruction, state)` *(async function)*
+- `mark_live(factory, executor_id)` *(async function)*
+- `set_last_seen(factory, executor_id, when)` *(async function)* — "Force a specific `last_seen_at` without going through a heartbeat."
+- `add_project(factory, project_id)` *(async function)*
+- `auth(token)`
+- `test_projects_require_a_token(api)` *(async function)*
+- `test_an_expired_token_is_refused(api)` *(async function)*
+- `test_a_token_without_the_read_scope_is_forbidden(api)` *(async function)*
+- `test_a_project_outside_the_callers_scope_is_not_found_not_forbidden(api)` *(async function)* — "404 confirms the identifier exists, which is what probing is for."
+- `test_the_same_scope_rule_applies_to_summary(api)` *(async function)*
+- `test_the_list_is_filtered_before_it_is_paged(api)` *(async function)*
+- `test_a_user_with_no_projects_sees_nothing(api, users_file, monkeypatch)` *(async function)*
+- `test_the_project_body_never_carries_the_filesystem_path(api)` *(async function)*
+- `test_health_is_unknown_when_no_executor_names_the_project(api)` *(async function)*
+- `test_health_is_degraded_when_the_assigned_executor_is_not_live(api)` *(async function)*
+- `test_health_is_ok_when_the_assigned_executor_is_live(api)` *(async function)*
+- `test_a_stale_heartbeat_reads_as_not_live_even_though_the_column_says_connected(api)` *(async function)* — "The bug `store.executor_is_live` exists to close."
+- `test_health_is_disabled_for_a_disabled_project_regardless_of_executors(api)` *(async function)*
+- `test_counts_reflect_task_state(api)` *(async function)*
+- `test_a_project_with_no_sessions_reports_zero_not_a_missing_field(api)` *(async function)*
+- `test_last_activity_reflects_the_newest_session(api)` *(async function)*
+- `test_the_list_carries_the_same_counts_as_the_detail_read(api)` *(async function)* — "The list must not be a lighter lie than the detail endpoint."
+- `test_issues_and_artifacts_are_not_invented(api)` *(async function)* — "No `IssueModel`/`ArtifactModel` exists yet; an always-zero field would"
+- `test_summary_reports_the_executor_breakdown(api)` *(async function)*
+- `test_summary_never_reports_a_host_or_port(api)` *(async function)* — "`docs/api/README.md` "Fields that must never ship" — no hostname, no port."
+- `test_search_matches_id_or_name_case_insensitively(api)` *(async function)*
+- `test_status_filters_by_enabled(api)` *(async function)*
+- `test_an_invalid_status_value_is_rejected(api)` *(async function)*
+- `test_attention_surfaces_projects_needing_a_decision_or_unhealthy(api)` *(async function)*
+- `test_attention_does_not_flag_a_disabled_project(api)` *(async function)* — "A disabled project was turned off on purpose; that is not a surprise."
+- `test_the_cursor_walks_every_project_once(api)` *(async function)*
+- `test_the_cursor_walks_every_project_once_under_attention(api)` *(async function)* — "The in-memory-paginated path (`attention` set) must not repeat or skip either."
+- `test_a_cursor_from_another_filter_is_rejected(api)` *(async function)*
+- `test_a_cursor_is_not_valid_for_another_caller(api)` *(async function)* — "The caller's scope is bound into the cursor, same rule as sessions."
 
 ### `tests/integration/test_reconnect_replay_resolves.py`
 

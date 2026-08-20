@@ -456,6 +456,72 @@ names the file if a deployment starts without it.
 
 ---
 
+## Projects (issue #5)
+
+`GET /api/v1/projects`, `GET .../{id}`, `GET .../{id}/summary`.
+
+A **project** is a `ProjectModel` row: an entry in the gateway registry
+(`docs/project-onboarding.md`), addressed by `ProjectId` and never by its
+server filesystem path. `ProjectModel.path` is the canonical trap named above
+and is excluded from every response this issue adds.
+
+### Counts read one entity, not three
+
+The acceptance criteria ask for counts of "pending decisions, missions, issues,
+sessions and recent artifacts". Only `TaskModel` exists today. `pendingDecisions`
+(`awaiting_approval` sessions) and `activeMissions` (every non-terminal
+session) both read that one table under the vocabulary issues #6 and #7 will
+eventually give their own endpoints — they are not new entities, and building
+one now would be exactly the speculative expansion `docs/limits.md` rules out.
+`issues` (issue #8) and `artifacts` (issue #11) have no backing model at all in
+this build and are omitted rather than always reported as zero — a
+permanently-zero field is a claim a mobile client can build a UI around and
+never see contradicted, the same failure `probes.CAPABILITIES`'s own history
+warns about.
+
+### Health is derived from executor staleness, not the raw `connected` column
+
+`ExecutorModel.connected` is set `true` on HELLO/heartbeat and `false` on a
+*graceful* disconnect (`AgentHub.unregister`). An abrupt process kill on the
+executor side runs neither, and nothing else ever times the column back out —
+so a dashboard reading it raw would show a dead executor's project healthy
+forever. `store.executor_is_live` instead checks `last_seen_at` against
+`settings.reconnect_grace_seconds` (default 120s), which is refreshed on every
+heartbeat regardless of which gateway process is holding the socket.
+
+This is used by the new `health` field (`ok` / `degraded` / `unknown` /
+`disabled`) and by `ProjectSummary.executors[].connected`. It is **not**
+applied to the existing MCP `executor_status` / `list_executors` tools, which
+still read the raw column — retrofitting an already-shipped, unrelated surface
+is out of this issue's scope; a future issue can converge them.
+
+### `attention` is computed in Python, not pushed to SQL
+
+`health` and `pendingDecisions` are derived at read time, not stored columns,
+so the database cannot filter on them the way it filters `q` and `status`.
+`?attention=true|false` loads every matching project unpaginated
+(`store.list_projects_filtered`) and paginates the filtered result in memory.
+The registry this reads is operator-curated and expected to hold at most a few
+hundred rows; this is a documented trade-off, not a scalability promise, and
+`store.list_projects_page`'s cursor-paginated, database-level query is still
+what serves every request that does not set `attention`.
+
+### List and detail are the condensed shape; `summary` adds the executor breakdown
+
+`GET /api/v1/projects` and `GET /api/v1/projects/{id}` return `ProjectStatus` —
+health and counts, no per-executor detail, so a list of fifty projects does not
+repeat an executor array fifty times. `GET /api/v1/projects/{id}/summary`
+returns `ProjectSummary`: the same fields plus `executors[]` (id, staleness-derived
+`connected`, `lastSeenAt`) and `generatedAt`, for the one-project dashboard view
+that needs the full picture in one call.
+
+### Authorization
+
+Same rule as sessions: project scope is enforced **on the query**, and a
+project in a scope the caller cannot see returns **404, never 403**.
+
+---
+
 ## Sessions (issue #9)
 
 A **session** is one `codex exec` run — internally a `TaskModel`. The mobile

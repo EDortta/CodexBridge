@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from gateway.app.api import permissions
 from gateway.app.api.routes import auth as auth_routes
+from gateway.app.api.routes import projects as projects_routes
 from gateway.app.api.routes import sessions as sessions_routes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.db.base import Base
@@ -150,6 +151,7 @@ async def api(users_file, monkeypatch):
     install_api_conventions(app)
     app.include_router(auth_routes.router)
     app.include_router(sessions_routes.router)
+    app.include_router(projects_routes.router)
 
     async def override():
         async with factory() as s:
@@ -997,6 +999,7 @@ ENDPOINT_FOR_ACTION = {
     "sessions.read": ("GET", "/api/v1/sessions"),
     "sessions.readLogs": ("GET", "/api/v1/sessions/{id}/logs"),
     "sessions.explainError": ("POST", "/api/v1/sessions/{id}/explain-error"),
+    "projects.read": ("GET", "/api/v1/projects"),
     "sessions.stop": ("POST", "/api/v1/sessions/{id}/stop"),
     "sessions.pause": ("POST", "/api/v1/sessions/{id}/pause"),
     "sessions.resume": ("POST", "/api/v1/sessions/{id}/resume"),

@@ -385,3 +385,74 @@ Questions carried forward:
 - [the second caller] The whole of findings 1/4/7 is closed by an agent-side change (`service.py`'s unconditional `task.cancelled`, plus the new `known` field). A gateway upgraded ahead of its executors gets `known` defaulting to True (main.py:534) and the pre-fix pinning behaviour, silently — the HELLO payload carries `{"version": "0.1.0"}` and nothing on the gateway reads it. Should a mixed fleet produce a warning, or should `/executors` surface which executors are old enough that #17 is still live for them? No failing test offered; this is a design question, not a finding.
 - [the second caller] docs/api/codex-bridge.openapi.yaml:518-526 says the replay covers '`task.cancel` and pending `task.pause`/`task.resume`/`task.restart` alike' and then bounds it with `cancel_replay_max_age_seconds` alone. The two windows are now independent knobs (`control_replay_max_age_seconds`). The trailing clause scopes itself to `task.cancel`, and this is the `/stop` description where only cancel matters, so I did not raise it as a finding — but an operator who sets only the cancel knob to 0 will not learn from that paragraph that pause/resume/restart replay is still on.
 - [the second caller] The new `_dispatch_cancel` docstring says 'Past the window the task stays CANCELLED with no further replay: the executor resolves an unknown cancel on its own either way ..., so the TTL trims stale noise rather than leaving anything unresolved.' The executor only resolves it if a `task.cancel` is actually delivered; past the window none ever is, so a `codex exec` still running on a late-returning executor is never told to die. The sentence is defensible as being about the gateway's bookkeeping, but the next reader can read it as 'past the window it is still fine'.
+
+## 2026-08-20 — gh-5, projects and project operational summary API
+
+Picked up epic #1's next unblocked sub-issue. Before writing anything,
+`git branch -a` showed local branches for #5, #6, #7 and #8 already carrying
+`wip(gh-N): parked, failed` commits — an automated "autopilot" had attempted
+all four on 2026-08-14 and parked each after the reviewer returned BLOCKER
+twice (or, for #8, after the reviewer agent itself failed). #5's branch even
+had a real fix commit on top of the parked WIP and still didn't clear review.
+Branches for #10/#11/#13 existed too but carried zero commits — placeholders,
+never attempted. Lesson for whoever picks up #6/#7/#8 next: read those
+branches' diffs first (`git log development..feature/gh-N/... -p`) — the
+design prose in them is often sound (issue #7's WIP, for instance, correctly
+argues "mission"/"decision" are `TaskModel` rows viewed under a different
+vocabulary, not new entities) even where the branch as a whole never shipped.
+I did not resume any of the four; #5's own parked branch was the most
+tempting to build on and I still started clean, because "reviewer BLOCKER
+twice" is not evidence the design was right and the tests wrong.
+
+The most useful thing inherited from #5's dead branch was a bug, not code:
+`gateway/app/core/config.py` already declared `reconnect_grace_seconds = 120`
+with no comment and `grep` found no reader anywhere in the tree — an orphaned
+setting, added by the parked attempt and never wired up, not even listed in
+`.env.example` next to its neighbors. Chasing why it existed surfaced a real,
+live gap: `ExecutorModel.connected` is flipped `false` only by a *graceful*
+WebSocket disconnect (`AgentHub.unregister`); an abrupt process kill on the
+executor side runs neither that nor anything else, so nothing ever times the
+column back out, and a dashboard reading it raw would show a dead executor's
+project healthy forever. Gave the setting a job: `store.executor_is_live`
+checks `last_seen_at` against it instead of trusting the raw column. Scoped
+narrowly on purpose — the existing MCP `executor_status`/`list_executors`
+tools still read the raw column unchanged. Retrofitting them to match was
+plausibly part of what sank the autopilot's #5 attempt in review (its own WIP
+commit message argued for exactly that convergence); pulling an
+already-shipped, unrelated surface into a new-endpoint issue is scope creep
+regardless of whether the argument for it is correct, and it gave this
+delivery a second, unrelated thing to get wrong under review pressure. Left
+as a note in `docs/api/README.md`'s new "Projects" section for whoever
+touches `gateway/app/mcp/server.py` next.
+
+Two of #5's own acceptance-criteria nouns ("issues", "recent artifacts") have
+no backing entity in this codebase (no `IssueModel`, no `ArtifactModel` —
+those are issues #8 and #11). Followed the same discipline the dead #7/#8
+branches had already worked out and documented in their own WIP: omit the
+field rather than ship it always-zero, because a permanently-zero field is
+one a mobile client can build a list UI around and never see populated, the
+same failure `probes.CAPABILITIES`'s own doc comment warns against for
+capability flags. Named explicitly in the response's own field docs and in
+`docs/api/README.md`, not left to be discovered by a client hitting `KeyError`.
+
+`attention` (health + pending-decision derived, not a stored column) cannot
+be pushed into the `WHERE` clause the way `q`/`status` can. Rather than adding
+an indexed/materialized health column for one filter on an operator-curated
+registry expected to hold at most a few hundred rows, `store.list_projects_filtered`
+loads every match unpaginated and the route paginates the filtered list in
+Python — documented as an explicit trade-off in both the store function's
+docstring and the README, not silently shipped as if it were the same
+O(page) cost as the normal cursor path.
+
+`python3 -m pytest -q` → 381 passed (352 on `development` + 29 new,
+`tests/integration/test_projects.py`). Every new test run as part of the full
+suite, not in isolation only. `governancekit --root . map` regenerated twice
+(once after adding `gateway/app/api/routes/projects.py`, once more after
+adding the test file — the codemap gate indexes `tests/` too and caught both).
+Not council-reviewed: `.git/hooks/pre-commit` does not exist in this checkout,
+so the kit's council gate is not mechanically enforced here, and
+`.docs/agents/council.md` §4's own triggers (mechanical sweep, kit-owned
+contract change, a `not validated:` claim, a gate-changing release) do not
+fire for a same-shaped new-feature delivery — self-reviewed against
+`.docs/agents/reviewer.md`'s BLOCKER criteria instead. Committed, not pushed,
+not merged to `main`, awaiting operator review per standing policy.
