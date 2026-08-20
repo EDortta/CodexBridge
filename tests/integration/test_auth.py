@@ -6,9 +6,10 @@ easy to claim and easy to get wrong: that a revocation actually takes effect on
 the credential store the *other* transport reads, and that what
 `GET /api/v1/auth/me` tells a client it may do is what the endpoints do.
 
-The sessions router is mounted alongside the auth router on purpose. A
-permission report tested against itself proves only that a dictionary was
-copied; tested against the endpoint it describes, it proves the claim.
+The sessions and missions routers are mounted alongside the auth router on
+purpose. A permission report tested against itself proves only that a
+dictionary was copied; tested against the endpoints it describes, it proves
+the claim.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from gateway.app.api import permissions
 from gateway.app.api.routes import auth as auth_routes
+from gateway.app.api.routes import missions as missions_routes
 from gateway.app.api.routes import sessions as sessions_routes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.db.base import Base
@@ -150,6 +152,7 @@ async def api(users_file, monkeypatch):
     install_api_conventions(app)
     app.include_router(auth_routes.router)
     app.include_router(sessions_routes.router)
+    app.include_router(missions_routes.router)
 
     async def override():
         async with factory() as s:
@@ -1001,6 +1004,10 @@ ENDPOINT_FOR_ACTION = {
     "sessions.pause": ("POST", "/api/v1/sessions/{id}/pause"),
     "sessions.resume": ("POST", "/api/v1/sessions/{id}/resume"),
     "sessions.restart": ("POST", "/api/v1/sessions/{id}/restart"),
+    "missions.read": ("GET", "/api/v1/missions"),
+    "missions.readTimeline": ("GET", "/api/v1/missions/{id}/timeline"),
+    "missions.explain": ("POST", "/api/v1/missions/{id}/explain"),
+    "missions.cancel": ("POST", "/api/v1/missions/{id}/cancel"),
 }
 
 # Actions with no endpoint of their own, each naming the test that covers it
@@ -1012,6 +1019,7 @@ ENDPOINT_FOR_ACTION = {
 COVERED_ELSEWHERE = {
     # Not an endpoint: it is the admin widening of the two read endpoints.
     "sessions.readAllProjects": "test_the_administrative_action_describes_what_the_list_endpoint_does",
+    "missions.readAllProjects": "test_the_administrative_action_describes_what_the_missions_list_endpoint_does",
 }
 
 
@@ -1099,3 +1107,20 @@ async def test_the_administrative_action_describes_what_the_list_endpoint_does(a
     admin_projects = api.get("/api/v1/auth/me", headers=auth(admin["accessToken"])).json()["projects"]
     assert alice_projects["all"] is False and alice_projects["ids"] == ["p1"]
     assert admin_projects["all"] is True
+
+
+async def test_the_administrative_action_describes_what_the_missions_list_endpoint_does(api) -> None:
+    """`missions.readAllProjects` mirrors `sessions.readAllProjects` — same widening."""
+    await make_task(api.factory, "p1")
+
+    alice = sign_in(api).json()
+    admin = sign_in(api, "admin").json()
+
+    def reads_all(token: str) -> bool:
+        reported = api.get("/api/v1/auth/me", headers=auth(token)).json()["permissions"]
+        return next(
+            entry["allowed"] for entry in reported if entry["action"] == "missions.readAllProjects"
+        )
+
+    assert reads_all(alice["accessToken"]) is False
+    assert reads_all(admin["accessToken"]) is True

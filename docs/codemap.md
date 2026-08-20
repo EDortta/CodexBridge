@@ -1,17 +1,16 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-18 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
+> Generated: 2026-08-20 · Root: `/tmp/cb-gh7-fresh`
+> Refresh: `governancekit --root /tmp/cb-gh7-fresh map`
 
 ## Summary
 
-- 81 file(s) · 577 symbol(s) indexed
-- Languages: config (2), python (77), shell (2)
+- 83 file(s) · 626 symbol(s) indexed
+- Languages: config (2), python (79), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
 
-- `AGENTS.md`
 - `docs/required-reading.md`
 - `docs/project-rules.md`
 - `docs/software-overview.md`
@@ -60,6 +59,7 @@ gateway/
       routes/
         __init__.py  — "HTTP routers for the mobile contract surface."
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
+        missions.py  — "Missions: the mission-control view of the same run Sessions exposes — issue #7."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
         sessions.py  — "Agent sessions, their logs, and lifecycle control."
       scope.py  — "Which requests the API's cross-cutting rules apply to."
@@ -112,6 +112,7 @@ tests/
     test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
+    test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
     test_reconnect_replay_resolves.py  — "Issue #17 council round 1 — the headline scenario named by findings 1, 4"
@@ -265,6 +266,16 @@ tests/
 - `refresh(body, response, session)` *(async function)* — "Rotate a refresh token into a new pair."
 - `revoke(request, response, body, session)` *(async function)* — "Sign out: end the grant now rather than at expiry."
 - `current_actor(response, principal)` *(async function)* — "Who is calling, and what this build will let them do."
+
+### `gateway/app/api/routes/missions.py`
+
+> Missions: the mission-control view of the same run Sessions exposes — issue #7.
+
+- `list_missions(response, project_id, stage, state, risk, blocked, cursor, limit, principal, session)` *(async function)* — "Missions the caller may see, newest first."
+- `get_mission(mission_id, response, principal, session)` *(async function)*
+- `get_mission_timeline(mission_id, response, cursor, limit, principal, session)` *(async function)* — "The mission's recorded events, oldest first — the order a narrative reads in."
+- `cancel_mission(mission_id, response, if_match, idempotency_key, principal, session)` *(async function)* — "Cancel a mission that is queued, waiting, running or awaiting approval."
+- `explain_mission(mission_id, principal, session)` *(async function)* — "A structured account of a mission's current state, assembled server-side."
 
 ### `gateway/app/api/routes/probes.py`
 
@@ -485,6 +496,10 @@ tests/
 - `get_recent_logs(session, task_id)` *(async function)* — "The most recent log lines, oldest-first within the slice."
 - `list_tasks_requiring_cancel_replay(session, executor_id)` *(async function)* — "Cancelled tasks whose executor has not yet acknowledged the cancellation."
 - `list_tasks_requiring_control_replay(session, executor_id)` *(async function)* — "Tasks stuck in a pending pause/resume/restart, waiting for a `task.ack`"
+- `mission_risk(task)` — "The mission-control risk level for one task (issue #7). See `_risk_filter_clause`."
+- `mission_stage(task)`
+- `list_missions_page(session)` *(async function)* — "Missions (tasks, in mission-control framing) the caller may see, newest"
+- `list_task_events_page(session, task_id)` *(async function)* — "A mission's timeline, oldest first — the order a narrative reads in (issue #7)."
 
 ### `scripts/apply_migrations.py`
 
@@ -714,6 +729,51 @@ tests/
 - `test_the_guard_flags_a_new_administrative_action(monkeypatch)` — "The guard is only worth having if it fires — so fire it."
 - `test_the_report_and_the_endpoints_agree(api, who)` *(async function)* — "The claim the whole endpoint exists for."
 - `test_the_administrative_action_describes_what_the_list_endpoint_does(api)` *(async function)* — "`sessions.readAllProjects` is administrative because it crosses projects."
+- `test_the_administrative_action_describes_what_the_missions_list_endpoint_does(api)` *(async function)* — "`missions.readAllProjects` mirrors `sessions.readAllProjects` — same widening."
+
+### `tests/integration/test_missions.py`
+
+> Missions: the mission-control view of Sessions — issue #7.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)* — "A real app over a real database, seeded with two projects."
+- `make_task(factory, project_id, instruction, mode, state)` *(async function)*
+- `auth(token)`
+- `test_missions_require_a_token(api)` *(async function)*
+- `test_an_expired_token_is_refused(api)` *(async function)*
+- `test_a_mission_in_an_invisible_project_is_not_found_not_forbidden(api)` *(async function)*
+- `test_the_list_is_filtered_before_it_is_paged(api)` *(async function)*
+- `test_the_mission_body_never_carries_the_project_path(api)` *(async function)*
+- `test_objective_and_assigned_agent_are_the_instruction_and_the_executor(api)` *(async function)*
+- `test_stage_groups_state_into_three_phases(api, state, stage)` *(async function)*
+- `test_risk_is_derived_from_mode(api, mode, risk)` *(async function)*
+- `test_a_sensitive_instruction_overrides_risk_to_sensitive(api)` *(async function)* — "The keyword-escalation path recorded on `approval_state` at creation."
+- `test_a_mission_awaiting_approval_is_blocked_with_a_reason(api)` *(async function)*
+- `test_a_running_mission_is_not_blocked(api)` *(async function)*
+- `test_stage_filter_restricts_the_list(api)` *(async function)*
+- `test_state_and_stage_together_intersect(api)` *(async function)*
+- `test_risk_filter_restricts_the_list(api)` *(async function)*
+- `test_blocked_filter_restricts_the_list(api)` *(async function)*
+- `test_project_filter_is_intersected_with_visibility(api)` *(async function)*
+- `test_the_cursor_walks_every_mission_once(api)` *(async function)*
+- `test_timeline_of_an_invisible_mission_is_not_found(api)` *(async function)*
+- `test_timeline_reports_creation_and_state_changes_oldest_first(api)` *(async function)*
+- `test_timeline_pages_by_cursor(api)` *(async function)*
+- `test_a_mission_timeline_cursor_is_not_valid_for_another_mission(api)` *(async function)*
+- `test_timeline_entries_are_redacted(api)` *(async function)*
+- `test_a_token_without_the_scope_cannot_cancel(api)` *(async function)*
+- `test_cancel_requires_if_match(api)` *(async function)*
+- `test_cancel_with_a_stale_etag_is_refused(api)` *(async function)*
+- `test_cancel_transitions_a_running_mission_and_notifies_the_executor(api)` *(async function)*
+- `test_cancelling_a_finished_mission_is_a_conflict(api)` *(async function)* — "State-transition validation — issue #7's acceptance criterion."
+- `test_cancel_an_already_cancelled_mission_is_also_a_conflict(api)` *(async function)*
+- `test_a_disconnected_executor_does_not_block_cancel(api)` *(async function)*
+- `test_a_retried_cancel_replays_instead_of_acting_twice(api)` *(async function)*
+- `test_cancel_is_audited_with_the_actor(api)` *(async function)* — "Destructive commands require authenticated actor context and are audited."
+- `test_cancel_releases_the_executor_slot(api)` *(async function)*
+- `test_explain_reports_mission_control_fields_alongside_evidence(api)` *(async function)*
+- `test_explain_on_a_blocked_mission_reports_it(api)` *(async function)*
+- `test_explain_of_an_invisible_mission_is_not_found(api)` *(async function)*
 
 ### `tests/integration/test_oauth_authorize.py`
 

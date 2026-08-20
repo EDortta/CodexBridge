@@ -116,17 +116,57 @@ SESSIONS_READ_ALL_PROJECTS = Action(
     summary="See sessions in every project, not only the actor's own.",
 )
 
+MISSIONS_READ = Action(
+    name="missions.read",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="List missions and read one, within the actor's projects.",
+)
+
+MISSIONS_READ_TIMELINE = Action(
+    name="missions.readTimeline",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="Read the recorded timeline of a mission.",
+)
+
+MISSIONS_EXPLAIN = Action(
+    name="missions.explain",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="Read the recorded evidence for a mission's current state.",
+)
+
+MISSIONS_CANCEL = Action(
+    name="missions.cancel",
+    category=OPERATIONAL,
+    scope=CANCEL_SCOPE,
+    summary="Cancel a queued or running mission.",
+)
+
+MISSIONS_READ_ALL_PROJECTS = Action(
+    name="missions.readAllProjects",
+    category=ADMINISTRATIVE,
+    scope=ADMIN_SCOPE,
+    summary="See missions in every project, not only the actor's own.",
+)
+
 # Order is the reported order. Grouped by class, read first, so a client that
 # renders the list without sorting produces something sensible.
 CATALOGUE: tuple[Action, ...] = (
     SESSIONS_READ,
     SESSIONS_READ_LOGS,
     SESSIONS_EXPLAIN_ERROR,
+    MISSIONS_READ,
+    MISSIONS_READ_TIMELINE,
+    MISSIONS_EXPLAIN,
     SESSIONS_STOP,
     SESSIONS_PAUSE,
     SESSIONS_RESUME,
     SESSIONS_RESTART,
+    MISSIONS_CANCEL,
     SESSIONS_READ_ALL_PROJECTS,
+    MISSIONS_READ_ALL_PROJECTS,
 )
 
 
