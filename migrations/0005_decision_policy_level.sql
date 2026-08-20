@@ -1,0 +1,16 @@
+-- WK-20260820-gh-6-decisions-api / issue #6
+--
+-- The operational decisions API (GET/POST /api/v1/decisions/**) reports and
+-- filters by the risk level a task's approval gate was raised at. That level
+-- already exists at creation time (`shared.policy.evaluate_task_policy`), but
+-- the only column it was ever written to is `approval_state` — and
+-- `decide_task_approval` overwrites that column with the outcome
+-- ("approved"/"rejected"/"revision_requested") the moment a decision is made.
+-- A risk filter applied after resolution would therefore be comparing against
+-- the wrong value.
+--
+-- Apply with `python3 scripts/apply_migrations.py`. Nullable, no default: a
+-- task that never needed approval has no policy level, and backfilling one for
+-- rows written before this column existed would be inventing data no policy
+-- evaluation actually produced.
+alter table tasks add column policy_level varchar(32);

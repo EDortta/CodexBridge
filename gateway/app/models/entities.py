@@ -54,6 +54,13 @@ class TaskModel(Base):
     result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     approval_state: Mapped[str | None] = mapped_column(String(64), nullable=True)
     approval_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The policy level at the moment this task needed a decision (`shared.policy`),
+    # set once and never overwritten (issue #6). `approval_state` cannot serve the
+    # same purpose: `decide_task_approval` overwrites it with the outcome
+    # ("approved"/"rejected"/"revision_requested"), so the risk a decision was
+    # raised at would be lost the instant it was resolved — and the decisions API
+    # filters and reports on it after resolution, not only while pending.
+    policy_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Monotonic revision, bumped by every mutator in gateway/app/services/store.py.
     # It is what optimistic concurrency compares against: the timestamps cannot
     # serve, because none of started_at/completed_at moves when approval_state or

@@ -6,9 +6,10 @@ easy to claim and easy to get wrong: that a revocation actually takes effect on
 the credential store the *other* transport reads, and that what
 `GET /api/v1/auth/me` tells a client it may do is what the endpoints do.
 
-The sessions router is mounted alongside the auth router on purpose. A
-permission report tested against itself proves only that a dictionary was
-copied; tested against the endpoint it describes, it proves the claim.
+The sessions and decisions routers are mounted alongside the auth router on
+purpose. A permission report tested against itself proves only that a
+dictionary was copied; tested against the endpoints it describes, it proves
+the claim.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from gateway.app.api import permissions
 from gateway.app.api.routes import auth as auth_routes
+from gateway.app.api.routes import decisions as decisions_routes
 from gateway.app.api.routes import sessions as sessions_routes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.db.base import Base
@@ -150,6 +152,7 @@ async def api(users_file, monkeypatch):
     install_api_conventions(app)
     app.include_router(auth_routes.router)
     app.include_router(sessions_routes.router)
+    app.include_router(decisions_routes.router)
 
     async def override():
         async with factory() as s:
@@ -1001,6 +1004,11 @@ ENDPOINT_FOR_ACTION = {
     "sessions.pause": ("POST", "/api/v1/sessions/{id}/pause"),
     "sessions.resume": ("POST", "/api/v1/sessions/{id}/resume"),
     "sessions.restart": ("POST", "/api/v1/sessions/{id}/restart"),
+    "decisions.read": ("GET", "/api/v1/decisions"),
+    # Neither test principal below carries `codexbridge.task.approve`, so this
+    # is refused by `require_action` itself — the same reason `sessions.stop`
+    # above is exercised against a task that is not necessarily stoppable.
+    "decisions.decide": ("POST", "/api/v1/decisions/{id}/approve"),
 }
 
 # Actions with no endpoint of their own, each naming the test that covers it

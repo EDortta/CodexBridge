@@ -165,6 +165,11 @@ async def create_task(
         correlation_id=str(uuid4()),
         session_id=continue_session_id,
         approval_state=policy.level.value if state == TaskState.AWAITING_APPROVAL else None,
+        # Same condition as `approval_state` above, on purpose (issue #6): a task
+        # that never needed a decision has no risk level to report on the
+        # decisions API. Unlike `approval_state`, this is never overwritten once
+        # a decision is made — see the column's comment in `models/entities.py`.
+        policy_level=policy.level.value if state == TaskState.AWAITING_APPROVAL else None,
     )
     session.add(task)
     await record_event(
@@ -897,3 +902,87 @@ async def list_tasks_requiring_control_replay(
         .order_by(TaskModel.created_at.asc())
     )
     return list(result.scalars())
+
+
+async def list_decisions_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    decision_states: list[str] | None = None,
+    urgencies: list[str] | None = None,
+    risks: list[str] | None = None,
+    deadline_before: datetime | None = None,
+    deadline_after: datetime | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[TaskModel]:
+    """Decisions the caller may see, newest first, over-fetched by one (issue #6).
+
+    A "decision" is a task that has ever required approval: `policy_level` is
+    set once, at creation, and never cleared afterwards — see the column's
+    comment in `models/entities.py`. That is the predicate below, and it is why
+    a task nobody was ever asked to decide on cannot appear here however it is
+    filtered.
+
+    `decision_states` filters on the caller-facing state
+    (`routes/decisions.py:_decision_state`: `pending`, `approved`, `rejected`,
+    `revision_requested`), not on one raw column, because `pending` has no
+    column value of its own — it is `state == AWAITING_APPROVAL` — while the
+    other three read `approval_state` once the task has moved on.
+
+    Same over-fetch-by-one and `(created_at DESC, id DESC)` cursor scheme as
+    `list_tasks_page`, for the same reason: authorization can filter a page
+    short, so `hasMore` has to come from an extra row rather than a length check.
+    """
+    statement = select(TaskModel).where(TaskModel.policy_level.isnot(None))
+    if project_ids is not None:
+        if not project_ids:
+            return []
+        statement = statement.where(TaskModel.project_id.in_(project_ids))
+    if decision_states:
+        clauses = [
+            TaskModel.state == TaskState.AWAITING_APPROVAL.value
+            if state == "pending"
+            else TaskModel.approval_state == state
+            for state in decision_states
+        ]
+        statement = statement.where(or_(*clauses))
+    if urgencies:
+        statement = statement.where(TaskModel.priority.in_(urgencies))
+    if risks:
+        statement = statement.where(TaskModel.policy_level.in_(risks))
+    if deadline_before is not None:
+        statement = statement.where(TaskModel.expires_at <= deadline_before)
+    if deadline_after is not None:
+        statement = statement.where(TaskModel.expires_at >= deadline_after)
+    if after is not None:
+        created_at, task_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                TaskModel.created_at < created_at,
+                and_(TaskModel.created_at == created_at, TaskModel.id < task_id),
+            )
+        )
+    statement = statement.order_by(TaskModel.created_at.desc(), TaskModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def get_decision_for_projects(
+    session: AsyncSession, decision_id: str, project_ids: list[str] | None
+) -> TaskModel | None:
+    """A decision the caller may see, or None — "not a decision" included (issue #6).
+
+    A task that never required approval has `policy_level is None` and is not a
+    decision; answering anything but the caller's usual `not_found` for it would
+    tell a caller who probed a normal task id through this resource that the id
+    exists, which `get_task_for_projects` already treats as unsafe to confirm.
+    """
+    task = await session.get(TaskModel, decision_id)
+    if task is None or task.policy_level is None:
+        return None
+    if project_ids is not None and task.project_id not in project_ids:
+        return None
+    return task

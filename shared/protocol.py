@@ -113,6 +113,13 @@ class AgentMessageType(str, Enum):
 class ApprovalDecision(str, Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
+    # Distinct from REJECTED so a Decision DTO can tell an operator "send this
+    # back for changes" apart from "this will not run" (issue #6). Both still
+    # cancel the task: there is no protocol capability to hold it open for a
+    # resubmission, so pretending otherwise would be the same failure
+    # `routes/sessions.py` names for pause/resume/restart — a control that
+    # reports success and changes nothing.
+    REVISION_REQUESTED = "revision_requested"
 
 
 class ProjectRegistration(BaseModel):

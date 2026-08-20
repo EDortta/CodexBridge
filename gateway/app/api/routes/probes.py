@@ -49,7 +49,7 @@ version_router = APIRouter()
 # `tests/contract/test_openapi_document.py` asserts it equals the document's
 # `info.version`, so the two cannot drift — a client that pins a contract version
 # has no other way to tell what the server actually speaks.
-API_CONTRACT_VERSION = "1.3.0"
+API_CONTRACT_VERSION = "1.4.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a
