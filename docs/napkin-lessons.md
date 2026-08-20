@@ -385,3 +385,42 @@ Questions carried forward:
 - [the second caller] The whole of findings 1/4/7 is closed by an agent-side change (`service.py`'s unconditional `task.cancelled`, plus the new `known` field). A gateway upgraded ahead of its executors gets `known` defaulting to True (main.py:534) and the pre-fix pinning behaviour, silently — the HELLO payload carries `{"version": "0.1.0"}` and nothing on the gateway reads it. Should a mixed fleet produce a warning, or should `/executors` surface which executors are old enough that #17 is still live for them? No failing test offered; this is a design question, not a finding.
 - [the second caller] docs/api/codex-bridge.openapi.yaml:518-526 says the replay covers '`task.cancel` and pending `task.pause`/`task.resume`/`task.restart` alike' and then bounds it with `cancel_replay_max_age_seconds` alone. The two windows are now independent knobs (`control_replay_max_age_seconds`). The trailing clause scopes itself to `task.cancel`, and this is the `/stop` description where only cancel matters, so I did not raise it as a finding — but an operator who sets only the cancel knob to 0 will not learn from that paragraph that pause/resume/restart replay is still on.
 - [the second caller] The new `_dispatch_cancel` docstring says 'Past the window the task stays CANCELLED with no further replay: the executor resolves an unknown cancel on its own either way ..., so the TTL trims stale noise rather than leaving anything unresolved.' The executor only resolves it if a `task.cancel` is actually delivered; past the window none ever is, so a `codex exec` still running on a late-returning executor is never told to die. The sentence is defensible as being about the gateway's bookkeeping, but the next reader can read it as 'past the window it is still fine'.
+
+## 2026-08-20 — council on gh-6/gh-7/gh-8 impasse resolution
+
+`council.md` was correctly NOT used: its own §0/§1 restrict it to work
+**already approved** by `reviewer.md`, and none of #6/#7/#8 had reached that
+state (#6/#7 BLOCKER'd twice, #8's reviewer never finished). The applicable
+mechanism was `reviewer.md`'s ordinary cycle — a fresh programmer pass, then
+self-review — not council.md and not `governance-precedence.md` (no role
+conflict existed to arbitrate). Recording this because "impasse → convene a
+council" is an intuitive but wrong first read of these two files together;
+the boundary table in `council.md` §1 is the one to check first.
+
+Root cause for #6 and #7's BLOCKER verdicts, recovered with certainty from
+`git diff development feature/gh-N/... -- <file>` (not from any surviving
+log — none exists): both branches were forked before issues #16/#17 merged
+and never rebased, so their diffs against current `development` show large,
+spurious *deletions* of already-shipped, council-vetted functionality
+(`handle_task_ack`, `restart_finished_task`, `list_tasks_requiring_*_replay`,
+the PAUSING/PAUSED/RESUMING/RESTARTING states, sessions.py's pause/resume/
+restart routes) alongside the branch's real new work. An automated reviewer
+diffing against `development` has no way to tell "this branch never touched
+that code, it's just stale" from "this branch actively removed that code" —
+both produce the identical diff. Same shape confirmed present in #8's parked
+branch too, though #8's actual stall (reviewer-agent execution failure, not
+a BLOCKER) could not be pinned on it — investigated by running the parked
+branch's full test suite and import directly rather than assuming.
+
+Action next time an autopilot-parked branch needs resuming: check `git log
+development..feature/gh-N/...` for how many commits behind `development`
+the branch's parent actually is, and diff `main.py`/`store.py`/
+`shared/protocol.py` specifically for deletions of functions with **no
+corresponding line in the branch's own commit message** — that is the
+signature of a stale base, not an intentional revert. Do not assume a
+BLOCKER verdict means the design was wrong; in this case, all three parked
+designs were sound (matches the 2026-08-20 gh-5 session's independent
+observation: "the design prose in them is often sound... even where the
+branch as a whole never shipped"). The fix in all three cases was a fresh
+branch off current `development` carrying forward only the real new work,
+not a redesign.
