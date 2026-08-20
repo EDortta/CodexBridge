@@ -574,6 +574,79 @@ which is when they most want to.
 
 ---
 
+## Decisions (issue #6)
+
+`GET /api/v1/decisions`, `GET .../{id}`, `POST .../{id}/approve`,
+`POST .../{id}/reject`, `POST .../{id}/request-revision`.
+
+A **decision** is not a new domain object. It is a `Session` (`TaskModel`) that
+`shared/policy.py:evaluate_task_policy` withheld approval for — the same
+`awaiting_approval` mechanism the MCP transport's `approve_codex_task` tool has
+resolved since before this API existed. `GET /api/v1/sessions/{id}` and
+`GET /api/v1/decisions/{id}` describe the same row from two vocabularies, the
+same relationship `docs/api/README.md`'s "Sessions" section already draws
+between a session and `TaskModel`.
+
+### Every decision this build serves is critical
+
+Approval is withheld only at `PolicyLevel.SENSITIVE`, so `risk` is `sensitive`
+on every decision that exists today. The `risk` filter, `DecisionRiskLevel`,
+and the confirmation requirement on `approve` are still written against the
+general enum rather than hardcoded to that one value, so a future change to
+`evaluate_task_policy` that starts holding `controlled_write` tasks for
+approval too needs no contract change to be filtered or protected correctly.
+
+### `risk` outlives the decision; `approval_state` does not
+
+`TaskModel.approval_state` is overwritten by `store.decide_task_approval` with
+the outcome (`approved`/`rejected`/`revision_requested`) the moment a decision
+resolves — it could never have doubled as a persistent risk field, because a
+resolved decision would have lost the level it was raised at. `TaskModel.policy_level`
+(`migrations/0005_decision_policy_level.sql`) is written once, at creation,
+alongside `approval_state`, and is never touched again — `risk` filters and
+reports from that column instead.
+
+### `request-revision` still cancels the session
+
+The agent protocol has no message that reopens a task for editing — the same
+gap `routes/sessions.py` documents for `pause`/`resume`/`restart` before issue
+#16's protocol work landed. So `ApprovalDecision.REVISION_REQUESTED` exists to
+make the *outcome* reported to the operator distinct from a plain rejection
+("send this back" versus "this will not run"), not to hold the session open
+for a resubmission. Presenting anything else would be a control that reports
+success and changes nothing.
+
+### Authorization has two layers, not one
+
+`GET` needs `codexbridge.read`, same as sessions. Resolving a decision needs
+`codexbridge.task.approve` **and** `can_approve_sensitive` (or admin) on the
+account — the same two-part check `gateway/app/mcp/server.py:approve_codex_task`
+already applied. Both are enforced from `permissions.is_allowed`, not from a
+second check inside the route: `GET /api/v1/auth/me` reports the same function
+`require_action` enforces, and a route that checked `can_approve_sensitive`
+separately would tell a client "you may" while the endpoint answered `403`.
+
+### The confirmation is separate from `If-Match`
+
+`If-Match` proves the client read the current state; it says nothing about
+whether the tap that followed was deliberate. A critical `approve` therefore
+also requires `confirm: true` in the body — refused with `validation_failed`
+naming `/confirm` otherwise — which is the anti-accidental-action mechanism the
+issue asks for. `reject` and `request-revision` carry no such requirement:
+declining a sensitive action is the safe direction, and the acceptance
+criterion ties the extra step to approving, not to every resolution.
+
+### Idempotency and optimistic concurrency, reused rather than reinvented
+
+Both endpoints follow `routes/sessions.py:stop_session`'s shape exactly:
+replay on a repeated `Idempotency-Key` before touching anything, then
+`If-Match`, then the state check. A decision already resolved — or otherwise no
+longer `awaiting_approval` — answers `409 conflict`, the acceptance criterion
+for "resolved or stale decisions"; a `412 stale_write` covers the narrower case
+of a concurrent write racing the read that produced the `ETag`.
+
+---
+
 ## Cross-cutting rules every endpoint inherits
 
 Implemented in `gateway/app/api/` (issue #12). An endpoint does not re-invent

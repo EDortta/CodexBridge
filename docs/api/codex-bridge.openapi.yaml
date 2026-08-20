@@ -888,6 +888,335 @@ paths:
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
 
+  /api/v1/decisions:
+    get:
+      operationId: listDecisions
+      tags: [decisions]
+      summary: Decisions the caller may see, newest first
+      description: |
+        A **decision** is a session (`Session`/`TaskModel`) that needed
+        approval — the same mechanism the MCP transport's `approve_codex_task`
+        tool has driven since before this API existed. Only decisions in
+        projects the caller may see are returned, and the filter is applied to
+        the query — so `page.hasMore` describes what the caller can actually
+        reach, not what exists.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: project
+          in: query
+          required: false
+          description: |
+            Repeatable. Restricts to these projects, further narrowing —
+            never widening — whatever the caller's own authorization already
+            allows.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/ProjectId'
+        - name: state
+          in: query
+          required: false
+          description: Repeatable. Restricts to these decision states.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/DecisionState'
+        - name: urgency
+          in: query
+          required: false
+          description: Repeatable. Restricts to these urgency (priority) values.
+          schema:
+            type: array
+            items:
+              type: string
+        - name: risk
+          in: query
+          required: false
+          description: Repeatable. Restricts to these risk levels.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/DecisionRiskLevel'
+        - name: deadlineBefore
+          in: query
+          required: false
+          description: Restricts to decisions whose deadline is at or before this instant.
+          schema:
+            type: string
+            format: date-time
+        - name: deadlineAfter
+          in: query
+          required: false
+          description: Restricts to decisions whose deadline is at or after this instant.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: A page of decisions.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Decision'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/decisions/{decisionId}:
+    get:
+      operationId: getDecision
+      tags: [decisions]
+      summary: One decision
+      description: |
+        Returns an `ETag` derived from the decision's revision. Send it back as
+        `If-Match` on `approve`, `reject`, or `request-revision`.
+
+        A decision in a project the caller cannot see returns `404`, never
+        `403` — and so does a session id that exists but never required
+        approval, for the same reason: confirming that an identifier exists,
+        or what kind of resource it names, is what probing is for.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: decisionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The decision.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/decisions/{decisionId}/approve:
+    post:
+      operationId: approveDecision
+      tags: [decisions]
+      summary: Approve a pending decision
+      description: |
+        Requires `If-Match`. A **critical** decision (`risk: sensitive` — every
+        decision this build produces) additionally requires `confirm: true` in
+        the body: `If-Match` proves the client saw the current state, not that
+        the operator meant to approve it, so a critical approval needs one more
+        deliberate bit set. A request missing it is refused with
+        `validation_failed`, naming `/confirm`.
+
+        With `Idempotency-Key`, a retry returns the first response and approves
+        nothing twice; the replay carries `Idempotent-Replay: true`.
+
+        Only a `pending` decision may be approved; a decision already resolved,
+        or otherwise no longer awaiting approval, answers `409`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: decisionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 4000
+                confirm:
+                  type: boolean
+                  default: false
+                  description: Required `true` to approve a critical decision. See the operation description.
+      responses:
+        '200':
+          description: The decision after approval.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/decisions/{decisionId}/reject:
+    post:
+      operationId: rejectDecision
+      tags: [decisions]
+      summary: Reject a pending decision
+      description: |
+        Requires `If-Match` and a non-empty `reason`: a rejection with no
+        justification is refused with `validation_failed` before it reaches the
+        session, because the operator on the other end of a Decision Center
+        needs to know why their request will not run.
+
+        With `Idempotency-Key`, a retry returns the first response and rejects
+        nothing twice; the replay carries `Idempotent-Replay: true`.
+
+        Only a `pending` decision may be rejected; a decision already resolved,
+        or otherwise no longer awaiting approval, answers `409`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: decisionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+      responses:
+        '200':
+          description: The decision after rejection.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/decisions/{decisionId}/request-revision:
+    post:
+      operationId: requestDecisionRevision
+      tags: [decisions]
+      summary: Send a pending decision back for revision
+      description: |
+        Requires `If-Match` and a non-empty `reason` describing what needs to
+        change, for the same reason `reject` requires one.
+
+        This still cancels the underlying session — see `Decision`'s and
+        `DecisionState`'s descriptions. The agent protocol has no message that
+        reopens a session for editing, so `revision_requested` is a distinct
+        **outcome** from `rejected`, not a state that holds the session open for
+        a resubmission.
+
+        With `Idempotency-Key`, a retry returns the first response and acts
+        nothing twice; the replay carries `Idempotent-Replay: true`.
+
+        Only a `pending` decision accepts this; a decision already resolved, or
+        otherwise no longer awaiting approval, answers `409`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: decisionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+      responses:
+        '200':
+          description: The decision after the revision request.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
   /health:
     get:
       operationId: getHealth
@@ -1841,6 +2170,91 @@ components:
             that (a long weekend, a stuck redeploy) is not chased with
             `task.cancel` on reconnect, and the session simply stays
             `cancelled` in the gateway.
+
+    DecisionState:
+      type: string
+      enum: [pending, approved, rejected, revision_requested]
+      description: |
+        `pending` is the only state `approve`/`reject`/`request-revision` accept.
+        The other three are terminal: the underlying session has already left
+        `awaiting_approval` and none of these operations may run again.
+        `revision_requested` still cancels the session — see `Decision`'s
+        description — it is a distinct outcome from `rejected`, not a state that
+        holds the session open for editing.
+
+    DecisionRiskLevel:
+      type: string
+      enum: [read, controlled_write, sensitive]
+      description: |
+        The policy level a decision was raised at (`shared/policy.py`). Every
+        decision this build produces is `sensitive` — that level is the only one
+        `evaluate_task_policy` ever withholds approval for — but the field and
+        this enum are not narrowed to it, so a future policy change that starts
+        holding other levels for approval needs no contract change to be
+        filtered or reported.
+
+    Decision:
+      type: object
+      description: |
+        A sensitive session held for a human to approve, reject, or send back
+        for revision. Not a new domain object: it is the same `Session`
+        (`TaskModel`) in or past `awaiting_approval`, reshaped for the mobile
+        Decision Center. `id` is a session id and `GET /api/v1/sessions/{id}`
+        returns the same underlying row.
+
+        Omits `impact`, `evidence` and `recommendation` on purpose: no
+        submission path in this build populates them, and a field that is
+        always null is indistinguishable from one a client may reasonably build
+        against — the same reasoning `x-pending-components` applies to unused
+        components. `rationale` is different: it is genuinely absent before a
+        decision is made and populated by whoever resolves it.
+      required: [id, projectId, executorId, request, state, revision, createdAt, deadline]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        executorId:
+          $ref: '#/components/schemas/ExecutorId'
+        request:
+          type: string
+          description: What the operator asked for. Redacted like every other operator-authored field on this API.
+        mode:
+          type: string
+        state:
+          $ref: '#/components/schemas/DecisionState'
+        risk:
+          description: |
+            `DecisionRiskLevel`, or `null` — cannot be null in practice today
+            (see that schema's description) but is nullable in the contract
+            rather than assumed, since nothing here computes it for a session
+            this endpoint would refuse to serve anyway.
+          oneOf:
+            - $ref: '#/components/schemas/DecisionRiskLevel'
+            - type: 'null'
+        urgency:
+          type: string
+          description: The session's priority, reused as the decision's urgency.
+        revision:
+          type: integer
+          description: Monotonic; the `ETag` is derived from it. Same column and same meaning as `Session.revision`.
+        requestedBy:
+          type: [string, 'null']
+        rationale:
+          type: [string, 'null']
+          description: |
+            The reason recorded when this decision was resolved. `null` while
+            `state` is `pending` — there is no rationale yet because nobody has
+            decided.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        deadline:
+          $ref: '#/components/schemas/Timestamp'
+          description: The underlying session's `expiresAt`, renamed for this view.
+        decidedAt:
+          type: [string, 'null']
+          format: date-time
+          description: When `state` left `pending`. `null` while still pending.
 
     LogLine:
       type: object

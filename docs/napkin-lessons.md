@@ -456,3 +456,42 @@ contract change, a `not validated:` claim, a gate-changing release) do not
 fire for a same-shaped new-feature delivery — self-reviewed against
 `.docs/agents/reviewer.md`'s BLOCKER criteria instead. Committed, not pushed,
 not merged to `main`, awaiting operator review per standing policy.
+
+## 2026-08-20 — council on gh-6/gh-7/gh-8 impasse resolution
+
+`council.md` was correctly NOT used: its own §0/§1 restrict it to work
+**already approved** by `reviewer.md`, and none of #6/#7/#8 had reached that
+state (#6/#7 BLOCKER'd twice, #8's reviewer never finished). The applicable
+mechanism was `reviewer.md`'s ordinary cycle — a fresh programmer pass, then
+self-review — not council.md and not `governance-precedence.md` (no role
+conflict existed to arbitrate). Recording this because "impasse → convene a
+council" is an intuitive but wrong first read of these two files together;
+the boundary table in `council.md` §1 is the one to check first.
+
+Root cause for #6 and #7's BLOCKER verdicts, recovered with certainty from
+`git diff development feature/gh-N/... -- <file>` (not from any surviving
+log — none exists): both branches were forked before issues #16/#17 merged
+and never rebased, so their diffs against current `development` show large,
+spurious *deletions* of already-shipped, council-vetted functionality
+(`handle_task_ack`, `restart_finished_task`, `list_tasks_requiring_*_replay`,
+the PAUSING/PAUSED/RESUMING/RESTARTING states, sessions.py's pause/resume/
+restart routes) alongside the branch's real new work. An automated reviewer
+diffing against `development` has no way to tell "this branch never touched
+that code, it's just stale" from "this branch actively removed that code" —
+both produce the identical diff. Same shape confirmed present in #8's parked
+branch too, though #8's actual stall (reviewer-agent execution failure, not
+a BLOCKER) could not be pinned on it — investigated by running the parked
+branch's full test suite and import directly rather than assuming.
+
+Action next time an autopilot-parked branch needs resuming: check `git log
+development..feature/gh-N/...` for how many commits behind `development`
+the branch's parent actually is, and diff `main.py`/`store.py`/
+`shared/protocol.py` specifically for deletions of functions with **no
+corresponding line in the branch's own commit message** — that is the
+signature of a stale base, not an intentional revert. Do not assume a
+BLOCKER verdict means the design was wrong; in this case, all three parked
+designs were sound (matches the 2026-08-20 gh-5 session's independent
+observation: "the design prose in them is often sound... even where the
+branch as a whole never shipped"). The fix in all three cases was a fresh
+branch off current `development` carrying forward only the real new work,
+not a redesign.

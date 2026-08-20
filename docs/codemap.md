@@ -11,7 +11,6 @@
 
 ## Governance
 
-- `AGENTS.md`
 - `docs/required-reading.md`
 - `docs/project-rules.md`
 - `docs/software-overview.md`
@@ -60,6 +59,7 @@ gateway/
       routes/
         __init__.py  — "HTTP routers for the mobile contract surface."
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
+        decisions.py  — "Operational decisions: sensitive tasks held for a human to resolve — issue #6."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
         projects.py  — "Projects and the project operational dashboard — issue #5."
         sessions.py  — "Agent sessions, their logs, and lifecycle control."
@@ -113,6 +113,7 @@ tests/
     test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
+    test_decisions.py  — "Operational decisions — issue #6."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
     test_projects.py  — "Projects and the project operational dashboard — issue #5."
@@ -225,6 +226,7 @@ tests/
 - `scope_digest(endpoint, filters)` — "Identity of "this endpoint under these filters", for cursor binding."
 - `encode_cursor(scope, position)`
 - `decode_cursor(scope, cursor, expect)` — "Decode a cursor this server issued for `scope`, or fail with a typed error."
+- `cursor_time(value)` — "Cursor form of a timestamp: ISO 8601, always carrying microseconds."
 - `parse_limit(value)`
 - `page_info()` — "Build `PageInfo`, keeping its one invariant true by construction."
 - `paginate(items)` — "Trim an over-fetched list to `limit` and describe the page."
@@ -267,6 +269,19 @@ tests/
 - `refresh(body, response, session)` *(async function)* — "Rotate a refresh token into a new pair."
 - `revoke(request, response, body, session)` *(async function)* — "Sign out: end the grant now rather than at expiry."
 - `current_actor(response, principal)` *(async function)* — "Who is calling, and what this build will let them do."
+
+### `gateway/app/api/routes/decisions.py`
+
+> Operational decisions: sensitive tasks held for a human to resolve — issue #6.
+
+- **`DecisionApproveRequest`** *(class)*
+- **`DecisionRejectRequest`** *(class)*
+- **`DecisionRevisionRequest`** *(class)*
+- `list_decisions(response, project, state, urgency, risk, deadline_before, deadline_after, cursor, limit, principal, session)` *(async function)* — "Decisions the caller may see, newest first."
+- `get_decision(decision_id, response, principal, session)` *(async function)*
+- `approve_decision(decision_id, body, response, if_match, idempotency_key, principal, session)` *(async function)*
+- `reject_decision(decision_id, body, response, if_match, idempotency_key, principal, session)` *(async function)*
+- `request_decision_revision(decision_id, body, response, if_match, idempotency_key, principal, session)` *(async function)*
 
 ### `gateway/app/api/routes/probes.py`
 
@@ -503,6 +518,8 @@ tests/
 - `get_recent_logs(session, task_id)` *(async function)* — "The most recent log lines, oldest-first within the slice."
 - `list_tasks_requiring_cancel_replay(session, executor_id)` *(async function)* — "Cancelled tasks whose executor has not yet acknowledged the cancellation."
 - `list_tasks_requiring_control_replay(session, executor_id)` *(async function)* — "Tasks stuck in a pending pause/resume/restart, waiting for a `task.ack`"
+- `list_decisions_page(session)` *(async function)* — "Decisions the caller may see, newest first, over-fetched by one (issue #6)."
+- `get_decision_for_projects(session, decision_id, project_ids)` *(async function)* — "A decision the caller may see, or None — "not a decision" included (issue #6)."
 
 ### `scripts/apply_migrations.py`
 
@@ -732,6 +749,46 @@ tests/
 - `test_the_guard_flags_a_new_administrative_action(monkeypatch)` — "The guard is only worth having if it fires — so fire it."
 - `test_the_report_and_the_endpoints_agree(api, who)` *(async function)* — "The claim the whole endpoint exists for."
 - `test_the_administrative_action_describes_what_the_list_endpoint_does(api)` *(async function)* — "`sessions.readAllProjects` is administrative because it crosses projects."
+
+### `tests/integration/test_decisions.py`
+
+> Operational decisions — issue #6.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)* — "A real app over a real database, seeded with two projects."
+- `make_decision(factory, project_id, instruction, requested_by_user_id, requested_by_email)` *(async function)*
+- `make_plain_task(factory, project_id)` *(async function)* — "A task nobody was ever asked to decide on — not a decision."
+- `auth(token)`
+- `audit_events(factory, event_type)` *(async function)*
+- `test_decisions_require_a_token(api)` *(async function)*
+- `test_an_expired_token_is_refused(api)` *(async function)*
+- `test_a_decision_in_an_invisible_project_is_not_found_not_forbidden(api)` *(async function)*
+- `test_a_plain_task_is_not_a_decision(api)` *(async function)* — "A session id that exists but never needed approval is not found here."
+- `test_the_list_is_filtered_before_it_is_paged(api)` *(async function)*
+- `test_the_project_filter_only_narrows_never_widens(api)` *(async function)*
+- `test_the_decision_body_never_carries_the_project_path(api)` *(async function)*
+- `test_the_request_field_is_redacted(api)` *(async function)*
+- `test_state_filter_separates_pending_from_resolved(api)` *(async function)*
+- `test_risk_and_urgency_filters(api)` *(async function)*
+- `test_deadline_filters(api)` *(async function)*
+- `test_reading_needs_no_approval_scope(api)` *(async function)*
+- `test_deciding_needs_the_approve_scope(api)` *(async function)*
+- `test_the_scope_alone_is_not_enough_for_a_sensitive_decision(api)` *(async function)* — "`can_approve_sensitive` is checked on top of `codexbridge.task.approve`."
+- `test_auth_me_agrees_with_the_untrusted_approver_gate(api)` *(async function)* — "`GET /auth/me` is not mounted in this fixture; assert the function it calls."
+- `test_approve_requires_if_match(api)` *(async function)*
+- `test_approve_with_a_stale_etag_is_refused(api)` *(async function)*
+- `test_approving_a_critical_decision_without_confirm_is_refused(api)` *(async function)*
+- `test_approving_with_confirm_resolves_the_decision(api)` *(async function)*
+- `test_approving_an_already_resolved_decision_is_a_conflict(api)` *(async function)*
+- `test_a_retried_approve_replays_instead_of_acting_twice(api)` *(async function)*
+- `test_approve_records_the_deciding_actor(api)` *(async function)*
+- `test_reject_requires_a_non_empty_reason(api)` *(async function)*
+- `test_reject_with_no_body_is_refused(api)` *(async function)*
+- `test_rejecting_cancels_the_underlying_session(api)` *(async function)*
+- `test_rejecting_an_already_resolved_decision_is_a_conflict(api)` *(async function)*
+- `test_request_revision_requires_a_non_empty_reason(api)` *(async function)*
+- `test_request_revision_is_a_distinct_outcome_from_reject(api)` *(async function)*
+- `test_request_revision_on_a_resolved_decision_is_a_conflict(api)` *(async function)*
 
 ### `tests/integration/test_oauth_authorize.py`
 
