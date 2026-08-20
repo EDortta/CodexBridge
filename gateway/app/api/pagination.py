@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import json
 import secrets
+from datetime import datetime, timezone
 
 from gateway.app.api.errors import ApiError, VALIDATION_FAILED
 
@@ -116,6 +117,25 @@ def decode_cursor(scope: str, cursor: str, expect: dict[str, type] | None = None
         if not isinstance(value, kind) or isinstance(value, bool) is not (kind is bool):
             raise invalid
     return position
+
+
+def cursor_time(value: datetime) -> str:
+    """Cursor form of a timestamp: ISO 8601, always carrying microseconds.
+
+    `str(datetime)` omits the fractional part when it is zero, so a cursor built
+    on a whole-second timestamp matched nothing and truncated the list with no
+    error. `isoformat` round-trips through `datetime.fromisoformat`, which is
+    what a store parses before comparing against the column.
+
+    Not yet adopted by `routes/sessions.py`'s own `_cursor_time` (pre-existing,
+    same logic) — issue #6 introduces this shared copy for `list_decisions_page`
+    rather than touching that call site, per design-standards.md §7: converting
+    an existing caller to a new shared helper is a separate, declared refactor,
+    not a side effect of an unrelated feature's diff.
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
 
 
 def parse_limit(value: int | None, *, default: int = DEFAULT_LIMIT, maximum: int = MAX_LIMIT) -> int:

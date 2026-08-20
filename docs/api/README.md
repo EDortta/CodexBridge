@@ -456,6 +456,72 @@ names the file if a deployment starts without it.
 
 ---
 
+## Projects (issue #5)
+
+`GET /api/v1/projects`, `GET .../{id}`, `GET .../{id}/summary`.
+
+A **project** is a `ProjectModel` row: an entry in the gateway registry
+(`docs/project-onboarding.md`), addressed by `ProjectId` and never by its
+server filesystem path. `ProjectModel.path` is the canonical trap named above
+and is excluded from every response this issue adds.
+
+### Counts read one entity, not three
+
+The acceptance criteria ask for counts of "pending decisions, missions, issues,
+sessions and recent artifacts". Only `TaskModel` exists today. `pendingDecisions`
+(`awaiting_approval` sessions) and `activeMissions` (every non-terminal
+session) both read that one table under the vocabulary issues #6 and #7 will
+eventually give their own endpoints — they are not new entities, and building
+one now would be exactly the speculative expansion `docs/limits.md` rules out.
+`issues` (issue #8) and `artifacts` (issue #11) have no backing model at all in
+this build and are omitted rather than always reported as zero — a
+permanently-zero field is a claim a mobile client can build a UI around and
+never see contradicted, the same failure `probes.CAPABILITIES`'s own history
+warns about.
+
+### Health is derived from executor staleness, not the raw `connected` column
+
+`ExecutorModel.connected` is set `true` on HELLO/heartbeat and `false` on a
+*graceful* disconnect (`AgentHub.unregister`). An abrupt process kill on the
+executor side runs neither, and nothing else ever times the column back out —
+so a dashboard reading it raw would show a dead executor's project healthy
+forever. `store.executor_is_live` instead checks `last_seen_at` against
+`settings.reconnect_grace_seconds` (default 120s), which is refreshed on every
+heartbeat regardless of which gateway process is holding the socket.
+
+This is used by the new `health` field (`ok` / `degraded` / `unknown` /
+`disabled`) and by `ProjectSummary.executors[].connected`. It is **not**
+applied to the existing MCP `executor_status` / `list_executors` tools, which
+still read the raw column — retrofitting an already-shipped, unrelated surface
+is out of this issue's scope; a future issue can converge them.
+
+### `attention` is computed in Python, not pushed to SQL
+
+`health` and `pendingDecisions` are derived at read time, not stored columns,
+so the database cannot filter on them the way it filters `q` and `status`.
+`?attention=true|false` loads every matching project unpaginated
+(`store.list_projects_filtered`) and paginates the filtered result in memory.
+The registry this reads is operator-curated and expected to hold at most a few
+hundred rows; this is a documented trade-off, not a scalability promise, and
+`store.list_projects_page`'s cursor-paginated, database-level query is still
+what serves every request that does not set `attention`.
+
+### List and detail are the condensed shape; `summary` adds the executor breakdown
+
+`GET /api/v1/projects` and `GET /api/v1/projects/{id}` return `ProjectStatus` —
+health and counts, no per-executor detail, so a list of fifty projects does not
+repeat an executor array fifty times. `GET /api/v1/projects/{id}/summary`
+returns `ProjectSummary`: the same fields plus `executors[]` (id, staleness-derived
+`connected`, `lastSeenAt`) and `generatedAt`, for the one-project dashboard view
+that needs the full picture in one call.
+
+### Authorization
+
+Same rule as sessions: project scope is enforced **on the query**, and a
+project in a scope the caller cannot see returns **404, never 403**.
+
+---
+
 ## Sessions (issue #9)
 
 A **session** is one `codex exec` run — internally a `TaskModel`. The mobile
@@ -505,6 +571,278 @@ The session is marked cancelled and the executor learns on reconnect, through
 the same recovery that already handles a gateway restart. Refusing would leave
 the operator unable to stop a session exactly when the executor is unreachable —
 which is when they most want to.
+
+---
+
+## Decisions (issue #6)
+
+`GET /api/v1/decisions`, `GET .../{id}`, `POST .../{id}/approve`,
+`POST .../{id}/reject`, `POST .../{id}/request-revision`.
+
+A **decision** is not a new domain object. It is a `Session` (`TaskModel`) that
+`shared/policy.py:evaluate_task_policy` withheld approval for — the same
+`awaiting_approval` mechanism the MCP transport's `approve_codex_task` tool has
+resolved since before this API existed. `GET /api/v1/sessions/{id}` and
+`GET /api/v1/decisions/{id}` describe the same row from two vocabularies, the
+same relationship `docs/api/README.md`'s "Sessions" section already draws
+between a session and `TaskModel`.
+
+### Every decision this build serves is critical
+
+Approval is withheld only at `PolicyLevel.SENSITIVE`, so `risk` is `sensitive`
+on every decision that exists today. The `risk` filter, `DecisionRiskLevel`,
+and the confirmation requirement on `approve` are still written against the
+general enum rather than hardcoded to that one value, so a future change to
+`evaluate_task_policy` that starts holding `controlled_write` tasks for
+approval too needs no contract change to be filtered or protected correctly.
+
+### `risk` outlives the decision; `approval_state` does not
+
+`TaskModel.approval_state` is overwritten by `store.decide_task_approval` with
+the outcome (`approved`/`rejected`/`revision_requested`) the moment a decision
+resolves — it could never have doubled as a persistent risk field, because a
+resolved decision would have lost the level it was raised at. `TaskModel.policy_level`
+(`migrations/0005_decision_policy_level.sql`) is written once, at creation,
+alongside `approval_state`, and is never touched again — `risk` filters and
+reports from that column instead.
+
+### `request-revision` still cancels the session
+
+The agent protocol has no message that reopens a task for editing — the same
+gap `routes/sessions.py` documents for `pause`/`resume`/`restart` before issue
+#16's protocol work landed. So `ApprovalDecision.REVISION_REQUESTED` exists to
+make the *outcome* reported to the operator distinct from a plain rejection
+("send this back" versus "this will not run"), not to hold the session open
+for a resubmission. Presenting anything else would be a control that reports
+success and changes nothing.
+
+### Authorization has two layers, not one
+
+`GET` needs `codexbridge.read`, same as sessions. Resolving a decision needs
+`codexbridge.task.approve` **and** `can_approve_sensitive` (or admin) on the
+account — the same two-part check `gateway/app/mcp/server.py:approve_codex_task`
+already applied. Both are enforced from `permissions.is_allowed`, not from a
+second check inside the route: `GET /api/v1/auth/me` reports the same function
+`require_action` enforces, and a route that checked `can_approve_sensitive`
+separately would tell a client "you may" while the endpoint answered `403`.
+
+### The confirmation is separate from `If-Match`
+
+`If-Match` proves the client read the current state; it says nothing about
+whether the tap that followed was deliberate. A critical `approve` therefore
+also requires `confirm: true` in the body — refused with `validation_failed`
+naming `/confirm` otherwise — which is the anti-accidental-action mechanism the
+issue asks for. `reject` and `request-revision` carry no such requirement:
+declining a sensitive action is the safe direction, and the acceptance
+criterion ties the extra step to approving, not to every resolution.
+
+### Idempotency and optimistic concurrency, reused rather than reinvented
+
+Both endpoints follow `routes/sessions.py:stop_session`'s shape exactly:
+replay on a repeated `Idempotency-Key` before touching anything, then
+`If-Match`, then the state check. A decision already resolved — or otherwise no
+longer `awaiting_approval` — answers `409 conflict`, the acceptance criterion
+for "resolved or stale decisions"; a `412 stale_write` covers the narrower case
+of a concurrent write racing the read that produced the `ETag`.
+
+---
+
+## Missions (issue #7)
+
+`GET /api/v1/missions`, `GET .../{id}`, `GET .../{id}/timeline`,
+`POST .../{id}/cancel`, `POST .../{id}/explain`.
+
+### There is no separate mission entity
+
+A **mission** is the same `TaskModel` row `GET /api/v1/sessions` (issue #9)
+serves, reframed in mission-control vocabulary. This codebase's domain model
+has no dependency graph, no "related entities" table and no execution-progress
+percentage, so this issue does not invent them:
+
+- `objective` is the instruction; `assignedAgent` is the executor id — the
+  same value `Session.executorId` names, under the name issue #7 asked for.
+- `stage` is a coarse three-phase grouping over `state`
+  (`store.mission_stage`): `pending` (`queued`, `waiting_executor`), `active`
+  (`running`, `awaiting_approval`, and issue #16's `pausing`/`paused`/
+  `resuming`/`restarting`), `done` (every terminal state). `state` itself is
+  returned unchanged and remains its own, finer filter — the issue asks for
+  both, and they are not the same thing.
+- `risk` is `shared/policy.py:policy_level_for_mode`, overridden to
+  `sensitive` when `approval_state` recorded that a submitted instruction
+  matched a sensitive keyword (`store.mission_risk`). It is not a live
+  re-evaluation of the instruction text, and for every `TaskMode` value that
+  function itself returns, it can only be `read` or `controlled_write` — the
+  `sensitive` branch in `policy_level_for_mode` is unreachable for a real
+  mode and exists only as a fallback for a future one.
+- `blocked` / `blockedReason` is `state == awaiting_approval`, given a machine
+  code and a human summary. This is the acceptance criterion ("every blocked
+  mission includes a machine-readable reason and human-readable summary") and
+  the only condition this build can report: it is the only state a mission is
+  held in without the agent protocol having a way to move it forward on its
+  own.
+- The timeline is `audit_events` rows filtered to the mission's id, oldest
+  first, summarized through a per-event-type allowlist rather than the raw
+  stored payload — the payload carries fields (`policy_level`, `via`,
+  `requested_by_user_id`) never audited for what they may contain, and this
+  is public API surface.
+
+`dependencies` and `relatedEntities`, named in issue #7's Scope section, are
+**not implemented**. Nothing in this codebase links one task to another task
+or to any other entity, so there is no data to expose — and shipping an
+always-empty array would be a field a mobile client can build a list UI
+around and never see populated, the same failure the capability flags exist
+to prevent (see "Rate limiting" → `CAPABILITIES` reasoning above). A future
+issue that adds real task dependencies or cross-references should add these
+fields then, backed by real data.
+
+### What this issue does NOT deliver, and why
+
+`pause` and `resume` are not mission-control controls, for the same protocol
+reason issue #9 gives for sessions: before issue #16's protocol work, nothing
+served them; today, `pause`/`resume`/`restart` are session-level lifecycle
+controls with no mission-control equivalent, because a mission's `cancel` is
+the only command this issue's acceptance criteria named. `cancel` maps to
+`task.cancel`, exactly as `stop` does for sessions, and is the one lifecycle
+command this API offers for missions.
+
+### Cancel and stop are two doors onto the same lock
+
+`POST /api/v1/missions/{id}/cancel` and `POST /api/v1/sessions/{id}/stop`
+both call `store.update_task_state(..., TaskState.CANCELLED)` on the same
+row and write the same audit event type, `task.stopped_by_actor` — with
+`via` distinguishing which door was used. A mobile client working entirely in
+mission-control vocabulary never needs to know `/sessions` exists; a client
+already using `/sessions` is not asked to migrate. The two endpoints are
+independent implementations (concurrency, idempotency and audit each written
+once per router) rather than one sharing a helper, so that this issue does
+not touch `gateway/app/api/routes/sessions.py`'s already-tested code path.
+
+### Destructive commands are authenticated and audited
+
+`cancel` requires `require_action(permissions.MISSIONS_CANCEL)` — an
+authenticated principal carrying `codexbridge.task.cancel` — and records who
+did it (`actor_id`, `actor_email`) in the same audit trail the timeline
+reads, same as sessions' `stop`. This is issue #7's acceptance criterion
+("destructive commands require authenticated actor context and are
+audited").
+
+### State-transition validation
+
+`cancel` refuses with `409 conflict` outside `CANCELLABLE`, which is
+`shared.protocol.STOPPABLE_TASK_STATES` itself — the same set sessions'
+`STOPPABLE` names, reused rather than duplicated (issue #17's review already
+caught one local copy of this set silently missing
+`paused`/`pausing`/`resuming`/`restarting`; a mission is the same
+`TaskModel` sessions cancels, so a second copy here would risk the identical
+drift). This is issue #7's acceptance criterion ("state-transition commands
+validate the current mission state").
+
+---
+
+## Epics and Issues (issue #8)
+
+`GET /api/v1/projects/{projectId}/epics`, `GET .../issues`,
+`GET /api/v1/issues/{issueId}`, `POST /api/v1/issues`,
+`PATCH /api/v1/issues/{issueId}`, `POST /api/v1/epics`,
+`POST /api/v1/epics/{epicId}/issues/{issueId}`.
+
+An **epic** groups issues within one project. An **issue** carries status,
+priority, labels, an assignee, dependencies (other issue ids it is blocked on)
+and a blocked reason. Both are addressed by `Id` like every other resource in
+this contract, never by anything a client would have to unlearn if the backing
+system changed.
+
+### This build owns epics and issues; there is no GitHub sync
+
+Every epic and issue returned today was created through this API — `POST
+/api/v1/epics` or `POST /api/v1/issues` — never mirrored from GitHub or any
+other tracker. `EpicModel.provider` and `IssueModel.provider` are `"local"` on
+every row this build writes and are not part of the mobile DTO: they are the
+seam a future adapter would use to tell a gateway-authored row from a mirrored
+one, the same way `ProjectModel` already mirrors `registry.json` rather than
+owning it. Building a `GitHubIssueProvider` with no second caller ahead of an
+actual sync requirement would be exactly the speculative architecture
+expansion `docs/limits.md` rules out — the column is the whole boundary, on
+purpose, until a sync exists to widen it.
+
+### What issue #8 asked for and did not get
+
+"Planning-review metadata and related missions, conversations and decisions"
+is in the issue's stated scope and is **not implemented**. No entity named
+mission, conversation or decision existed anywhere else in this codebase when
+this issue was written, and the issue does not specify their shape, storage,
+or relationship to an issue beyond the one sentence naming them. Inventing
+three new subsystems to fill that gap would be speculative architecture the
+issue itself does not describe, not the smallest durable change it asks for —
+and "mission" now separately exists as issue #7's mission-control view of
+`TaskModel`, not a new entity, so wiring an `Issue` to *that* is itself a
+choice a future issue should make deliberately rather than this one making it
+implicitly. A future issue that defines what a "decision" or "mission"
+reference from an issue actually means can add it the same way `epicId` was
+added here.
+
+### Two ways to change an issue, on purpose kept to one relationship
+
+`PATCH /api/v1/issues/{issueId}` changes title, description, status, priority,
+labels, assignee and dependencies. It deliberately does **not** accept
+`epicId`: `POST /api/v1/epics/{epicId}/issues/{issueId}` is the one mechanism
+that moves an issue between epics. Accepting `epicId` in both places would be
+two code paths that can disagree about what "moving an issue" means and drift
+from each other the first time one of them is changed.
+
+The link endpoint requires `If-Match` on the **issue's** current revision,
+because that is the entity it mutates. Both the epic and the issue must be in
+a project the caller may see, or the response is `404` — never `403`, for the
+same reason a hidden session is `404`.
+
+### Dependencies are validated, not just stored
+
+An issue's `dependencies` are other issue ids it is blocked on. `POST
+/api/v1/issues` and `PATCH /api/v1/issues/{issueId}` both reject a dependency
+that does not name an existing issue in the same project, and reject an issue
+depending on itself. This is enforced in `gateway/app/services/store.py`, not
+only in the route: a guard duplicated at every future caller is a guard one of
+them will eventually forget (`design-standards.md` §3). `epicId` on create is
+validated the same way — it must name an epic already in the same project.
+
+### Project scope, same rule as sessions
+
+`projectId` — whether it is a path segment on the list endpoints or a body
+field on the two creates — outside the caller's visible projects answers
+`404`, never `403`. An unregistered `projectId` and one the caller simply
+cannot see are indistinguishable to the caller, by the same probing-prevention
+rule `get_task_for_projects` already applies to a single hidden session.
+
+### Actor and history metadata
+
+Every epic and issue records who created it and, once changed, who last
+updated it — `createdBy` / `updatedBy` in the response, an email when one is
+on record and the user id otherwise. This is the same shape `Session` already
+uses for `requestedBy` rather than the `Actor` object `GET /api/v1/auth/me`
+returns: one is a single reporter string, the other is a caller's own identity
+with a `kind` that is always `user` here, and introducing the second shape for
+one field this issue does not otherwise need would be the shape the sessions
+precedent already argues against.
+
+### Writes and idempotency
+
+`POST /api/v1/epics`, `POST /api/v1/issues` and the link endpoint all accept
+`Idempotency-Key`, the same reserve-then-complete flow `POST
+/api/v1/sessions/{sessionId}/stop` uses: a client that lost the network after
+creating an issue can retry without risking a second issue. `PATCH` does not
+carry it — a repeated identical `PATCH` is naturally idempotent at the field
+level, and `If-Match` already refuses a retry that arrived after a concurrent
+change.
+
+### The write scope is separate from cancel
+
+Creating or changing a plan (`codexbridge.issues.write`) and cancelling a
+session (`codexbridge.task.cancel`) are different capabilities an operator may
+grant separately — see `permissions.ISSUES_WRITE_SCOPE`'s comment. The scope
+is now in `Settings.oauth_default_scopes`'s ceiling (`gateway/app/core/config.py`),
+which only widens what an OAuth-issued token can ever request; an account
+still needs the scope listed in its own `users.json` entry to actually receive
+it on sign-in.
 
 ---
 

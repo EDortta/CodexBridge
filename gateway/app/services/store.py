@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.models.entities import (
     AuditEventModel,
+    EpicModel,
     ExecutorModel,
+    IssueModel,
     MessageReceiptModel,
     OAuthAccessTokenModel,
     OAuthAuthorizationCodeModel,
@@ -19,14 +21,26 @@ from gateway.app.models.entities import (
     TaskModel,
 )
 from gateway.app.services.audit import record_event
+from gateway.app.services.issue_types import (
+    DEFAULT_EPIC_STATUS,
+    DEFAULT_ISSUE_PRIORITY,
+    DEFAULT_ISSUE_STATUS,
+    EPIC_STATUSES,
+    ISSUE_PRIORITIES,
+    ISSUE_STATUSES,
+    IssuePlanningError,
+)
 from shared.policy import evaluate_task_policy
 from shared.protocol import (
     ApprovalDecision,
     DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
     DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
     ExecutorRegistration,
+    PolicyLevel,
     ProjectRegistration,
+    STOPPABLE_TASK_STATES,
     SubmitTaskRequest,
+    TaskMode,
     TaskState,
 )
 from shared.security import hash_token
@@ -109,6 +123,178 @@ async def list_projects_for_executor(session: AsyncSession, executor_id: str) ->
     return list(result.scalars())
 
 
+def _project_query(
+    *, project_ids: list[str] | None, search: str | None, enabled: bool | None
+):
+    """The shared filter for the project listing endpoints, unpaginated.
+
+    `list_projects_page` (cursor-paginated, for the common case) and
+    `list_projects_filtered` (unpaginated, for the `attention` filter — see its
+    docstring) both build on this so the two cannot drift on what "matching"
+    means.
+    """
+    statement = select(ProjectModel)
+    if project_ids is not None:
+        if not project_ids:
+            return None
+        statement = statement.where(ProjectModel.id.in_(project_ids))
+    if search:
+        pattern = f"%{search.strip().lower()}%"
+        statement = statement.where(
+            or_(func.lower(ProjectModel.id).like(pattern), func.lower(ProjectModel.name).like(pattern))
+        )
+    if enabled is not None:
+        statement = statement.where(ProjectModel.enabled == enabled)
+    return statement
+
+
+async def list_projects_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    search: str | None = None,
+    enabled: bool | None = None,
+    after: str | None = None,
+    limit: int = 50,
+) -> list[ProjectModel]:
+    """Projects the caller may see, ordered by id, over-fetched by one.
+
+    `ProjectModel` carries no creation timestamp, so `id` — unique and stable —
+    is the only sortable, cursor-safe ordering available. Same over-fetch
+    contract as `list_tasks_page`: callers read `limit + 1` rows so `hasMore` is
+    authoritative without a second COUNT.
+    """
+    statement = _project_query(project_ids=project_ids, search=search, enabled=enabled)
+    if statement is None:
+        return []
+    if after is not None:
+        statement = statement.where(ProjectModel.id > after)
+    statement = statement.order_by(ProjectModel.id.asc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def list_projects_filtered(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    search: str | None = None,
+    enabled: bool | None = None,
+) -> list[ProjectModel]:
+    """Every matching project, ordered by id, with no page limit.
+
+    Used only for the `attention` filter (`gateway/app/api/routes/projects.py`).
+    "Needs attention" is derived from executor liveness and pending-decision
+    counts, neither of which is a stored, indexable column — so it cannot be
+    pushed into the `WHERE` clause `list_projects_page` uses for everything
+    else. The registry this reads is operator-curated and expected to hold at
+    most a few hundred rows, so computing the derived field for every candidate
+    and paginating the result in Python is the honest trade here, not a
+    scalability promise.
+    """
+    statement = _project_query(project_ids=project_ids, search=search, enabled=enabled)
+    if statement is None:
+        return []
+    statement = statement.order_by(ProjectModel.id.asc())
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def get_project_for_caller(
+    session: AsyncSession, project_id: str, project_ids: list[str] | None
+) -> ProjectModel | None:
+    """A project the caller may see, or None.
+
+    None covers "does not exist" and "not yours" alike, same rule
+    `get_task_for_projects` applies: the caller turns both into `not_found`,
+    because a `403` would confirm the identifier exists to someone who was not
+    given it.
+    """
+    project = await session.get(ProjectModel, project_id)
+    if project is None:
+        return None
+    if project_ids is not None and project_id not in project_ids:
+        return None
+    return project
+
+
+async def executors_by_project(
+    session: AsyncSession, project_ids: list[str] | None = None
+) -> dict[str, list[ExecutorModel]]:
+    """`{project_id: [executors allowed to run it]}`, ordered by executor id.
+
+    The reverse of `list_projects_for_executor`: that one reads one executor's
+    `allowed_projects` from its metadata, this reads every executor's metadata
+    once and groups by the project ids found there. There is no join table —
+    the allowlist lives inside `ExecutorModel.metadata_json` — so this loads
+    every executor and filters in Python; the executor registry is
+    operator-curated and small, so one pass over all of it is cheaper than one
+    query per project. `project_ids=None` groups every project any executor
+    names; passing a list restricts the grouping to those ids without changing
+    the one query executed.
+    """
+    executors = await list_executors(session)
+    wanted = set(project_ids) if project_ids is not None else None
+    grouped: dict[str, list[ExecutorModel]] = {}
+    for executor in executors:
+        for project_id in json.loads(executor.metadata_json).get("allowed_projects", []):
+            if wanted is not None and project_id not in wanted:
+                continue
+            grouped.setdefault(project_id, []).append(executor)
+    return grouped
+
+
+async def executors_allowing_project(session: AsyncSession, project_id: str) -> list[ExecutorModel]:
+    """Executors whose allowlist names this one project. See `executors_by_project`."""
+    grouped = await executors_by_project(session, [project_id])
+    return grouped.get(project_id, [])
+
+
+async def project_task_counts(
+    session: AsyncSession, project_ids: list[str] | None
+) -> dict[str, dict[str, int]]:
+    """Per-project task counts, in one grouped query rather than one query per row.
+
+    Returns `{project_id: {"total": n, "pendingDecisions": n, "activeMissions": n}}`.
+    A project absent from tasks entirely is simply absent from the returned
+    dict — callers default to zero.
+
+    `pendingDecisions` counts `AWAITING_APPROVAL` — the same `TaskModel.state`
+    issue #9's sessions API already reports as `interventionRequired`, read
+    under the vocabulary issue #6 (decisions) will eventually give it its own
+    endpoint for. `activeMissions` counts `STOPPABLE_TASK_STATES` — every
+    non-terminal state — under the vocabulary issue #7 (missions) will give the
+    same rows their own endpoint. Both issues are still open; this reads the
+    one entity (`TaskModel`) that already exists rather than inventing a second
+    one to summarize.
+    """
+    if project_ids is not None and not project_ids:
+        return {}
+    statement = select(TaskModel.project_id, TaskModel.state, func.count(TaskModel.id)).group_by(
+        TaskModel.project_id, TaskModel.state
+    )
+    if project_ids is not None:
+        statement = statement.where(TaskModel.project_id.in_(project_ids))
+    result = await session.execute(statement)
+    counts: dict[str, dict[str, int]] = {}
+    for project_id, state, count in result.all():
+        bucket = counts.setdefault(project_id, {"total": 0, "pendingDecisions": 0, "activeMissions": 0})
+        bucket["total"] += count
+        if state == TaskState.AWAITING_APPROVAL.value:
+            bucket["pendingDecisions"] += count
+        if state in STOPPABLE_TASK_STATES:
+            bucket["activeMissions"] += count
+    return counts
+
+
+async def latest_project_activity_at(session: AsyncSession, project_id: str) -> datetime | None:
+    """The most recent task creation time for a project, or None if it has none."""
+    result = await session.execute(
+        select(func.max(TaskModel.created_at)).where(TaskModel.project_id == project_id)
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_task(session: AsyncSession, task_id: str) -> TaskModel | None:
     return await session.get(TaskModel, task_id)
 
@@ -165,6 +351,11 @@ async def create_task(
         correlation_id=str(uuid4()),
         session_id=continue_session_id,
         approval_state=policy.level.value if state == TaskState.AWAITING_APPROVAL else None,
+        # Same condition as `approval_state` above, on purpose (issue #6): a task
+        # that never needed a decision has no risk level to report on the
+        # decisions API. Unlike `approval_state`, this is never overwritten once
+        # a decision is made — see the column's comment in `models/entities.py`.
+        policy_level=policy.level.value if state == TaskState.AWAITING_APPROVAL else None,
     )
     session.add(task)
     await record_event(
@@ -191,6 +382,39 @@ async def mark_executor_connected(session: AsyncSession, executor_id: str, conne
     executor.connected = connected
     executor.last_seen_at = datetime.now(timezone.utc)
     await session.commit()
+
+
+def executor_is_live(
+    executor: ExecutorModel, *, now: datetime | None = None, grace_seconds: int | None = None
+) -> bool:
+    """Whether an executor should be presented as connected right now.
+
+    `ExecutorModel.connected` is set `True` on HELLO/heartbeat and `False` on a
+    graceful disconnect (`AgentHub.register`/`unregister`), but an abrupt
+    process kill on the executor side runs neither: no heartbeat arrives, and
+    nothing ever flips the column back. A gateway that just booted has an empty
+    in-memory `AgentHub`, so it cannot tell "no one is connected" from "I do not
+    know yet" by asking the hub — and the raw column alone would report that
+    project healthy forever.
+
+    `last_seen_at` is refreshed on every HELLO and heartbeat, so staleness is a
+    fact this can check without owning the socket: a dead executor's timestamp
+    stops advancing and ages out here on its own, bounded by
+    `settings.reconnect_grace_seconds` (default 120s — eight times the agent's
+    15s heartbeat interval, `docs/architecture.md`).
+
+    Used by the projects dashboard (issue #5) to compute project health. Not
+    applied to the existing MCP `executor_status`/`list_executors` tools, which
+    still read the raw column — retrofitting an already-shipped, unrelated
+    surface is out of this issue's scope.
+    """
+    if not executor.connected or executor.last_seen_at is None:
+        return False
+    from gateway.app.core.config import settings
+
+    grace = settings.reconnect_grace_seconds if grace_seconds is None else grace_seconds
+    now = now or datetime.now(timezone.utc)
+    return (now - _as_utc(executor.last_seen_at)) <= timedelta(seconds=grace)
 
 
 async def next_dispatchable_task(session: AsyncSession, executor_id: str) -> TaskModel | None:
@@ -897,3 +1121,614 @@ async def list_tasks_requiring_control_replay(
         .order_by(TaskModel.created_at.asc())
     )
     return list(result.scalars())
+
+
+async def list_decisions_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    decision_states: list[str] | None = None,
+    urgencies: list[str] | None = None,
+    risks: list[str] | None = None,
+    deadline_before: datetime | None = None,
+    deadline_after: datetime | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[TaskModel]:
+    """Decisions the caller may see, newest first, over-fetched by one (issue #6).
+
+    A "decision" is a task that has ever required approval: `policy_level` is
+    set once, at creation, and never cleared afterwards — see the column's
+    comment in `models/entities.py`. That is the predicate below, and it is why
+    a task nobody was ever asked to decide on cannot appear here however it is
+    filtered.
+
+    `decision_states` filters on the caller-facing state
+    (`routes/decisions.py:_decision_state`: `pending`, `approved`, `rejected`,
+    `revision_requested`), not on one raw column, because `pending` has no
+    column value of its own — it is `state == AWAITING_APPROVAL` — while the
+    other three read `approval_state` once the task has moved on.
+
+    Same over-fetch-by-one and `(created_at DESC, id DESC)` cursor scheme as
+    `list_tasks_page`, for the same reason: authorization can filter a page
+    short, so `hasMore` has to come from an extra row rather than a length check.
+    """
+    statement = select(TaskModel).where(TaskModel.policy_level.isnot(None))
+    if project_ids is not None:
+        if not project_ids:
+            return []
+        statement = statement.where(TaskModel.project_id.in_(project_ids))
+    if decision_states:
+        clauses = [
+            TaskModel.state == TaskState.AWAITING_APPROVAL.value
+            if state == "pending"
+            else TaskModel.approval_state == state
+            for state in decision_states
+        ]
+        statement = statement.where(or_(*clauses))
+    if urgencies:
+        statement = statement.where(TaskModel.priority.in_(urgencies))
+    if risks:
+        statement = statement.where(TaskModel.policy_level.in_(risks))
+    if deadline_before is not None:
+        statement = statement.where(TaskModel.expires_at <= deadline_before)
+    if deadline_after is not None:
+        statement = statement.where(TaskModel.expires_at >= deadline_after)
+    if after is not None:
+        created_at, task_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                TaskModel.created_at < created_at,
+                and_(TaskModel.created_at == created_at, TaskModel.id < task_id),
+            )
+        )
+    statement = statement.order_by(TaskModel.created_at.desc(), TaskModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def get_decision_for_projects(
+    session: AsyncSession, decision_id: str, project_ids: list[str] | None
+) -> TaskModel | None:
+    """A decision the caller may see, or None — "not a decision" included (issue #6).
+
+    A task that never required approval has `policy_level is None` and is not a
+    decision; answering anything but the caller's usual `not_found` for it would
+    tell a caller who probed a normal task id through this resource that the id
+    exists, which `get_task_for_projects` already treats as unsafe to confirm.
+    """
+    task = await session.get(TaskModel, decision_id)
+    if task is None or task.policy_level is None:
+        return None
+    if project_ids is not None and task.project_id not in project_ids:
+        return None
+    return task
+
+
+# Modes `policy_level_for_mode` (shared/policy.py) buckets as `read` and as
+# `controlled_write` (issue #7). It never returns `sensitive` for any real
+# `TaskMode` value — that branch only exists as a fallback for a future mode —
+# so the only way a task actually carries `sensitive` risk is the
+# keyword-escalation path recorded on `approval_state` at creation
+# (`create_task`). The risk filter below mirrors that: `sensitive` means
+# "approval_state says so", and `read`/`controlled_write` mean "this mode, and
+# not overridden to sensitive".
+_READ_MODES = {TaskMode.ANALYZE.value, TaskMode.REVIEW.value, TaskMode.TEST.value}
+_CONTROLLED_WRITE_MODES = {TaskMode.EDIT.value, TaskMode.IMPLEMENT.value}
+
+
+def _risk_filter_clause(risk: list[str]):
+    """A WHERE clause matching tasks whose derived risk is one of `risk` (issue #7).
+
+    Built at the query level, not applied after loading: filtering after
+    loading is how a page's `hasMore` ends up describing rows the caller may
+    not see (the same reasoning `list_tasks_page` documents for project scope).
+    """
+    clauses = []
+    if PolicyLevel.SENSITIVE.value in risk:
+        clauses.append(TaskModel.approval_state == PolicyLevel.SENSITIVE.value)
+    modes: set[str] = set()
+    if PolicyLevel.READ.value in risk:
+        modes |= _READ_MODES
+    if PolicyLevel.CONTROLLED_WRITE.value in risk:
+        modes |= _CONTROLLED_WRITE_MODES
+    if modes:
+        # `approval_state` is NULL for every task never held for approval —
+        # which is most of them — and `column != value` on a NULL is NULL,
+        # not true, under SQL's three-valued logic. `!=` alone silently
+        # dropped every non-sensitive row that had never been through
+        # approval; the `IS NULL` arm is what keeps them in.
+        clauses.append(
+            and_(
+                TaskModel.mode.in_(modes),
+                or_(
+                    TaskModel.approval_state.is_(None),
+                    TaskModel.approval_state != PolicyLevel.SENSITIVE.value,
+                ),
+            )
+        )
+    return or_(*clauses) if clauses else None
+
+
+# Coarse buckets over `TaskState`, for the mission-control "stage" filter and
+# field (issue #7). `state` (exact) and `stage` (this grouping) are
+# deliberately two different filters: `state` is what the sessions API already
+# exposes verbatim, `stage` is the three-phase view a mission-control list
+# groups by.
+MISSION_STAGE_STATES: dict[str, tuple[str, ...]] = {
+    "pending": (TaskState.QUEUED.value, TaskState.WAITING_EXECUTOR.value),
+    "active": (
+        TaskState.RUNNING.value,
+        TaskState.AWAITING_APPROVAL.value,
+        TaskState.PAUSING.value,
+        TaskState.PAUSED.value,
+        TaskState.RESUMING.value,
+        TaskState.RESTARTING.value,
+    ),
+    "done": (
+        TaskState.COMPLETED.value,
+        TaskState.FAILED.value,
+        TaskState.CANCELLED.value,
+        TaskState.EXPIRED.value,
+        TaskState.LOST.value,
+    ),
+}
+
+
+def mission_risk(task: TaskModel) -> str:
+    """The mission-control risk level for one task (issue #7). See `_risk_filter_clause`."""
+    if task.approval_state == PolicyLevel.SENSITIVE.value:
+        return PolicyLevel.SENSITIVE.value
+    if task.mode in _READ_MODES:
+        return PolicyLevel.READ.value
+    return PolicyLevel.CONTROLLED_WRITE.value
+
+
+def mission_stage(task: TaskModel) -> str:
+    for stage, states in MISSION_STAGE_STATES.items():
+        if task.state in states:
+            return stage
+    return "done"
+
+
+async def list_missions_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    states: list[str] | None = None,
+    risk: list[str] | None = None,
+    blocked: bool | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[TaskModel]:
+    """Missions (tasks, in mission-control framing) the caller may see, newest
+    first (issue #7).
+
+    Same shape as `list_tasks_page`: `project_ids` of None is unrestricted
+    (admin), an empty list means the caller sees nothing, and every filter is
+    applied to the query rather than after loading. Over-fetches by one so the
+    caller can report `hasMore` without a second COUNT.
+    """
+    statement = select(TaskModel)
+    if project_ids is not None:
+        if not project_ids:
+            return []
+        statement = statement.where(TaskModel.project_id.in_(project_ids))
+    if states:
+        statement = statement.where(TaskModel.state.in_(states))
+    if risk:
+        clause = _risk_filter_clause(risk)
+        if clause is not None:
+            statement = statement.where(clause)
+        else:
+            return []
+    if blocked is True:
+        statement = statement.where(TaskModel.state == TaskState.AWAITING_APPROVAL.value)
+    elif blocked is False:
+        statement = statement.where(TaskModel.state != TaskState.AWAITING_APPROVAL.value)
+    if after is not None:
+        created_at, task_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                TaskModel.created_at < created_at,
+                and_(TaskModel.created_at == created_at, TaskModel.id < task_id),
+            )
+        )
+    statement = statement.order_by(TaskModel.created_at.desc(), TaskModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def list_task_events_page(
+    session: AsyncSession,
+    task_id: str,
+    *,
+    after: tuple[str, int] | None = None,
+    limit: int = 50,
+) -> list[AuditEventModel]:
+    """A mission's timeline, oldest first — the order a narrative reads in (issue #7).
+
+    Unlike `list_tasks_page` and `list_missions_page` (newest first, matching
+    the sessions list convention), a timeline is read forward from creation.
+    Over-fetches by one, same convention as every other collection here.
+    """
+    statement = select(AuditEventModel).where(
+        AuditEventModel.entity_type == "task", AuditEventModel.entity_id == task_id
+    )
+    if after is not None:
+        created_at, event_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                AuditEventModel.created_at > created_at,
+                and_(AuditEventModel.created_at == created_at, AuditEventModel.id > event_id),
+            )
+        )
+    statement = statement.order_by(AuditEventModel.created_at.asc(), AuditEventModel.id.asc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+# --------------------------------------------------------------------------
+# Epics and issues (issue #8) — provider-neutral planning entities owned by
+# this gateway. See gateway/app/services/issue_types.py's module docstring
+# for why they are not part of the executor protocol.
+# --------------------------------------------------------------------------
+
+
+def _normalize_labels(labels: list[str] | None) -> list[str]:
+    if not labels:
+        return []
+    # Ordered de-dupe: a client that sends the same label twice should not see
+    # it twice on every future read.
+    seen: dict[str, None] = {}
+    for label in labels:
+        cleaned = label.strip()
+        if cleaned:
+            seen.setdefault(cleaned, None)
+    return list(seen)
+
+
+async def _validate_dependencies(
+    session: AsyncSession, *, project_id: str, issue_id: str | None, dependencies: list[str]
+) -> list[str]:
+    """The de-duplicated dependency ids, or raise if any is not usable.
+
+    An issue cannot depend on itself, and every dependency must be an issue in
+    the same project — a dependency the caller cannot see would leak that
+    identifier's existence into a project they have no access to.
+    """
+    ordered = list(dict.fromkeys(dependencies))
+    if issue_id is not None and issue_id in ordered:
+        raise IssuePlanningError("/dependencies", "self_dependency", "An issue cannot depend on itself.")
+    if not ordered:
+        return []
+    result = await session.execute(
+        select(IssueModel.id, IssueModel.project_id).where(IssueModel.id.in_(ordered))
+    )
+    found = {row.id: row.project_id for row in result}
+    missing = [dep for dep in ordered if dep not in found]
+    wrong_project = [dep for dep in ordered if dep in found and found[dep] != project_id]
+    if missing or wrong_project:
+        raise IssuePlanningError(
+            "/dependencies",
+            "unknown_issue",
+            "Every dependency must be an existing issue in the same project.",
+        )
+    return ordered
+
+
+async def create_epic(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    title: str,
+    description: str | None,
+    status: str | None,
+    actor_user_id: str,
+    actor_email: str | None,
+) -> EpicModel:
+    project = await session.get(ProjectModel, project_id)
+    if project is None or not project.enabled:
+        raise IssuePlanningError("/projectId", "unknown_project", "No such project.")
+    title = title.strip()
+    if not title:
+        raise IssuePlanningError("/title", "required", "title must not be empty.")
+    status = status or DEFAULT_EPIC_STATUS
+    if status not in EPIC_STATUSES:
+        raise IssuePlanningError("/status", "invalid_status", f"status must be one of {sorted(EPIC_STATUSES)}.")
+    now = datetime.now(timezone.utc)
+    epic = EpicModel(
+        id=str(uuid4()),
+        project_id=project_id,
+        title=title,
+        description=description,
+        status=status,
+        created_by_user_id=actor_user_id,
+        created_by_email=actor_email,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(epic)
+    await record_event(
+        session, "epic", epic.id, "epic.created",
+        {"project_id": project_id, "status": status, "actor_id": actor_user_id},
+    )
+    await session.commit()
+    await session.refresh(epic)
+    return epic
+
+
+async def get_epic(session: AsyncSession, epic_id: str) -> EpicModel | None:
+    return await session.get(EpicModel, epic_id)
+
+
+async def get_epic_for_projects(
+    session: AsyncSession, epic_id: str, project_ids: list[str] | None
+) -> EpicModel | None:
+    """An epic the caller may see, or None. Mirrors `get_task_for_projects`."""
+    epic = await session.get(EpicModel, epic_id)
+    if epic is None:
+        return None
+    if project_ids is not None and epic.project_id not in project_ids:
+        return None
+    return epic
+
+
+async def list_epics_page(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    status: list[str] | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[EpicModel]:
+    """Epics in one project, newest first, over-fetched by one.
+
+    Scoped to a single `project_id` rather than a caller's whole visible set:
+    the route already checked that project against `visible_projects` before
+    calling this, the same order sessions.py enforces project scope in the
+    query rather than after loading.
+    """
+    statement = select(EpicModel).where(EpicModel.project_id == project_id)
+    if status:
+        statement = statement.where(EpicModel.status.in_(status))
+    if after is not None:
+        created_at, epic_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                EpicModel.created_at < created_at,
+                and_(EpicModel.created_at == created_at, EpicModel.id < epic_id),
+            )
+        )
+    statement = statement.order_by(EpicModel.created_at.desc(), EpicModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def create_issue(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    epic_id: str | None,
+    title: str,
+    description: str | None,
+    status: str | None,
+    priority: str | None,
+    labels: list[str] | None,
+    assignee_user_id: str | None,
+    assignee_email: str | None,
+    dependencies: list[str] | None,
+    blocked_reason: str | None,
+    actor_user_id: str,
+    actor_email: str | None,
+) -> IssueModel:
+    project = await session.get(ProjectModel, project_id)
+    if project is None or not project.enabled:
+        raise IssuePlanningError("/projectId", "unknown_project", "No such project.")
+    title = title.strip()
+    if not title:
+        raise IssuePlanningError("/title", "required", "title must not be empty.")
+    status = status or DEFAULT_ISSUE_STATUS
+    if status not in ISSUE_STATUSES:
+        raise IssuePlanningError("/status", "invalid_status", f"status must be one of {sorted(ISSUE_STATUSES)}.")
+    priority = priority or DEFAULT_ISSUE_PRIORITY
+    if priority not in ISSUE_PRIORITIES:
+        raise IssuePlanningError(
+            "/priority", "invalid_priority", f"priority must be one of {sorted(ISSUE_PRIORITIES)}."
+        )
+    if epic_id is not None:
+        epic = await session.get(EpicModel, epic_id)
+        if epic is None or epic.project_id != project_id:
+            raise IssuePlanningError("/epicId", "unknown_epic", "epicId must name an epic in the same project.")
+    ordered_dependencies = await _validate_dependencies(
+        session, project_id=project_id, issue_id=None, dependencies=dependencies or []
+    )
+    now = datetime.now(timezone.utc)
+    issue = IssueModel(
+        id=str(uuid4()),
+        project_id=project_id,
+        epic_id=epic_id,
+        title=title,
+        description=description,
+        status=status,
+        priority=priority,
+        labels_json=json.dumps(_normalize_labels(labels), ensure_ascii=True),
+        assignee_user_id=assignee_user_id,
+        assignee_email=assignee_email,
+        dependencies_json=json.dumps(ordered_dependencies, ensure_ascii=True),
+        blocked_reason=blocked_reason,
+        created_by_user_id=actor_user_id,
+        created_by_email=actor_email,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(issue)
+    await record_event(
+        session, "issue", issue.id, "issue.created",
+        {"project_id": project_id, "epic_id": epic_id, "status": status, "actor_id": actor_user_id},
+    )
+    await session.commit()
+    await session.refresh(issue)
+    return issue
+
+
+async def get_issue(session: AsyncSession, issue_id: str) -> IssueModel | None:
+    return await session.get(IssueModel, issue_id)
+
+
+async def get_issue_for_projects(
+    session: AsyncSession, issue_id: str, project_ids: list[str] | None
+) -> IssueModel | None:
+    issue = await session.get(IssueModel, issue_id)
+    if issue is None:
+        return None
+    if project_ids is not None and issue.project_id not in project_ids:
+        return None
+    return issue
+
+
+async def list_issues_page(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    status: list[str] | None = None,
+    priority: list[str] | None = None,
+    epic_id: str | None = None,
+    assignee_user_id: str | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[IssueModel]:
+    statement = select(IssueModel).where(IssueModel.project_id == project_id)
+    if status:
+        statement = statement.where(IssueModel.status.in_(status))
+    if priority:
+        statement = statement.where(IssueModel.priority.in_(priority))
+    if epic_id is not None:
+        statement = statement.where(IssueModel.epic_id == epic_id)
+    if assignee_user_id is not None:
+        statement = statement.where(IssueModel.assignee_user_id == assignee_user_id)
+    if after is not None:
+        created_at, issue_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                IssueModel.created_at < created_at,
+                and_(IssueModel.created_at == created_at, IssueModel.id < issue_id),
+            )
+        )
+    statement = statement.order_by(IssueModel.created_at.desc(), IssueModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+UNSET = object()
+
+
+async def update_issue(
+    session: AsyncSession,
+    issue_id: str,
+    *,
+    title: object = UNSET,
+    description: object = UNSET,
+    status: object = UNSET,
+    priority: object = UNSET,
+    labels: object = UNSET,
+    assignee_user_id: object = UNSET,
+    assignee_email: object = UNSET,
+    dependencies: object = UNSET,
+    blocked_reason: object = UNSET,
+    actor_user_id: str,
+    actor_email: str | None,
+) -> IssueModel:
+    issue = await session.get(IssueModel, issue_id)
+    if issue is None:
+        raise ValueError("unknown_issue")
+
+    if title is not UNSET:
+        cleaned = (title or "").strip()
+        if not cleaned:
+            raise IssuePlanningError("/title", "required", "title must not be empty.")
+        issue.title = cleaned
+    if description is not UNSET:
+        issue.description = description
+    if status is not UNSET:
+        if status not in ISSUE_STATUSES:
+            raise IssuePlanningError(
+                "/status", "invalid_status", f"status must be one of {sorted(ISSUE_STATUSES)}."
+            )
+        issue.status = status
+    if priority is not UNSET:
+        if priority not in ISSUE_PRIORITIES:
+            raise IssuePlanningError(
+                "/priority", "invalid_priority", f"priority must be one of {sorted(ISSUE_PRIORITIES)}."
+            )
+        issue.priority = priority
+    if labels is not UNSET:
+        issue.labels_json = json.dumps(_normalize_labels(labels), ensure_ascii=True)
+    if assignee_user_id is not UNSET:
+        issue.assignee_user_id = assignee_user_id
+    if assignee_email is not UNSET:
+        issue.assignee_email = assignee_email
+    if dependencies is not UNSET:
+        ordered = await _validate_dependencies(
+            session, project_id=issue.project_id, issue_id=issue.id, dependencies=dependencies or []
+        )
+        issue.dependencies_json = json.dumps(ordered, ensure_ascii=True)
+    if blocked_reason is not UNSET:
+        issue.blocked_reason = blocked_reason
+
+    issue.updated_by_user_id = actor_user_id
+    issue.updated_by_email = actor_email
+    issue.updated_at = datetime.now(timezone.utc)
+    issue.revision += 1
+    await record_event(
+        session, "issue", issue.id, "issue.updated",
+        {"actor_id": actor_user_id, "status": issue.status, "priority": issue.priority},
+    )
+    await session.commit()
+    await session.refresh(issue)
+    return issue
+
+
+async def link_issue_to_epic(
+    session: AsyncSession,
+    *,
+    issue_id: str,
+    epic_id: str,
+    actor_user_id: str,
+    actor_email: str | None,
+) -> IssueModel:
+    """Attach `issue_id` to `epic_id`. Both must already exist in one project.
+
+    Callers check project visibility on the issue (and load the epic) before
+    this runs; the project match here is the invariant the write itself must
+    never violate, independent of who is allowed to trigger it.
+    """
+    issue = await session.get(IssueModel, issue_id)
+    if issue is None:
+        raise ValueError("unknown_issue")
+    epic = await session.get(EpicModel, epic_id)
+    if epic is None or epic.project_id != issue.project_id:
+        raise IssuePlanningError("/epicId", "unknown_epic", "epicId must name an epic in the same project.")
+
+    issue.epic_id = epic_id
+    issue.updated_by_user_id = actor_user_id
+    issue.updated_by_email = actor_email
+    issue.updated_at = datetime.now(timezone.utc)
+    issue.revision += 1
+    await record_event(
+        session, "issue", issue.id, "issue.linked_to_epic",
+        {"epic_id": epic_id, "actor_id": actor_user_id},
+    )
+    await session.commit()
+    await session.refresh(issue)
+    return issue

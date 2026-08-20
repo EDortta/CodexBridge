@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-18 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-08-20 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 81 file(s) · 577 symbol(s) indexed
-- Languages: config (2), python (77), shell (2)
+- 91 file(s) · 786 symbol(s) indexed
+- Languages: config (2), python (87), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -60,7 +60,12 @@ gateway/
       routes/
         __init__.py  — "HTTP routers for the mobile contract surface."
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
+        decisions.py  — "Operational decisions: sensitive tasks held for a human to resolve — issue #6."
+        epics.py  — "Epics — issue #8."
+        issues.py  — "Issues — issue #8."
+        missions.py  — "Missions: the mission-control view of the same run Sessions exposes — issue #7."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
+        projects.py  — "Projects and the project operational dashboard — issue #5."
         sessions.py  — "Agent sessions, their logs, and lifecycle control."
       scope.py  — "Which requests the API's cross-cutting rules apply to."
       setup.py  — "One call that installs every cross-cutting API behaviour."
@@ -87,6 +92,7 @@ gateway/
       __init__.py
       agent_hub.py
       audit.py
+      issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
       metrics.py
       store.py
     version.py  — "The single statement of this application's version."
@@ -112,8 +118,12 @@ tests/
     test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
+    test_decisions.py  — "Operational decisions — issue #6."
+    test_epics_issues.py  — "Epics and issues — issue #8."
+    test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
+    test_projects.py  — "Projects and the project operational dashboard — issue #5."
     test_reconnect_replay_resolves.py  — "Issue #17 council round 1 — the headline scenario named by findings 1, 4"
     test_sessions.py  — "Agent sessions, logs and control — issue #9."
     test_store_and_mcp.py
@@ -223,6 +233,7 @@ tests/
 - `scope_digest(endpoint, filters)` — "Identity of "this endpoint under these filters", for cursor binding."
 - `encode_cursor(scope, position)`
 - `decode_cursor(scope, cursor, expect)` — "Decode a cursor this server issued for `scope`, or fail with a typed error."
+- `cursor_time(value)` — "Cursor form of a timestamp: ISO 8601, always carrying microseconds."
 - `parse_limit(value)`
 - `page_info()` — "Build `PageInfo`, keeping its one invariant true by construction."
 - `paginate(items)` — "Trim an over-fetched list to `limit` and describe the page."
@@ -266,6 +277,49 @@ tests/
 - `revoke(request, response, body, session)` *(async function)* — "Sign out: end the grant now rather than at expiry."
 - `current_actor(response, principal)` *(async function)* — "Who is calling, and what this build will let them do."
 
+### `gateway/app/api/routes/decisions.py`
+
+> Operational decisions: sensitive tasks held for a human to resolve — issue #6.
+
+- **`DecisionApproveRequest`** *(class)*
+- **`DecisionRejectRequest`** *(class)*
+- **`DecisionRevisionRequest`** *(class)*
+- `list_decisions(response, project, state, urgency, risk, deadline_before, deadline_after, cursor, limit, principal, session)` *(async function)* — "Decisions the caller may see, newest first."
+- `get_decision(decision_id, response, principal, session)` *(async function)*
+- `approve_decision(decision_id, body, response, if_match, idempotency_key, principal, session)` *(async function)*
+- `reject_decision(decision_id, body, response, if_match, idempotency_key, principal, session)` *(async function)*
+- `request_decision_revision(decision_id, body, response, if_match, idempotency_key, principal, session)` *(async function)*
+
+### `gateway/app/api/routes/epics.py`
+
+> Epics — issue #8.
+
+- **`CreateEpicRequest`** *(class)*
+- `list_epics(project_id, response, status, cursor, limit, principal, session)` *(async function)* — "Epics in one project, newest first."
+- `create_epic(payload, response, idempotency_key, principal, session)` *(async function)*
+- `link_issue(epic_id, issue_id, response, if_match, idempotency_key, principal, session)` *(async function)* — "Attach an issue to an epic. Both must be in a project the caller may see."
+
+### `gateway/app/api/routes/issues.py`
+
+> Issues — issue #8.
+
+- **`CreateIssueRequest`** *(class)*
+- **`UpdateIssueRequest`** *(class)*
+- `list_issues(project_id, response, status, priority, epic_id, assignee_user_id, cursor, limit, principal, session)` *(async function)* — "Issues in one project, newest first, optionally filtered."
+- `get_issue_detail(issue_id, response, principal, session)` *(async function)*
+- `create_issue(payload, response, idempotency_key, principal, session)` *(async function)*
+- `update_issue(issue_id, payload, response, if_match, principal, session)` *(async function)* — "Change status, priority, labels, assignee, dependencies or blocked reason."
+
+### `gateway/app/api/routes/missions.py`
+
+> Missions: the mission-control view of the same run Sessions exposes — issue #7.
+
+- `list_missions(response, project_id, stage, state, risk, blocked, cursor, limit, principal, session)` *(async function)* — "Missions the caller may see, newest first."
+- `get_mission(mission_id, response, principal, session)` *(async function)*
+- `get_mission_timeline(mission_id, response, cursor, limit, principal, session)` *(async function)* — "The mission's recorded events, oldest first — the order a narrative reads in."
+- `cancel_mission(mission_id, response, if_match, idempotency_key, principal, session)` *(async function)* — "Cancel a mission that is queued, waiting, running or awaiting approval."
+- `explain_mission(mission_id, principal, session)` *(async function)* — "A structured account of a mission's current state, assembled server-side."
+
 ### `gateway/app/api/routes/probes.py`
 
 > Liveness, readiness and version — what a client asks before anything else.
@@ -275,6 +329,14 @@ tests/
 - `health()` *(async function)* — "Liveness. Deliberately touches nothing — see the module docstring."
 - `ready(response)` *(async function)* — "Readiness, with the reason when it is not ready."
 - `api_version()` *(async function)* — "What this server speaks, so a client can refuse before it starts."
+
+### `gateway/app/api/routes/projects.py`
+
+> Projects and the project operational dashboard — issue #5.
+
+- `list_projects_endpoint(response, q, status, attention, cursor, limit, principal, session)` *(async function)* — "Projects the caller may see, ordered by id, optimized for the mobile dashboard."
+- `get_project_detail(project_id, principal, session)` *(async function)*
+- `get_project_summary(project_id, principal, session)` *(async function)* — "The full dashboard payload for one project: status plus the executor breakdown."
 
 ### `gateway/app/api/routes/sessions.py`
 
@@ -308,6 +370,7 @@ tests/
 
 - `utc_z(value)` — "`value` as an RFC 3339 UTC instant ending in `Z`, or None."
 - `now_z()` — "The current instant, in the same form."
+- `cursor_z(value)` — "Cursor form of a timestamp: ISO 8601, always carrying microseconds."
 
 ### `gateway/app/core/agent_auth.py`
 
@@ -422,6 +485,8 @@ tests/
 - **`ExecutorModel`** *(class)*
 - **`ProjectModel`** *(class)*
 - **`TaskModel`** *(class)*
+- **`EpicModel`** *(class)*
+- **`IssueModel`** *(class)*
 - **`TaskLogModel`** *(class)*
 - **`AuditEventModel`** *(class)*
 - **`MessageReceiptModel`** *(class)*
@@ -447,6 +512,13 @@ tests/
 
 - `record_event(session, entity_type, entity_id, event_type, payload)` *(async function)*
 
+### `gateway/app/services/issue_types.py`
+
+> Closed vocabularies for epics and issues, and the error they fail with.
+
+- **`IssuePlanningError`** *(class)* — "A create/update input that fails validation inside the store itself."
+  - `__init__(self, field, code, message)` *(method)*
+
 ### `gateway/app/services/metrics.py`
 
 - `render_metrics()`
@@ -457,10 +529,18 @@ tests/
 - `list_executors(session)` *(async function)*
 - `list_projects(session)` *(async function)*
 - `list_projects_for_executor(session, executor_id)` *(async function)*
+- `list_projects_page(session)` *(async function)* — "Projects the caller may see, ordered by id, over-fetched by one."
+- `list_projects_filtered(session)` *(async function)* — "Every matching project, ordered by id, with no page limit."
+- `get_project_for_caller(session, project_id, project_ids)` *(async function)* — "A project the caller may see, or None."
+- `executors_by_project(session, project_ids)` *(async function)* — "`{project_id: [executors allowed to run it]}`, ordered by executor id."
+- `executors_allowing_project(session, project_id)` *(async function)* — "Executors whose allowlist names this one project. See `executors_by_project`."
+- `project_task_counts(session, project_ids)` *(async function)* — "Per-project task counts, in one grouped query rather than one query per row."
+- `latest_project_activity_at(session, project_id)` *(async function)* — "The most recent task creation time for a project, or None if it has none."
 - `get_task(session, task_id)` *(async function)*
 - `list_recent_tasks(session, limit)` *(async function)*
 - `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email)` *(async function)*
 - `mark_executor_connected(session, executor_id, connected)` *(async function)*
+- `executor_is_live(executor)` — "Whether an executor should be presented as connected right now."
 - `next_dispatchable_task(session, executor_id)` *(async function)*
 - `update_task_state(session, task_id, state, error)` *(async function)*
 - `append_log(session, task_id, offset, stream, line)` *(async function)*
@@ -485,6 +565,22 @@ tests/
 - `get_recent_logs(session, task_id)` *(async function)* — "The most recent log lines, oldest-first within the slice."
 - `list_tasks_requiring_cancel_replay(session, executor_id)` *(async function)* — "Cancelled tasks whose executor has not yet acknowledged the cancellation."
 - `list_tasks_requiring_control_replay(session, executor_id)` *(async function)* — "Tasks stuck in a pending pause/resume/restart, waiting for a `task.ack`"
+- `list_decisions_page(session)` *(async function)* — "Decisions the caller may see, newest first, over-fetched by one (issue #6)."
+- `get_decision_for_projects(session, decision_id, project_ids)` *(async function)* — "A decision the caller may see, or None — "not a decision" included (issue #6)."
+- `mission_risk(task)` — "The mission-control risk level for one task (issue #7). See `_risk_filter_clause`."
+- `mission_stage(task)`
+- `list_missions_page(session)` *(async function)* — "Missions (tasks, in mission-control framing) the caller may see, newest"
+- `list_task_events_page(session, task_id)` *(async function)* — "A mission's timeline, oldest first — the order a narrative reads in (issue #7)."
+- `create_epic(session)` *(async function)*
+- `get_epic(session, epic_id)` *(async function)*
+- `get_epic_for_projects(session, epic_id, project_ids)` *(async function)* — "An epic the caller may see, or None. Mirrors `get_task_for_projects`."
+- `list_epics_page(session)` *(async function)* — "Epics in one project, newest first, over-fetched by one."
+- `create_issue(session)` *(async function)*
+- `get_issue(session, issue_id)` *(async function)*
+- `get_issue_for_projects(session, issue_id, project_ids)` *(async function)*
+- `list_issues_page(session)` *(async function)*
+- `update_issue(session, issue_id)` *(async function)*
+- `link_issue_to_epic(session)` *(async function)* — "Attach `issue_id` to `epic_id`. Both must already exist in one project."
 
 ### `scripts/apply_migrations.py`
 
@@ -714,6 +810,138 @@ tests/
 - `test_the_guard_flags_a_new_administrative_action(monkeypatch)` — "The guard is only worth having if it fires — so fire it."
 - `test_the_report_and_the_endpoints_agree(api, who)` *(async function)* — "The claim the whole endpoint exists for."
 - `test_the_administrative_action_describes_what_the_list_endpoint_does(api)` *(async function)* — "`sessions.readAllProjects` is administrative because it crosses projects."
+- `test_the_administrative_action_describes_what_the_missions_list_endpoint_does(api)` *(async function)* — "`missions.readAllProjects` mirrors `sessions.readAllProjects` — same widening."
+
+### `tests/integration/test_decisions.py`
+
+> Operational decisions — issue #6.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)* — "A real app over a real database, seeded with two projects."
+- `make_decision(factory, project_id, instruction, requested_by_user_id, requested_by_email)` *(async function)*
+- `make_plain_task(factory, project_id)` *(async function)* — "A task nobody was ever asked to decide on — not a decision."
+- `auth(token)`
+- `audit_events(factory, event_type)` *(async function)*
+- `test_decisions_require_a_token(api)` *(async function)*
+- `test_an_expired_token_is_refused(api)` *(async function)*
+- `test_a_decision_in_an_invisible_project_is_not_found_not_forbidden(api)` *(async function)*
+- `test_a_plain_task_is_not_a_decision(api)` *(async function)* — "A session id that exists but never needed approval is not found here."
+- `test_the_list_is_filtered_before_it_is_paged(api)` *(async function)*
+- `test_the_cursor_walks_every_decision_once(api)` *(async function)* — "`list_decisions_page` reuses `pagination.paginate`'s over-fetch-by-one"
+- `test_the_project_filter_only_narrows_never_widens(api)` *(async function)*
+- `test_the_decision_body_never_carries_the_project_path(api)` *(async function)*
+- `test_the_request_field_is_redacted(api)` *(async function)*
+- `test_state_filter_separates_pending_from_resolved(api)` *(async function)*
+- `test_risk_and_urgency_filters(api)` *(async function)*
+- `test_deadline_filters(api)` *(async function)*
+- `test_reading_needs_no_approval_scope(api)` *(async function)*
+- `test_deciding_needs_the_approve_scope(api)` *(async function)*
+- `test_the_scope_alone_is_not_enough_for_a_sensitive_decision(api)` *(async function)* — "`can_approve_sensitive` is checked on top of `codexbridge.task.approve`."
+- `test_auth_me_agrees_with_the_untrusted_approver_gate(api)` *(async function)* — "`GET /auth/me` is not mounted in this fixture; assert the function it calls."
+- `test_approve_requires_if_match(api)` *(async function)*
+- `test_approve_with_a_stale_etag_is_refused(api)` *(async function)*
+- `test_approving_a_critical_decision_without_confirm_is_refused(api)` *(async function)*
+- `test_approving_with_confirm_resolves_the_decision(api)` *(async function)*
+- `test_approving_an_already_resolved_decision_is_a_conflict(api)` *(async function)*
+- `test_a_retried_approve_replays_instead_of_acting_twice(api)` *(async function)*
+- `test_approve_records_the_deciding_actor(api)` *(async function)*
+- `test_reject_requires_a_non_empty_reason(api)` *(async function)*
+- `test_reject_with_no_body_is_refused(api)` *(async function)*
+- `test_rejecting_cancels_the_underlying_session(api)` *(async function)*
+- `test_rejecting_an_already_resolved_decision_is_a_conflict(api)` *(async function)*
+- `test_request_revision_requires_a_non_empty_reason(api)` *(async function)*
+- `test_request_revision_is_a_distinct_outcome_from_reject(api)` *(async function)*
+- `test_request_revision_on_a_resolved_decision_is_a_conflict(api)` *(async function)*
+
+### `tests/integration/test_epics_issues.py`
+
+> Epics and issues — issue #8.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)*
+- `auth(token)`
+- `make_epic(factory, project_id, title)` *(async function)*
+- `make_issue(factory, project_id, **kwargs)` *(async function)*
+- `test_epics_and_issues_require_a_token(api)` *(async function)*
+- `test_reader_cannot_create_epics_or_issues(api)` *(async function)*
+- `test_reader_can_still_list_and_read(api)` *(async function)*
+- `test_a_project_outside_the_caller_visibility_is_not_found(api)` *(async function)* — "404, never 403 — confirming existence is what probing is for."
+- `test_an_epic_or_issue_in_an_invisible_project_is_not_found(api)` *(async function)*
+- `test_create_epic(api)` *(async function)*
+- `test_create_epic_rejects_an_empty_title(api)` *(async function)*
+- `test_create_epic_rejects_an_unknown_status(api)` *(async function)*
+- `test_a_retried_epic_create_does_not_create_a_second_epic(api)` *(async function)*
+- `test_create_issue_defaults_status_and_priority(api)` *(async function)*
+- `test_create_issue_normalizes_and_dedupes_labels(api)` *(async function)*
+- `test_create_issue_rejects_an_unknown_priority(api)` *(async function)*
+- `test_create_issue_with_an_epic_from_another_project_is_rejected(api)` *(async function)*
+- `test_create_issue_with_an_unknown_dependency_is_rejected(api)` *(async function)*
+- `test_create_issue_with_a_dependency_in_another_project_is_rejected(api)` *(async function)*
+- `test_create_issue_records_valid_dependencies(api)` *(async function)*
+- `test_get_issue_returns_an_etag(api)` *(async function)*
+- `test_the_issue_body_never_carries_the_project_path(api)` *(async function)*
+- `test_list_issues_filters_by_status_priority_epic_and_assignee(api)` *(async function)*
+- `test_the_issue_list_cursor_walks_every_issue_once(api)` *(async function)*
+- `test_an_issue_cursor_from_a_different_project_is_rejected(api)` *(async function)*
+- `test_update_requires_if_match(api)` *(async function)*
+- `test_update_with_a_stale_etag_is_refused(api)` *(async function)*
+- `test_update_changes_only_the_mentioned_fields(api)` *(async function)*
+- `test_update_can_explicitly_clear_a_nullable_field(api)` *(async function)*
+- `test_update_rejects_an_unknown_status(api)` *(async function)*
+- `test_update_rejects_a_self_dependency(api)` *(async function)*
+- `test_update_does_not_accept_an_epic_id(api)` *(async function)* — "epicId is deliberately absent from the update body — see the link endpoint."
+- `test_link_issue_to_epic(api)` *(async function)*
+- `test_link_requires_if_match(api)` *(async function)*
+- `test_link_rejects_an_epic_from_a_different_project(api)` *(async function)*
+- `test_a_reader_cannot_link(api)` *(async function)*
+- `test_a_retried_link_does_not_relink_twice(api)` *(async function)*
+- `test_a_failed_link_does_not_keep_the_key_claimed(api)` *(async function)*
+- `test_the_epic_list_cursor_walks_every_epic_once(api)` *(async function)*
+- `test_list_epics_filters_by_status(api)` *(async function)*
+
+### `tests/integration/test_missions.py`
+
+> Missions: the mission-control view of Sessions — issue #7.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)* — "A real app over a real database, seeded with two projects."
+- `make_task(factory, project_id, instruction, mode, state)` *(async function)*
+- `auth(token)`
+- `test_missions_require_a_token(api)` *(async function)*
+- `test_an_expired_token_is_refused(api)` *(async function)*
+- `test_a_mission_in_an_invisible_project_is_not_found_not_forbidden(api)` *(async function)*
+- `test_the_list_is_filtered_before_it_is_paged(api)` *(async function)*
+- `test_the_mission_body_never_carries_the_project_path(api)` *(async function)*
+- `test_objective_and_assigned_agent_are_the_instruction_and_the_executor(api)` *(async function)*
+- `test_stage_groups_state_into_three_phases(api, state, stage)` *(async function)*
+- `test_risk_is_derived_from_mode(api, mode, risk)` *(async function)*
+- `test_a_sensitive_instruction_overrides_risk_to_sensitive(api)` *(async function)* — "The keyword-escalation path recorded on `approval_state` at creation."
+- `test_a_mission_awaiting_approval_is_blocked_with_a_reason(api)` *(async function)*
+- `test_a_running_mission_is_not_blocked(api)` *(async function)*
+- `test_stage_filter_restricts_the_list(api)` *(async function)*
+- `test_state_and_stage_together_intersect(api)` *(async function)*
+- `test_risk_filter_restricts_the_list(api)` *(async function)*
+- `test_blocked_filter_restricts_the_list(api)` *(async function)*
+- `test_project_filter_is_intersected_with_visibility(api)` *(async function)*
+- `test_the_cursor_walks_every_mission_once(api)` *(async function)*
+- `test_timeline_of_an_invisible_mission_is_not_found(api)` *(async function)*
+- `test_timeline_reports_creation_and_state_changes_oldest_first(api)` *(async function)*
+- `test_timeline_pages_by_cursor(api)` *(async function)*
+- `test_a_mission_timeline_cursor_is_not_valid_for_another_mission(api)` *(async function)*
+- `test_timeline_entries_are_redacted(api)` *(async function)*
+- `test_a_token_without_the_scope_cannot_cancel(api)` *(async function)*
+- `test_cancel_requires_if_match(api)` *(async function)*
+- `test_cancel_with_a_stale_etag_is_refused(api)` *(async function)*
+- `test_cancel_transitions_a_running_mission_and_notifies_the_executor(api)` *(async function)*
+- `test_cancelling_a_finished_mission_is_a_conflict(api)` *(async function)* — "State-transition validation — issue #7's acceptance criterion."
+- `test_cancel_an_already_cancelled_mission_is_also_a_conflict(api)` *(async function)*
+- `test_a_disconnected_executor_does_not_block_cancel(api)` *(async function)*
+- `test_a_retried_cancel_replays_instead_of_acting_twice(api)` *(async function)*
+- `test_cancel_is_audited_with_the_actor(api)` *(async function)* — "Destructive commands require authenticated actor context and are audited."
+- `test_cancel_releases_the_executor_slot(api)` *(async function)*
+- `test_explain_reports_mission_control_fields_alongside_evidence(api)` *(async function)*
+- `test_explain_on_a_blocked_mission_reports_it(api)` *(async function)*
+- `test_explain_of_an_invisible_mission_is_not_found(api)` *(async function)*
 
 ### `tests/integration/test_oauth_authorize.py`
 
@@ -766,6 +994,47 @@ tests/
 - `test_a_concurrent_burst_issues_one_probe(monkeypatch)` *(async function)* — "The cache alone does not help while the first probe is still running."
 - `test_zero_cache_seconds_is_floored(monkeypatch)` — "A TTL of 0 would restore the uncached DoS, so it is not honoured."
 - `test_every_served_api_route_carries_the_rate_limiter()` — "`main.py` claimed every future /api route inherits the limiter. It does not."
+
+### `tests/integration/test_projects.py`
+
+> Projects and the project operational dashboard — issue #5.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)* — "A real app over a real database, seeded with two projects and one executor."
+- `make_task(factory, project_id, instruction, state)` *(async function)*
+- `mark_live(factory, executor_id)` *(async function)*
+- `set_last_seen(factory, executor_id, when)` *(async function)* — "Force a specific `last_seen_at` without going through a heartbeat."
+- `add_project(factory, project_id)` *(async function)*
+- `auth(token)`
+- `test_projects_require_a_token(api)` *(async function)*
+- `test_an_expired_token_is_refused(api)` *(async function)*
+- `test_a_token_without_the_read_scope_is_forbidden(api)` *(async function)*
+- `test_a_project_outside_the_callers_scope_is_not_found_not_forbidden(api)` *(async function)* — "404 confirms the identifier exists, which is what probing is for."
+- `test_the_same_scope_rule_applies_to_summary(api)` *(async function)*
+- `test_the_list_is_filtered_before_it_is_paged(api)` *(async function)*
+- `test_a_user_with_no_projects_sees_nothing(api, users_file, monkeypatch)` *(async function)*
+- `test_the_project_body_never_carries_the_filesystem_path(api)` *(async function)*
+- `test_health_is_unknown_when_no_executor_names_the_project(api)` *(async function)*
+- `test_health_is_degraded_when_the_assigned_executor_is_not_live(api)` *(async function)*
+- `test_health_is_ok_when_the_assigned_executor_is_live(api)` *(async function)*
+- `test_a_stale_heartbeat_reads_as_not_live_even_though_the_column_says_connected(api)` *(async function)* — "The bug `store.executor_is_live` exists to close."
+- `test_health_is_disabled_for_a_disabled_project_regardless_of_executors(api)` *(async function)*
+- `test_counts_reflect_task_state(api)` *(async function)*
+- `test_a_project_with_no_sessions_reports_zero_not_a_missing_field(api)` *(async function)*
+- `test_last_activity_reflects_the_newest_session(api)` *(async function)*
+- `test_the_list_carries_the_same_counts_as_the_detail_read(api)` *(async function)* — "The list must not be a lighter lie than the detail endpoint."
+- `test_issues_and_artifacts_are_not_invented(api)` *(async function)* — "No `IssueModel`/`ArtifactModel` exists yet; an always-zero field would"
+- `test_summary_reports_the_executor_breakdown(api)` *(async function)*
+- `test_summary_never_reports_a_host_or_port(api)` *(async function)* — "`docs/api/README.md` "Fields that must never ship" — no hostname, no port."
+- `test_search_matches_id_or_name_case_insensitively(api)` *(async function)*
+- `test_status_filters_by_enabled(api)` *(async function)*
+- `test_an_invalid_status_value_is_rejected(api)` *(async function)*
+- `test_attention_surfaces_projects_needing_a_decision_or_unhealthy(api)` *(async function)*
+- `test_attention_does_not_flag_a_disabled_project(api)` *(async function)* — "A disabled project was turned off on purpose; that is not a surprise."
+- `test_the_cursor_walks_every_project_once(api)` *(async function)*
+- `test_the_cursor_walks_every_project_once_under_attention(api)` *(async function)* — "The in-memory-paginated path (`attention` set) must not repeat or skip either."
+- `test_a_cursor_from_another_filter_is_rejected(api)` *(async function)*
+- `test_a_cursor_is_not_valid_for_another_caller(api)` *(async function)* — "The caller's scope is bound into the cursor, same rule as sessions."
 
 ### `tests/integration/test_reconnect_replay_resolves.py`
 
