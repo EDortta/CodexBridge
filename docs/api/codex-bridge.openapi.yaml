@@ -1217,6 +1217,291 @@ paths:
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
 
+
+  /api/v1/missions:
+    get:
+      operationId: listMissions
+      tags: [missions]
+      summary: Missions the caller may see, newest first
+      description: |
+        A **mission** is the same run `GET /api/v1/sessions` returns, reframed
+        in mission-control vocabulary: `objective` for the instruction,
+        `assignedAgent` for the executor, `stage`/`risk`/`blocked` derived from
+        recorded state. There is no separate mission entity — see
+        `docs/api/README.md` "Missions (issue #7)".
+
+        `stage` is a coarser grouping over `state` (`pending`/`active`/`done`)
+        and is a separate filter from it; both may be given together, and an
+        empty intersection returns an empty page rather than an error.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: projectId
+          in: query
+          required: false
+          description: Repeatable. Restricts to these projects, intersected with what the caller may see.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/ProjectId'
+        - name: stage
+          in: query
+          required: false
+          description: Repeatable. Restricts to these coarse stages.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/MissionStage'
+        - name: state
+          in: query
+          required: false
+          description: Repeatable. Restricts to these exact states.
+          schema:
+            type: array
+            items:
+              type: string
+        - name: risk
+          in: query
+          required: false
+          description: Repeatable. Restricts to these risk levels.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/RiskLevel'
+        - name: blocked
+          in: query
+          required: false
+          description: Restricts to missions currently blocked (or not).
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: A page of missions.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Mission'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/missions/{missionId}:
+    get:
+      operationId: getMission
+      tags: [missions]
+      summary: One mission
+      description: |
+        Returns an `ETag` derived from the mission's revision — the same
+        validator `GET /api/v1/sessions/{sessionId}` returns, since they are
+        the same underlying row. Send it back as `If-Match` on `cancel`.
+
+        A mission in a project the caller cannot see returns `404`, never
+        `403`: confirming that an identifier exists is what probing is for.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: missionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The mission.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mission'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/missions/{missionId}/timeline:
+    get:
+      operationId: getMissionTimeline
+      tags: [missions]
+      summary: The mission's recorded events, oldest first
+      description: |
+        Backed by the same `audit_events` rows every mutator in
+        `gateway/app/services/store.py` already writes — not a new log.
+        Cursor-paginated like any other collection (unlike session logs,
+        which are an append-only stream addressed by offset): a timeline is
+        read forward from creation, so unlike other collections in this
+        contract it pages oldest-first.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: missionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of the mission's timeline, oldest first.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MissionTimelineEvent'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/missions/{missionId}/cancel:
+    post:
+      operationId: cancelMission
+      tags: [missions]
+      summary: Cancel a mission that has not finished
+      description: |
+        `cancel` is the only lifecycle command this API offers for missions,
+        for the same protocol reason `POST /api/v1/sessions/{sessionId}/stop`
+        is the only one for sessions: `task.cancel` is the only lifecycle
+        message the agent protocol defines. `pause` and `resume` need
+        protocol and executor work — see issue #16 — and are deliberately
+        absent rather than present and inert.
+
+        Requires `If-Match`. With `Idempotency-Key`, a retry returns the
+        first response and cancels nothing twice; the replay carries
+        `Idempotent-Replay: true`. This is the one destructive command in
+        this build: it requires an authenticated actor and is audited
+        (`docs/api/README.md`, "Missions (issue #7)").
+
+        A disconnected executor does not fail the call, and the response then
+        carries `executorNotified: false` — nothing replays `task.cancel` on
+        reconnect (issue #17), so the run may continue while the mission
+        reads as cancelled.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: missionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The mission after cancellation.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mission'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/missions/{missionId}/explain:
+    post:
+      operationId: explainMission
+      tags: [missions]
+      summary: Why this mission is in its current state, assembled server-side
+      description: |
+        The same evidence `POST /api/v1/sessions/{sessionId}/explain-error`
+        gathers — recorded state, stored error, recent `stderr`, all
+        redacted — plus `stage`, `risk`, `blocked` and `blockedReason`, so a
+        client does not need a second call to explain a block. No model runs
+        and the executor is not contacted.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: missionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The evidence.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [missionId, state, stage, risk, blocked, reasons, generatedAt]
+                properties:
+                  missionId:
+                    $ref: '#/components/schemas/Id'
+                  state:
+                    type: string
+                  stage:
+                    $ref: '#/components/schemas/MissionStage'
+                  risk:
+                    $ref: '#/components/schemas/RiskLevel'
+                  blocked:
+                    type: boolean
+                  blockedReason:
+                    $ref: '#/components/schemas/BlockedReason'
+                  reasons:
+                    type: array
+                    items:
+                      type: string
+                  lastError:
+                    type: [string, 'null']
+                  recentStderr:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LogLine'
+                  generatedAt:
+                    $ref: '#/components/schemas/Timestamp'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /health:
     get:
       operationId: getHealth
@@ -2255,6 +2540,139 @@ components:
           type: [string, 'null']
           format: date-time
           description: When `state` left `pending`. `null` while still pending.
+
+    MissionStage:
+      type: string
+      enum:
+        - pending
+        - active
+        - done
+      description: |
+        Coarse grouping over a mission's exact `state`, for a mission-control
+        list that groups rather than enumerates every state. `pending` covers
+        `queued` and `waiting_executor`; `active` covers `running` and
+        `awaiting_approval`; `done` covers every terminal state. `state` is
+        still returned unchanged and remains its own, finer-grained filter.
+
+    RiskLevel:
+      type: string
+      enum:
+        - read
+        - controlled_write
+        - sensitive
+      description: |
+        Derived from the mission's mode and, when the instruction matched a
+        sensitive keyword at creation, from the approval decision that
+        followed (`shared/policy.py`). It is not a live re-evaluation of the
+        instruction text.
+
+    BlockedReason:
+      type: object
+      description: |
+        Present exactly when `Mission.blocked` is `true`. `code` is stable and
+        machine-readable; `summary` is redacted human text, safe to render
+        directly. This build reports one code: `awaiting_approval` — the only
+        state a mission is held in without the agent protocol having a way to
+        move it forward on its own.
+      required: [code, summary]
+      properties:
+        code:
+          type: string
+          maxLength: 64
+        summary:
+          type: string
+          maxLength: 1024
+
+    Mission:
+      type: object
+      description: |
+        The mission-control view of one `codex exec` run — the same row
+        `Session` describes, reframed. There is no separate mission entity in
+        this build: see `docs/api/README.md` "Missions (issue #7)" for what
+        that means for `dependencies` and `relatedEntities`, named in issue
+        #7's scope but not present here because nothing in this codebase's
+        domain model links one mission to another or to any other entity yet.
+
+        Omits the project's filesystem path, the command line and the raw
+        result blob, for the same reason `Session` does.
+      required: [id, projectId, assignedAgent, state, stage, risk, blocked, revision, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        assignedAgent:
+          $ref: '#/components/schemas/ExecutorId'
+          description: The executor this mission is dispatched to. Same identifier `Session.executorId` names.
+        objective:
+          type: string
+          description: What the operator asked for. Redacted, like every other free-text field here.
+        mode:
+          type: string
+        state:
+          type: string
+        stage:
+          $ref: '#/components/schemas/MissionStage'
+        risk:
+          $ref: '#/components/schemas/RiskLevel'
+        blocked:
+          type: boolean
+        blockedReason:
+          $ref: '#/components/schemas/BlockedReason'
+        priority:
+          type: string
+        revision:
+          type: integer
+          description: Monotonic; the `ETag` is derived from it.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        startedAt:
+          type: [string, 'null']
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+        approvalState:
+          type: [string, 'null']
+        requestedBy:
+          type: [string, 'null']
+        lastError:
+          type: [string, 'null']
+          description: Redacted before it leaves the process.
+        executorNotified:
+          type: boolean
+          description: |
+            Present on the response to `cancel`. Whether the executor was
+            actually told to cancel — see the `cancel` operation description
+            for why `false` must not be read as a stopped run.
+
+    MissionTimelineEvent:
+      type: object
+      description: |
+        One recorded event from the mission's audit trail
+        (`gateway/app/services/audit.py:record_event`), not a new log —
+        the same rows Sessions' actor-audit writes already produce.
+      required: [type, at, summary]
+      properties:
+        type:
+          type: string
+          description: Stable event identifier, e.g. `task.created`, `task.state_changed`.
+        at:
+          $ref: '#/components/schemas/Timestamp'
+        state:
+          type: [string, 'null']
+          description: The mission's state at this event, when the event carries one.
+        actor:
+          type: [string, 'null']
+          description: Who performed the action, when the event records an actor.
+        summary:
+          type: string
+          maxLength: 1024
+          description: |
+            Human-readable, redacted. Built server-side from an explicit
+            per-event allowlist, never from the raw stored payload.
 
     LogLine:
       type: object

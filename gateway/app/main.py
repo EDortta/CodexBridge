@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gateway.app.api.idempotency import purge_expired
 from gateway.app.api.rate_limit import RateLimitDependency, client_key
 from gateway.app.api.routes import auth as auth_routes
-from gateway.app.api.routes import decisions, probes, projects, sessions
+from gateway.app.api.routes import decisions, missions, probes, projects, sessions
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.core.agent_auth import TokenSource, resolve_executor_token
 from gateway.app.core.config import settings
@@ -108,6 +108,11 @@ app.include_router(projects.router, dependencies=[Depends(RateLimitDependency(ra
 # Operational decisions (issue #6): the mobile Decision Center's view onto the
 # same approval flow the MCP transport's approve_codex_task tool already drives.
 app.include_router(decisions.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# Missions (issue #7): the mission-control view of the same TaskModel rows,
+# with objective/stage/risk/blocked framing and a timeline. Same limiter and
+# the same per-route authorization as sessions.router.
+app.include_router(missions.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 # The mobile credential lifecycle (issue #4): sign-in, refresh, revocation, and
 # the effective permissions a client reads before it offers a control.

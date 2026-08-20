@@ -25,9 +25,11 @@ from shared.protocol import (
     DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
     DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
     ExecutorRegistration,
+    PolicyLevel,
     ProjectRegistration,
     STOPPABLE_TASK_STATES,
     SubmitTaskRequest,
+    TaskMode,
     TaskState,
 )
 from shared.security import hash_token
@@ -1192,3 +1194,170 @@ async def get_decision_for_projects(
     if project_ids is not None and task.project_id not in project_ids:
         return None
     return task
+
+
+# Modes `policy_level_for_mode` (shared/policy.py) buckets as `read` and as
+# `controlled_write` (issue #7). It never returns `sensitive` for any real
+# `TaskMode` value — that branch only exists as a fallback for a future mode —
+# so the only way a task actually carries `sensitive` risk is the
+# keyword-escalation path recorded on `approval_state` at creation
+# (`create_task`). The risk filter below mirrors that: `sensitive` means
+# "approval_state says so", and `read`/`controlled_write` mean "this mode, and
+# not overridden to sensitive".
+_READ_MODES = {TaskMode.ANALYZE.value, TaskMode.REVIEW.value, TaskMode.TEST.value}
+_CONTROLLED_WRITE_MODES = {TaskMode.EDIT.value, TaskMode.IMPLEMENT.value}
+
+
+def _risk_filter_clause(risk: list[str]):
+    """A WHERE clause matching tasks whose derived risk is one of `risk` (issue #7).
+
+    Built at the query level, not applied after loading: filtering after
+    loading is how a page's `hasMore` ends up describing rows the caller may
+    not see (the same reasoning `list_tasks_page` documents for project scope).
+    """
+    clauses = []
+    if PolicyLevel.SENSITIVE.value in risk:
+        clauses.append(TaskModel.approval_state == PolicyLevel.SENSITIVE.value)
+    modes: set[str] = set()
+    if PolicyLevel.READ.value in risk:
+        modes |= _READ_MODES
+    if PolicyLevel.CONTROLLED_WRITE.value in risk:
+        modes |= _CONTROLLED_WRITE_MODES
+    if modes:
+        # `approval_state` is NULL for every task never held for approval —
+        # which is most of them — and `column != value` on a NULL is NULL,
+        # not true, under SQL's three-valued logic. `!=` alone silently
+        # dropped every non-sensitive row that had never been through
+        # approval; the `IS NULL` arm is what keeps them in.
+        clauses.append(
+            and_(
+                TaskModel.mode.in_(modes),
+                or_(
+                    TaskModel.approval_state.is_(None),
+                    TaskModel.approval_state != PolicyLevel.SENSITIVE.value,
+                ),
+            )
+        )
+    return or_(*clauses) if clauses else None
+
+
+# Coarse buckets over `TaskState`, for the mission-control "stage" filter and
+# field (issue #7). `state` (exact) and `stage` (this grouping) are
+# deliberately two different filters: `state` is what the sessions API already
+# exposes verbatim, `stage` is the three-phase view a mission-control list
+# groups by.
+MISSION_STAGE_STATES: dict[str, tuple[str, ...]] = {
+    "pending": (TaskState.QUEUED.value, TaskState.WAITING_EXECUTOR.value),
+    "active": (
+        TaskState.RUNNING.value,
+        TaskState.AWAITING_APPROVAL.value,
+        TaskState.PAUSING.value,
+        TaskState.PAUSED.value,
+        TaskState.RESUMING.value,
+        TaskState.RESTARTING.value,
+    ),
+    "done": (
+        TaskState.COMPLETED.value,
+        TaskState.FAILED.value,
+        TaskState.CANCELLED.value,
+        TaskState.EXPIRED.value,
+        TaskState.LOST.value,
+    ),
+}
+
+
+def mission_risk(task: TaskModel) -> str:
+    """The mission-control risk level for one task (issue #7). See `_risk_filter_clause`."""
+    if task.approval_state == PolicyLevel.SENSITIVE.value:
+        return PolicyLevel.SENSITIVE.value
+    if task.mode in _READ_MODES:
+        return PolicyLevel.READ.value
+    return PolicyLevel.CONTROLLED_WRITE.value
+
+
+def mission_stage(task: TaskModel) -> str:
+    for stage, states in MISSION_STAGE_STATES.items():
+        if task.state in states:
+            return stage
+    return "done"
+
+
+async def list_missions_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    states: list[str] | None = None,
+    risk: list[str] | None = None,
+    blocked: bool | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[TaskModel]:
+    """Missions (tasks, in mission-control framing) the caller may see, newest
+    first (issue #7).
+
+    Same shape as `list_tasks_page`: `project_ids` of None is unrestricted
+    (admin), an empty list means the caller sees nothing, and every filter is
+    applied to the query rather than after loading. Over-fetches by one so the
+    caller can report `hasMore` without a second COUNT.
+    """
+    statement = select(TaskModel)
+    if project_ids is not None:
+        if not project_ids:
+            return []
+        statement = statement.where(TaskModel.project_id.in_(project_ids))
+    if states:
+        statement = statement.where(TaskModel.state.in_(states))
+    if risk:
+        clause = _risk_filter_clause(risk)
+        if clause is not None:
+            statement = statement.where(clause)
+        else:
+            return []
+    if blocked is True:
+        statement = statement.where(TaskModel.state == TaskState.AWAITING_APPROVAL.value)
+    elif blocked is False:
+        statement = statement.where(TaskModel.state != TaskState.AWAITING_APPROVAL.value)
+    if after is not None:
+        created_at, task_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                TaskModel.created_at < created_at,
+                and_(TaskModel.created_at == created_at, TaskModel.id < task_id),
+            )
+        )
+    statement = statement.order_by(TaskModel.created_at.desc(), TaskModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def list_task_events_page(
+    session: AsyncSession,
+    task_id: str,
+    *,
+    after: tuple[str, int] | None = None,
+    limit: int = 50,
+) -> list[AuditEventModel]:
+    """A mission's timeline, oldest first — the order a narrative reads in (issue #7).
+
+    Unlike `list_tasks_page` and `list_missions_page` (newest first, matching
+    the sessions list convention), a timeline is read forward from creation.
+    Over-fetches by one, same convention as every other collection here.
+    """
+    statement = select(AuditEventModel).where(
+        AuditEventModel.entity_type == "task", AuditEventModel.entity_id == task_id
+    )
+    if after is not None:
+        created_at, event_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                AuditEventModel.created_at > created_at,
+                and_(AuditEventModel.created_at == created_at, AuditEventModel.id > event_id),
+            )
+        )
+    statement = statement.order_by(AuditEventModel.created_at.asc(), AuditEventModel.id.asc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())

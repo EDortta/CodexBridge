@@ -647,6 +647,98 @@ of a concurrent write racing the read that produced the `ETag`.
 
 ---
 
+## Missions (issue #7)
+
+`GET /api/v1/missions`, `GET .../{id}`, `GET .../{id}/timeline`,
+`POST .../{id}/cancel`, `POST .../{id}/explain`.
+
+### There is no separate mission entity
+
+A **mission** is the same `TaskModel` row `GET /api/v1/sessions` (issue #9)
+serves, reframed in mission-control vocabulary. This codebase's domain model
+has no dependency graph, no "related entities" table and no execution-progress
+percentage, so this issue does not invent them:
+
+- `objective` is the instruction; `assignedAgent` is the executor id — the
+  same value `Session.executorId` names, under the name issue #7 asked for.
+- `stage` is a coarse three-phase grouping over `state`
+  (`store.mission_stage`): `pending` (`queued`, `waiting_executor`), `active`
+  (`running`, `awaiting_approval`, and issue #16's `pausing`/`paused`/
+  `resuming`/`restarting`), `done` (every terminal state). `state` itself is
+  returned unchanged and remains its own, finer filter — the issue asks for
+  both, and they are not the same thing.
+- `risk` is `shared/policy.py:policy_level_for_mode`, overridden to
+  `sensitive` when `approval_state` recorded that a submitted instruction
+  matched a sensitive keyword (`store.mission_risk`). It is not a live
+  re-evaluation of the instruction text, and for every `TaskMode` value that
+  function itself returns, it can only be `read` or `controlled_write` — the
+  `sensitive` branch in `policy_level_for_mode` is unreachable for a real
+  mode and exists only as a fallback for a future one.
+- `blocked` / `blockedReason` is `state == awaiting_approval`, given a machine
+  code and a human summary. This is the acceptance criterion ("every blocked
+  mission includes a machine-readable reason and human-readable summary") and
+  the only condition this build can report: it is the only state a mission is
+  held in without the agent protocol having a way to move it forward on its
+  own.
+- The timeline is `audit_events` rows filtered to the mission's id, oldest
+  first, summarized through a per-event-type allowlist rather than the raw
+  stored payload — the payload carries fields (`policy_level`, `via`,
+  `requested_by_user_id`) never audited for what they may contain, and this
+  is public API surface.
+
+`dependencies` and `relatedEntities`, named in issue #7's Scope section, are
+**not implemented**. Nothing in this codebase links one task to another task
+or to any other entity, so there is no data to expose — and shipping an
+always-empty array would be a field a mobile client can build a list UI
+around and never see populated, the same failure the capability flags exist
+to prevent (see "Rate limiting" → `CAPABILITIES` reasoning above). A future
+issue that adds real task dependencies or cross-references should add these
+fields then, backed by real data.
+
+### What this issue does NOT deliver, and why
+
+`pause` and `resume` are not mission-control controls, for the same protocol
+reason issue #9 gives for sessions: before issue #16's protocol work, nothing
+served them; today, `pause`/`resume`/`restart` are session-level lifecycle
+controls with no mission-control equivalent, because a mission's `cancel` is
+the only command this issue's acceptance criteria named. `cancel` maps to
+`task.cancel`, exactly as `stop` does for sessions, and is the one lifecycle
+command this API offers for missions.
+
+### Cancel and stop are two doors onto the same lock
+
+`POST /api/v1/missions/{id}/cancel` and `POST /api/v1/sessions/{id}/stop`
+both call `store.update_task_state(..., TaskState.CANCELLED)` on the same
+row and write the same audit event type, `task.stopped_by_actor` — with
+`via` distinguishing which door was used. A mobile client working entirely in
+mission-control vocabulary never needs to know `/sessions` exists; a client
+already using `/sessions` is not asked to migrate. The two endpoints are
+independent implementations (concurrency, idempotency and audit each written
+once per router) rather than one sharing a helper, so that this issue does
+not touch `gateway/app/api/routes/sessions.py`'s already-tested code path.
+
+### Destructive commands are authenticated and audited
+
+`cancel` requires `require_action(permissions.MISSIONS_CANCEL)` — an
+authenticated principal carrying `codexbridge.task.cancel` — and records who
+did it (`actor_id`, `actor_email`) in the same audit trail the timeline
+reads, same as sessions' `stop`. This is issue #7's acceptance criterion
+("destructive commands require authenticated actor context and are
+audited").
+
+### State-transition validation
+
+`cancel` refuses with `409 conflict` outside `CANCELLABLE`, which is
+`shared.protocol.STOPPABLE_TASK_STATES` itself — the same set sessions'
+`STOPPABLE` names, reused rather than duplicated (issue #17's review already
+caught one local copy of this set silently missing
+`paused`/`pausing`/`resuming`/`restarting`; a mission is the same
+`TaskModel` sessions cancels, so a second copy here would risk the identical
+drift). This is issue #7's acceptance criterion ("state-transition commands
+validate the current mission state").
+
+---
+
 ## Cross-cutting rules every endpoint inherits
 
 Implemented in `gateway/app/api/` (issue #12). An endpoint does not re-invent
