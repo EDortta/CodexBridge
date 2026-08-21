@@ -25,6 +25,7 @@ from gateway.app.db.base import Base
 from gateway.app.db.session import get_session
 from gateway.app.models.entities import AuditEventModel
 from gateway.app.services import store
+from gateway.app.services.agent_hub import AgentHub
 from shared.protocol import (
     ExecutorRegistration,
     ProjectRegistration,
@@ -33,6 +34,20 @@ from shared.protocol import (
     TaskPriority,
     TaskState,
 )
+
+
+class _DummyWebSocket:
+    """Stands in for the executor's websocket in `AgentHub.register` — real
+    enough that `AgentHub.send` (`connection.websocket.send_json(...)`) works
+    without an actual socket, same pattern as
+    `tests/integration/test_agent_ack_handling.py`'s own `_DummyWebSocket`.
+    """
+
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+
+    async def send_json(self, payload: dict) -> None:
+        self.sent.append(payload)
 
 
 ALICE_TOKEN = "token-alice"              # sees project p1 only; no approve scope
@@ -169,8 +184,26 @@ async def api(users_file, monkeypatch):
 
     app.dependency_overrides[get_session] = override
 
+    # A real AgentHub (issues #18/#20's DoD: tested against the real hub, not
+    # a stub) over this test's own in-memory DB. `_resolve()` reaches it via
+    # `from gateway.app.main import hub` — a late import, same convention as
+    # `routes/sessions.py` — so it must be `gateway.app.main.hub` specifically
+    # that gets replaced, or the route would touch the real production hub
+    # (bound to a different database) instead of this test's.
+    #
+    # No executor is registered as connected by default: every test that
+    # predates issues #18/#20 asserts an approval leaves the task at
+    # `waiting_executor`, which is only still true when nothing dispatches it
+    # — i.e. E1 offline, the same as before this fixture wired a hub in at
+    # all. Tests exercising the new dispatch behaviour connect E1 themselves.
+    hub = AgentHub(factory)
+    import gateway.app.main as main_module
+
+    monkeypatch.setattr(main_module, "hub", hub, raising=False)
+
     client = TestClient(app, raise_server_exceptions=False)
     client.factory = factory  # type: ignore[attr-defined]
+    client.hub = hub          # type: ignore[attr-defined]
     yield client
     await engine.dispose()
 
@@ -556,6 +589,143 @@ async def test_approve_records_the_deciding_actor(api) -> None:
     payload = json.loads(events[0].payload_json)
     assert payload["actor_id"] == "approver"
     assert payload["outcome"] == "approved"
+
+
+# --------------------------------------------------------------------------
+# Dispatch on approve — issue #20 (duplicate: #18)
+#
+# `POST .../approve` used to call `store.decide_task_approval` and stop,
+# leaving an approved task sitting in `waiting_executor` even when its
+# executor was connected and idle — nothing woke the queue for it until an
+# unrelated event happened to. These exercise the real `AgentHub`
+# (`api.hub`), not a stub, per the issue's own DoD.
+# --------------------------------------------------------------------------
+
+
+async def test_approving_dispatches_to_a_connected_idle_executor(api) -> None:
+    task = await make_decision(api.factory, "p1")
+    await api.hub.register("E1", _DummyWebSocket())
+
+    response = api.post(
+        f"/api/v1/decisions/{task.id}/approve",
+        headers={**auth(APPROVER_TOKEN), "If-Match": f'"{task.revision}"'},
+        json={"confirm": True},
+    )
+    assert response.status_code == 200
+
+    async with api.factory() as s:
+        updated = await store.get_task(s, task.id)
+    # Dispatched, not just approved: `AgentHub.dispatch_next` moves a
+    # dispatched task straight to RUNNING. Left at `waiting_executor` would
+    # mean the fix's own bug — the exact failure #18/#20 describe.
+    assert updated.state == TaskState.RUNNING.value
+
+    connection = api.hub.connections["E1"]
+    sent_types = [msg["type"] for msg in connection.websocket.sent]
+    assert "task.dispatch" in sent_types
+
+
+async def test_approve_response_revision_matches_the_post_dispatch_task_after_same_request_dispatch(
+    api,
+) -> None:
+    """Council round-1 finding on this issue: `_resolve` fetches `updated`
+    before `hub.dispatch_available` runs, and `dispatch_available` bumps
+    `revision` again through its own session (`AgentHub.session_factory`) —
+    same-request dispatch, not a later event, moves the task to `running`.
+    Without refreshing `updated` afterward, the response body's `revision`
+    and its `ETag` header both report the pre-dispatch revision while the
+    task's real DB revision is one higher, so a client trusting that ETag
+    for its next `If-Match` gets a spurious 409 on a revision it was just
+    handed as current.
+    """
+    task = await make_decision(api.factory, "p1")
+    await api.hub.register("E1", _DummyWebSocket())
+
+    response = api.post(
+        f"/api/v1/decisions/{task.id}/approve",
+        headers={**auth(APPROVER_TOKEN), "If-Match": f'"{task.revision}"'},
+        json={"confirm": True},
+    )
+    assert response.status_code == 200
+
+    async with api.factory() as s:
+        updated = await store.get_task(s, task.id)
+    # Same-request dispatch happened (state is running, not waiting_executor,
+    # confirming the queue was nudged before the response was built) — so the
+    # response must reflect *that* revision, not the pre-dispatch one.
+    assert updated.state == TaskState.RUNNING.value
+    assert response.json()["revision"] == updated.revision
+    assert response.headers["ETag"] == f'"{updated.revision}"'
+
+
+async def test_approving_leaves_the_task_waiting_when_the_executor_is_offline(api) -> None:
+    """No regression on the pre-existing (disconnected) case: `api.hub` has
+    no registered executor, matching every other test in this file."""
+    task = await make_decision(api.factory, "p1")
+
+    response = api.post(
+        f"/api/v1/decisions/{task.id}/approve",
+        headers={**auth(APPROVER_TOKEN), "If-Match": f'"{task.revision}"'},
+        json={"confirm": True},
+    )
+    assert response.status_code == 200
+
+    async with api.factory() as s:
+        updated = await store.get_task(s, task.id)
+    assert updated.state == TaskState.WAITING_EXECUTOR.value
+    assert api.hub.connections == {}
+
+
+async def test_approving_when_the_executor_is_at_capacity_does_not_bypass_the_concurrency_gate(api) -> None:
+    task = await make_decision(api.factory, "p1")
+    await api.hub.register("E1", _DummyWebSocket())
+    # E1's `max_concurrent_tasks` is the default (1) — occupy that one slot
+    # with an unrelated task before approving.
+    api.hub.running_tasks["E1"] = {"some-other-task-already-running"}
+
+    response = api.post(
+        f"/api/v1/decisions/{task.id}/approve",
+        headers={**auth(APPROVER_TOKEN), "If-Match": f'"{task.revision}"'},
+        json={"confirm": True},
+    )
+    assert response.status_code == 200
+
+    async with api.factory() as s:
+        updated = await store.get_task(s, task.id)
+    assert updated.state == TaskState.WAITING_EXECUTOR.value, "the fix must not bypass the capacity check"
+
+    # Unchanged behaviour once the slot frees: the existing
+    # `mark_task_finished` path (issue #17) still picks it up.
+    await api.hub.mark_task_finished("E1", "some-other-task-already-running")
+    async with api.factory() as s:
+        after_slot_freed = await store.get_task(s, task.id)
+    assert after_slot_freed.state == TaskState.RUNNING.value
+
+
+async def test_reject_never_dispatches(api) -> None:
+    task = await make_decision(api.factory, "p1")
+    await api.hub.register("E1", _DummyWebSocket())
+
+    response = api.post(
+        f"/api/v1/decisions/{task.id}/reject",
+        headers={**auth(APPROVER_TOKEN), "If-Match": f'"{task.revision}"'},
+        json={"reason": "not now"},
+    )
+    assert response.status_code == 200
+    assert api.hub.connections["E1"].websocket.sent == []
+
+
+async def test_request_revision_never_dispatches(api) -> None:
+    task = await make_decision(api.factory, "p1")
+    await api.hub.register("E1", _DummyWebSocket())
+
+    response = api.post(
+        f"/api/v1/decisions/{task.id}/request-revision",
+        headers={**auth(APPROVER_TOKEN), "If-Match": f'"{task.revision}"'},
+        json={"reason": "needs another pass"},
+    )
+    assert response.status_code == 200
+    assert api.hub.connections["E1"].websocket.sent == []
 
 
 # --------------------------------------------------------------------------

@@ -285,6 +285,28 @@ async def _resolve(
             )
 
         updated = await store.decide_task_approval(session, task.id, outcome, reason)
+        if updated.state == TaskState.WAITING_EXECUTOR.value:
+            # Issue #20 (duplicate: #18): this was the only caller of
+            # `decide_task_approval` that never nudged the queue afterward —
+            # the MCP transport's `approve_codex_task` has done this since
+            # before this REST API existed. `dispatch_available` is the
+            # shared entry point both now use (`AgentHub.dispatch_available`);
+            # it already no-ops for an offline or at-capacity executor, so no
+            # extra guard is needed here. `reject`/`request-revision` never
+            # reach this branch: `decide_task_approval` only sets
+            # `WAITING_EXECUTOR` for an `APPROVED` outcome.
+            from gateway.app.main import hub  # imported late: main includes this router
+
+            await hub.dispatch_available(updated.executor_id)
+            # `dispatch_available` runs in its own session (`AgentHub`'s
+            # `session_factory`) and, when it dispatches, bumps `revision`
+            # again via `store.update_task_state`. `updated` is still the
+            # pre-dispatch row in this session's identity map, so without a
+            # refresh the response below (`_decision_dto`/`etag_for`) would
+            # hand the client a revision one behind the task's real state —
+            # the same hazard `routes/sessions.py:restart_session` guards
+            # against with the same call after its own dispatch.
+            await session.refresh(updated)
         await record_event(
             session,
             "task",

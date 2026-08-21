@@ -124,6 +124,30 @@ class AgentHub:
                 "continue_session_id": task.session_id,
             }
 
+    async def dispatch_available(self, executor_id: str) -> None:
+        """Dispatches the next queued/waiting task to `executor_id`, if one is
+        ready, and sends it right now.
+
+        Shared entry point for every caller that moves a task into a
+        dispatchable state (`QUEUED`/`WAITING_EXECUTOR`) and needs the queue
+        nudged in the same turn, rather than left for an unrelated event to
+        discover it later. `dispatch_next` already gates on the executor being
+        connected (`executor_id not in self.connections`) and on its
+        concurrency slot, so callers don't repeat either check themselves —
+        that hand-rolled `is_connected` + `dispatch_next` + `send` sequence is
+        exactly what issues #18/#20 found duplicated (correctly, in the MCP
+        transport's `approve_codex_task`) and missing (in the REST
+        `POST /api/v1/decisions/{id}/approve`, `gateway/app/api/routes/
+        decisions.py`). Both callers now share this method instead of a third
+        caller re-implementing the sequence by hand.
+        """
+        dispatch_payload = await self.dispatch_next(executor_id)
+        if dispatch_payload is not None:
+            await self.send(
+                executor_id,
+                hub_envelope(executor_id, AgentMessageType.TASK_DISPATCH.value, dispatch_payload),
+            )
+
     async def mark_task_finished(self, executor_id: str, task_id: str) -> None:
         """Releases the slot `task_id` held and, if the executor is still
         connected, immediately dispatches whatever is next in its queue.
@@ -140,12 +164,7 @@ class AgentHub:
         every caller gets it, including ones not yet written.
         """
         self.running_tasks.setdefault(executor_id, set()).discard(task_id)
-        dispatch_payload = await self.dispatch_next(executor_id)
-        if dispatch_payload is not None:
-            await self.send(
-                executor_id,
-                hub_envelope(executor_id, AgentMessageType.TASK_DISPATCH.value, dispatch_payload),
-            )
+        await self.dispatch_available(executor_id)
 
 
 def hub_envelope(executor_id: str, message_type: str, payload: dict) -> AgentEnvelope:
