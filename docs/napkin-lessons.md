@@ -656,145 +656,69 @@ fix restored.
 `tests/integration/test_agent_ws_handshake.py` four, unchanged from the
 2026-08-20 baseline — the extra passing test is this round's own).
 
-## 2026-08-21 — gh-10, conversations and contextual messaging API (recovery)
+## 2026-08-21 — #23/#24: `continue_codex_session` datetime crash and missing dispatch
 
-Recovery session: a prior cloud-container attempt at #10 finished the
-implementation, tests green, then lost the work when `git push` failed
-403/404 and the container was recycled before recovery. `feature/gh-10/...`
-on `origin` carried only a stale unrelated commit from 2026-08-14 — no real
-work to resume — so this session deleted and recreated the branch fresh off
-`development` (`16ce28e`, already carrying the gh-5/6/7/8 integration merge)
-rather than trying to reconstruct anything. Nothing from the lost attempt was
-recovered; this is a from-scratch implementation, not a continuation.
+Two more pre-existing (not #21/#22-introduced) findings from the same
+council-style second-caller pass, this time on the MCP transport's
+`continue_codex_session` — the one tool of the five in `gateway/app/mcp/
+server.py` with zero test coverage before this (`pytest -k
+continue_codex_session` selected 0 of 503 tests).
 
-**Design decision, made explicit rather than left implicit:** issue #10's
-Objective names conversations "linked to projects, decisions, missions,
-issues, sessions and artifacts", but `ArtifactModel` does not exist yet
-(issue #11). Rather than accept an unvalidatable `artifact` context
-reference — which would silently fail the issue's own acceptance criterion
-("unauthorized entity references are rejected without disclosing hidden
-resources") for exactly that one type — `ConversationContextType` omits it.
-Same discipline #8 applied to issue-side "missions/conversations/decisions"
-links and #7 applied to `dependencies`/`relatedEntities`: no backing entity,
-no field, documented at the point of omission
-(`gateway/app/services/conversation_types.py`, `docs/api/README.md`). Message
-*attachments* are a different, already-satisfiable concept — opaque
-artifact/file ids on a message, unvalidated for the same reason
-`Issue.dependencies` doesn't own a graph — and are implemented in full.
+**#23**: `continue_codex_session` forwards `parent.expires_at` — fetched via
+`store.get_task`, naive under SQLite despite `DateTime(timezone=True)` — into
+a freshly built `SubmitTaskRequest`, which `store.create_task` then compares
+directly against `datetime.now(timezone.utc)`
+(`if request.expires_at <= datetime.now(timezone.utc)`). Every real call
+raised `TypeError: can't compare offset-naive and offset-aware datetimes`
+before any dispatch logic ran — `submit_codex_task`'s request never hits
+this because its `expires_at` comes straight from validated MCP input, aware
+by construction; `continue_codex_session`'s is the one path that round-trips
+a `DateTime(timezone=True)` column back through Python first. Fixed by
+reusing this file's own established pattern for the exact same hazard —
+`store.py`'s `_as_utc` helper, already applied to this same `TaskModel.
+expires_at` field four other places in the file (`is_task_expired`,
+`decide_task_approval`, the two credential-purge spots) — rather than
+inventing a new normalization at the MCP call site. Normalized once in
+`create_task` and reused for both the comparison and the stored value, so a
+row this function writes is never itself the naive one a later caller has to
+defend against.
 
-**Unread without a "mark read" endpoint**, since the issue's endpoint list
-has none: `GET .../messages` advances the caller's per-conversation read
-cursor to the newest message *actually returned in that page*, not to
-`now()`. Marking to `now()` was the first draft and is wrong — a client that
-has only fetched the oldest page of a long thread would have every later,
-unfetched message marked seen. `POST .../messages` advances the sender's own
-cursor to the message just posted, so a client never sees its own send
-reported back as unread. Both are exercised in
-`tests/integration/test_conversations.py::test_an_early_page_of_messages_does_not_mark_later_ones_read`,
-which would have caught the `now()` version.
+**#24**: even past that crash, `continue_codex_session` never dispatched the
+continuation to a connected, idle executor — it landed `QUEUED` and waited for
+an unrelated event, exactly the starvation shape #17/#18/#20 already found at
+two other call sites. Its sibling `submit_codex_task` (same file) dispatches
+via a hand-rolled `is_connected`/`dispatch_next`/`send` sequence that
+predates PR #21; `approve_codex_task` was already routed onto the shared
+`AgentHub.dispatch_available` PR #21 introduced. `continue_codex_session` had
+neither — no dispatch attempt at all. Fixed by routing it through the same
+`dispatch_available`, mirroring the REST approve path's own
+`session.refresh(task)` afterward (`decisions.py`'s `_resolve`, the
+2026-08-21 council-round-2 entry above): `dispatch_available` runs in
+`AgentHub`'s own session and, when it dispatches, bumps the task's state and
+revision through that other session — without the refresh, the response
+would report the pre-dispatch `queued` state even after a same-request
+dispatch actually ran.
 
-**Datetime naive/aware bug**, caught by the test suite rather than by
-review: `store.mark_conversation_read` compared `_as_utc(state.last_read_at)`
-(normalized) against `at` (not normalized) — fine when `at` defaulted to
-`datetime.now(timezone.utc)`, and a `TypeError: can't compare offset-naive
-and offset-aware datetimes` the moment a caller passed a DB-sourced
-timestamp instead, which SQLite always hands back naive
-(`gateway/app/api/timestamps.py`'s module docstring already documents this
-exact split for `utc_z`). `routes/conversations.py:list_messages` is exactly
-such a caller (`newest_fetched = max(m.created_at for m in page)`). Fixed by
-normalizing `at` through `_as_utc` once, at the top of the function, rather
-than at each comparison site.
+New tests, all in `tests/integration/test_store_and_mcp.py` (a real `AgentHub`
+over its own database, same convention as the #18/#20 MCP-path tests just
+above them, not the always-`None`-`dispatch_next` `DummyHub` used elsewhere in
+this file):
+`test_mcp_continue_codex_session_succeeds_without_datetime_crash`,
+`test_mcp_continue_codex_session_dispatches_to_a_connected_idle_executor`,
+`test_mcp_continue_codex_session_leaves_task_queued_when_the_executor_is_offline`,
+`test_mcp_continue_codex_session_at_capacity_does_not_dispatch`. The dispatch
+test's own fixture (`_make_parent_task`) has to leave the parent task
+`COMPLETED`, not `QUEUED`: left `QUEUED`, it would still be the oldest
+QUEUED row for the executor by `next_dispatchable_task`'s own `created_at`
+ordering, and `dispatch_next` would hand *it* back out instead of the
+continuation the test means to observe — caught by the dispatch test
+initially failing with the parent's own task id coming back dispatched
+instead of the child's.
 
-**Ordering:** `GET /conversations` sorts by `createdAt`/`id`, never
-`lastActivityAt`, even though "most recently active first" is the more
-obviously useful default for a conversation list. A live-reordering sort key
-moves a row's position mid-pagination, which the acceptance criterion
-("pagination preserves stable ordering") rules out directly — the same
-`createdAt`/`id` convention every other collection in this API already uses.
-`lastActivityAt` is still reported per item for client-side sorting.
-`GET .../messages` is oldest-first, matching `store.list_task_events_page`'s
-mission-timeline precedent and reasoning, not the newest-first collection
-convention.
-
-**No `revision`/`ETag`/`If-Match` anywhere in this feature** — a deliberate
-reading of the cross-cutting "every write mutator bumps revision" rule, not
-a gap: nothing here is ever `PATCH`ed (no update endpoint for either a
-conversation or a message), so nothing can go stale under a concurrent
-write. `ProjectModel` is the contract's other precedent for a GET-only,
-revision-less entity. Checked specifically against this session's own
-instruction to diff new call sites against the closest analog rather than
-only against #10's stated acceptance criteria — the closest analog for
-"should this mutation carry `If-Match`" is #6/#7's state-transition
-endpoints (`approve`, `cancel`), and neither conversations nor messages are
-state transitions on an entity the client read a specific version of; they
-are appends. No sibling behavior was half-copied here because the
-behavior genuinely does not apply.
-
-`python3 -m pytest -q` → 521 passed (495 on `development` + 26 new,
-`tests/integration/test_conversations.py`), run twice for stability.
-`tests/integration/test_agent_ws_handshake.py`'s four tests
-(`test_the_header_is_bound_and_reaches_the_registry_check` and siblings) are
-a pre-existing, order/CWD-sensitive flake already documented in this file's
-2026-08-19 entry and reproduced independently this session on a fresh `git
-clone` of `origin/development` itself — not introduced by this diff. They
-failed once in this session's full-suite run and passed in every other run
-(standalone and full-suite); left alone per standing policy on baseline
-failures. `governancekit --root . map` regenerated after the store.py/routes
-additions landed; the codemap-staleness contract gate caught both an initial
-omission and a second one after further edits.
-
-Not council-reviewed, for the same reason the gh-5 session recorded:
-`.git/hooks/pre-commit` does not exist in this checkout, so the mechanical
-gate is not wired here, and this is a same-shaped new-feature delivery, not
-one of `.docs/agents/council.md` §4's own triggers. Self-reviewed against
-`.docs/agents/reviewer.md`'s BLOCKER criteria and against the specific
-audit/notification-parity instruction this session carried. Committed, not
-merged, not deployed — a PR against `development` is opened for operator
-review per standing policy.
-
-## 2026-08-21 — council round 2 on gh-10 (PR #22), MAX_ATTACHMENT_ID_LENGTH finding closed
-
-Round 1 on PR #22 left one surviving finding: `conversation_types.py` declares
-`MAX_ATTACHMENT_ID_LENGTH = 255` but nothing enforced it —
-`CreateMessageRequest.attachments` only bounded list *count*
-(`max_length=20`), not per-item length, so an attachment id of any length
-was accepted, stored, and echoed back unmodified. Its three siblings in the
-same module (`MAX_CONTEXT_REFERENCES`, `MAX_MESSAGE_BODY_LENGTH`,
-`MAX_ATTACHMENTS_PER_MESSAGE`) were all wired in; this one was declared and
-forgotten — the same "constant exists, nothing reads it" shape earlier
-rounds have caught elsewhere in this codebase.
-
-Fixed at the same layer as its two closest siblings
-(`MAX_MESSAGE_BODY_LENGTH`, `MAX_ATTACHMENTS_PER_MESSAGE`), not the
-`ContextReference` Pydantic-field layer: `store.create_conversation_message`
-now loops the deduplicated attachment list and raises
-`ConversationPlanningError("/attachments/{index}", "too_long", ...)` for any
-id over 255 characters, caught by `routes/conversations.py:post_message`'s
-existing `except ConversationPlanningError` and turned into the same
-structured `400 VALIDATION_FAILED` body every other planning error in this
-feature already returns. No new validation style introduced.
-
-New test: `tests/integration/test_conversations.py::test_post_message_rejects_an_oversized_attachment_id`
-— posts a 256-character attachment id, asserts `400` with
-`details[0] == {"field": "/attachments/0", "code": "too_long", ...}`.
-Confirmed failing against the pre-fix `store.py` (`201`, not `400`) before
-confirming it passes with the fix.
-
-`python3 -m pytest -q` → 518 passed, 4 failed (same
-`tests/integration/test_agent_ws_handshake.py` order/CWD-sensitive flake
-this file's 2026-08-19 and 2026-08-21 entries already document, not
-introduced by this diff) — 522 total, matching the round-1 baseline (521)
-plus this one new test. One false lead during verification: two `pytest -q`
-invocations issued back-to-back raced on the same file-backed
-`codex_bridge.db` in the repo root and produced a spurious all-green result
-and a spurious `no such table: executors` result on different runs; removing
-the stale db file and running once, alone, reproduced the documented
-baseline exactly. Lesson for next session: never trust a full-suite result
-from a run that overlapped another `pytest` process against the same
-default sqlite file — confirm no other `pytest` process is alive first.
-
-Not re-council-reviewed beyond this round-2 closure itself, per the same
-"no `pre-commit` hook wired in this checkout" note the gh-10 round-1 entry
-above already recorded. Committed to
-`feature/gh-10/expose-conversations-and-contextual-messaging-ap` and pushed
-to `origin`, updating PR #22 in place — no new PR, no merge, no deploy.
+`python3 -m pytest -q` on a clean `development` checkout (`git stash`,
+repeated twice) → 504 passed, 0 failed — a stray, gitignored
+`codex_bridge.db` left over from an earlier ad hoc debug run had caused one
+transient 4-failure blip in `test_agent_ws_handshake.py` matching the
+2026-08-20 entry's own root cause (that file imports the real `gateway.app.
+main.app` instead of an isolated in-memory one); gone on rerun. With this
+session's changes: 508 passed, 0 failed (504 baseline + 4 new).

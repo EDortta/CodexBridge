@@ -604,4 +604,211 @@ async def test_mcp_reject_and_request_revision_do_not_dispatch(mcp_hub_factory):
     async with mcp_hub_factory() as session:
         reloaded = await store.get_task(session, task.id)
     assert reloaded.state == TaskState.CANCELLED.value
+
+
+# --------------------------------------------------------------------------
+# continue_codex_session via MCP — issues #23/#24
+#
+# Zero coverage existed for this tool before (`pytest -k
+# continue_codex_session` selected 0 tests). `_make_parent_task` creates its
+# task in its own session and every test below reopens a *fresh* session from
+# `mcp_hub_factory` for the actual `continue_codex_session` call — deliberately,
+# so `store.get_task`'s `session.get()` cannot serve the parent row out of an
+# identity-map cache and must round-trip it through SQLite, which is exactly
+# what turns `expires_at` tzinfo-naive (issue #23) and is what a real second
+# MCP call would do too.
+# --------------------------------------------------------------------------
+
+
+async def _make_parent_task(factory):
+    """A finished task with a session to continue from.
+
+    Left QUEUED (`executor_online=True`, its natural state on creation) it
+    would still be the oldest QUEUED row for T610 by `created_at` —
+    `next_dispatchable_task`'s own ordering — and `dispatch_next` would hand
+    *it* back out instead of the continuation this fixture exists to set up
+    for. Marking it COMPLETED, as a real finished session would be by the time
+    anything continues it, takes it out of the QUEUED/WAITING_EXECUTOR pool
+    `next_dispatchable_task` selects from.
+    """
+    async with factory() as session:
+        task = await store.create_task(
+            session,
+            SubmitTaskRequest(
+                executor_id="T610",
+                project_id="p1",
+                instruction="explore the repository",
+                mode=TaskMode.ANALYZE,
+                timeout_seconds=300,
+                priority=TaskPriority.NORMAL,
+                run_when_available=True,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            ),
+            executor_online=True,
+        )
+        task = await store.update_task_state(session, task.id, TaskState.COMPLETED)
+    return task
+
+
+@pytest.mark.asyncio
+async def test_mcp_continue_codex_session_succeeds_without_datetime_crash(mcp_hub_factory):
+    """Issue #23: `continue_codex_session` forwards `parent.expires_at` —
+    tzinfo-naive once it has round-tripped through SQLite, despite the column
+    being `DateTime(timezone=True)` — into `store.create_task`'s
+    `request.expires_at <= datetime.now(timezone.utc)` comparison, which used
+    to raise `TypeError: can't compare offset-naive and offset-aware
+    datetimes` before any dispatch logic ran. This is the plain success path:
+    no executor connected, nothing to dispatch, just proving the call itself
+    no longer raises.
+    """
+    parent = await _make_parent_task(mcp_hub_factory)
+    hub = AgentHub(mcp_hub_factory)  # T610 left offline; this test is only about the crash
+
+    async with mcp_hub_factory() as session:
+        response = await handle_mcp_call(
+            {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "tools/call",
+                "params": {
+                    "name": "continue_codex_session",
+                    "arguments": {
+                        "task_id": parent.id,
+                        "instruction": "now add tests",
+                        "timeout_seconds": 300,
+                    },
+                },
+            },
+            session,
+            hub,
+            ADMIN,
+        )
+
+    structured = response["result"]["structuredContent"]
+    assert structured["continued_from_task_id"] == parent.id
+    assert structured["task_id"] != parent.id
+    assert structured["state"] == TaskState.WAITING_EXECUTOR.value
+
+
+@pytest.mark.asyncio
+async def test_mcp_continue_codex_session_dispatches_to_a_connected_idle_executor(mcp_hub_factory):
+    """Issue #24: unlike its sibling `submit_codex_task` (same file), this
+    branch used to have no dispatch call at all — a continuation to a
+    connected, idle executor landed QUEUED and waited for an unrelated event.
+    Now routed through the shared `AgentHub.dispatch_available` (PR #21), same
+    as the REST approve path and `approve_codex_task`.
+    """
+    parent = await _make_parent_task(mcp_hub_factory)
+    hub = AgentHub(mcp_hub_factory)
+    await hub.register("T610", _DummyWebSocket())
+
+    async with mcp_hub_factory() as session:
+        response = await handle_mcp_call(
+            {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "tools/call",
+                "params": {
+                    "name": "continue_codex_session",
+                    "arguments": {
+                        "task_id": parent.id,
+                        "instruction": "now add tests",
+                        "timeout_seconds": 300,
+                    },
+                },
+            },
+            session,
+            hub,
+            ADMIN,
+        )
+
+    structured = response["result"]["structuredContent"]
+    # RUNNING, not just QUEUED: `dispatch_next` moves a dispatched task
+    # straight to RUNNING, and the response reflects the post-dispatch row
+    # (`session.refresh(task)` after `dispatch_available`), not the
+    # pre-dispatch one.
+    assert structured["state"] == TaskState.RUNNING.value
+
+    async with mcp_hub_factory() as session:
+        reloaded = await store.get_task(session, structured["task_id"])
+    assert reloaded.state == TaskState.RUNNING.value
+
+    connection = hub.connections["T610"]
+    sent_types = [msg["type"] for msg in connection.websocket.sent]
+    assert "task.dispatch" in sent_types
+
+
+@pytest.mark.asyncio
+async def test_mcp_continue_codex_session_leaves_task_queued_when_the_executor_is_offline(mcp_hub_factory):
+    """No regression on the pre-existing (disconnected) case: an offline
+    executor gets no dispatch attempt at all, matching #18/#20's own coverage
+    of the REST approve path."""
+    parent = await _make_parent_task(mcp_hub_factory)
+    hub = AgentHub(mcp_hub_factory)  # nothing registered — T610 stays offline
+
+    async with mcp_hub_factory() as session:
+        response = await handle_mcp_call(
+            {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "tools/call",
+                "params": {
+                    "name": "continue_codex_session",
+                    "arguments": {
+                        "task_id": parent.id,
+                        "instruction": "now add tests",
+                        "timeout_seconds": 300,
+                    },
+                },
+            },
+            session,
+            hub,
+            ADMIN,
+        )
+
+    structured = response["result"]["structuredContent"]
+    assert structured["state"] == TaskState.WAITING_EXECUTOR.value
+    assert hub.connections == {}
+
+
+@pytest.mark.asyncio
+async def test_mcp_continue_codex_session_at_capacity_does_not_dispatch(mcp_hub_factory):
+    """A connected executor already at its concurrency limit must not be sent
+    a second `task.dispatch` — `dispatch_available`'s existing capacity gate
+    (`AgentHub.dispatch_next`) must still apply through this call site,
+    matching #18/#20's own at-capacity coverage of the REST approve path."""
+    parent = await _make_parent_task(mcp_hub_factory)
+    hub = AgentHub(mcp_hub_factory)
+    await hub.register("T610", _DummyWebSocket())
+    # T610's `max_concurrent_tasks` is 1 (mcp_hub_factory's registration) —
+    # occupy that one slot with an unrelated task before continuing.
+    hub.running_tasks["T610"] = {"some-other-task-already-running"}
+
+    async with mcp_hub_factory() as session:
+        response = await handle_mcp_call(
+            {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "tools/call",
+                "params": {
+                    "name": "continue_codex_session",
+                    "arguments": {
+                        "task_id": parent.id,
+                        "instruction": "now add tests",
+                        "timeout_seconds": 300,
+                    },
+                },
+            },
+            session,
+            hub,
+            ADMIN,
+        )
+
+    structured = response["result"]["structuredContent"]
+    # The executor is connected, so `create_task` starts this continuation at
+    # QUEUED (not WAITING_EXECUTOR — that state is only for an offline
+    # executor). `dispatch_available`'s capacity gate must leave it there
+    # rather than forcing a dispatch past the concurrency limit.
+    assert structured["state"] == TaskState.QUEUED.value, "the fix must not bypass the concurrency gate"
+    assert hub.connections["T610"].websocket.sent == []
     assert hub.connections["T610"].websocket.sent == []

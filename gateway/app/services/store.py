@@ -339,7 +339,19 @@ async def create_task(
     state = TaskState.QUEUED if executor_online else TaskState.WAITING_EXECUTOR
     if not executor_online and not request.run_when_available:
         raise ValueError("executor_offline")
-    if request.expires_at <= datetime.now(timezone.utc):
+    # `request.expires_at` is aware when it comes from validated API/MCP
+    # input, but `continue_codex_session` (gateway/app/mcp/server.py) forwards
+    # `parent.expires_at` straight from a DB row — naive under SQLite despite
+    # the column being `DateTime(timezone=True)` (issue #23). `_as_utc` is the
+    # same normalization already applied to this exact field a few lines down
+    # (`is_task_expired`, `decide_task_approval`, and the two credential-purge
+    # spots below), so `create_task` defends itself the same way instead of
+    # trusting every caller to pre-normalize. Normalized once and reused for
+    # the stored value too, not just this comparison, so a row this function
+    # writes is never itself the naive one a later caller has to defend
+    # against.
+    expires_at = _as_utc(request.expires_at)
+    if expires_at <= datetime.now(timezone.utc):
         raise ValueError("task_already_expired")
     if not policy.approved:
         state = TaskState.AWAITING_APPROVAL
@@ -352,7 +364,7 @@ async def create_task(
         state=state.value,
         priority=request.priority.value,
         run_when_available=request.run_when_available,
-        expires_at=request.expires_at,
+        expires_at=expires_at,
         timeout_seconds=request.timeout_seconds,
         created_at=datetime.now(timezone.utc),
         requested_by_user_id=requested_by_user_id,
