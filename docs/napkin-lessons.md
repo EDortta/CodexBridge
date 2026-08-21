@@ -751,3 +751,50 @@ one of `.docs/agents/council.md` §4's own triggers. Self-reviewed against
 audit/notification-parity instruction this session carried. Committed, not
 merged, not deployed — a PR against `development` is opened for operator
 review per standing policy.
+
+## 2026-08-21 — council round 2 on gh-10 (PR #22), MAX_ATTACHMENT_ID_LENGTH finding closed
+
+Round 1 on PR #22 left one surviving finding: `conversation_types.py` declares
+`MAX_ATTACHMENT_ID_LENGTH = 255` but nothing enforced it —
+`CreateMessageRequest.attachments` only bounded list *count*
+(`max_length=20`), not per-item length, so an attachment id of any length
+was accepted, stored, and echoed back unmodified. Its three siblings in the
+same module (`MAX_CONTEXT_REFERENCES`, `MAX_MESSAGE_BODY_LENGTH`,
+`MAX_ATTACHMENTS_PER_MESSAGE`) were all wired in; this one was declared and
+forgotten — the same "constant exists, nothing reads it" shape earlier
+rounds have caught elsewhere in this codebase.
+
+Fixed at the same layer as its two closest siblings
+(`MAX_MESSAGE_BODY_LENGTH`, `MAX_ATTACHMENTS_PER_MESSAGE`), not the
+`ContextReference` Pydantic-field layer: `store.create_conversation_message`
+now loops the deduplicated attachment list and raises
+`ConversationPlanningError("/attachments/{index}", "too_long", ...)` for any
+id over 255 characters, caught by `routes/conversations.py:post_message`'s
+existing `except ConversationPlanningError` and turned into the same
+structured `400 VALIDATION_FAILED` body every other planning error in this
+feature already returns. No new validation style introduced.
+
+New test: `tests/integration/test_conversations.py::test_post_message_rejects_an_oversized_attachment_id`
+— posts a 256-character attachment id, asserts `400` with
+`details[0] == {"field": "/attachments/0", "code": "too_long", ...}`.
+Confirmed failing against the pre-fix `store.py` (`201`, not `400`) before
+confirming it passes with the fix.
+
+`python3 -m pytest -q` → 518 passed, 4 failed (same
+`tests/integration/test_agent_ws_handshake.py` order/CWD-sensitive flake
+this file's 2026-08-19 and 2026-08-21 entries already document, not
+introduced by this diff) — 522 total, matching the round-1 baseline (521)
+plus this one new test. One false lead during verification: two `pytest -q`
+invocations issued back-to-back raced on the same file-backed
+`codex_bridge.db` in the repo root and produced a spurious all-green result
+and a spurious `no such table: executors` result on different runs; removing
+the stale db file and running once, alone, reproduced the documented
+baseline exactly. Lesson for next session: never trust a full-suite result
+from a run that overlapped another `pytest` process against the same
+default sqlite file — confirm no other `pytest` process is alive first.
+
+Not re-council-reviewed beyond this round-2 closure itself, per the same
+"no `pre-commit` hook wired in this checkout" note the gh-10 round-1 entry
+above already recorded. Committed to
+`feature/gh-10/expose-conversations-and-contextual-messaging-ap` and pushed
+to `origin`, updating PR #22 in place — no new PR, no merge, no deploy.

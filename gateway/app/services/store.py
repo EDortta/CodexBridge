@@ -25,6 +25,7 @@ from gateway.app.models.entities import (
 )
 from gateway.app.services.audit import record_event
 from gateway.app.services.conversation_types import (
+    MAX_ATTACHMENT_ID_LENGTH,
     MAX_ATTACHMENTS_PER_MESSAGE,
     MAX_MESSAGE_BODY_LENGTH,
     ConversationPlanningError,
@@ -1949,6 +1950,12 @@ async def create_conversation_message(
             "/attachments", "too_many",
             f"attachments must be at most {MAX_ATTACHMENTS_PER_MESSAGE} entries.",
         )
+    for index, attachment_id in enumerate(normalized_attachments):
+        if len(attachment_id) > MAX_ATTACHMENT_ID_LENGTH:
+            raise ConversationPlanningError(
+                f"/attachments/{index}", "too_long",
+                f"attachment id must be at most {MAX_ATTACHMENT_ID_LENGTH} characters.",
+            )
 
     now = now or datetime.now(timezone.utc)
     message = ConversationMessageModel(

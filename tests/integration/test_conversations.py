@@ -386,6 +386,20 @@ async def test_post_message_rejects_an_empty_body(api) -> None:
     assert response.json()["details"][0]["field"] == "/body"
 
 
+async def test_post_message_rejects_an_oversized_attachment_id(api) -> None:
+    """`MAX_ATTACHMENT_ID_LENGTH` (255) must be enforced, same as its three
+    siblings in `conversation_types.py` — council round-1 finding, PR #22."""
+    conversation = await make_conversation(api.factory)
+    response = api.post(
+        f"/api/v1/conversations/{conversation.id}/messages",
+        json={"body": "hello", "attachments": ["a" * 256]},
+        headers=auth(ALICE_TOKEN),
+    )
+    assert response.status_code == 400
+    assert response.json()["details"][0]["field"] == "/attachments/0"
+    assert response.json()["details"][0]["code"] == "too_long"
+
+
 async def test_a_retried_message_post_does_not_create_a_second_message(api) -> None:
     """Message creation is idempotent for offline retries — the acceptance criterion."""
     conversation = await make_conversation(api.factory)
