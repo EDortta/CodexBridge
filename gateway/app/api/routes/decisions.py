@@ -298,6 +298,15 @@ async def _resolve(
             from gateway.app.main import hub  # imported late: main includes this router
 
             await hub.dispatch_available(updated.executor_id)
+            # `dispatch_available` runs in its own session (`AgentHub`'s
+            # `session_factory`) and, when it dispatches, bumps `revision`
+            # again via `store.update_task_state`. `updated` is still the
+            # pre-dispatch row in this session's identity map, so without a
+            # refresh the response below (`_decision_dto`/`etag_for`) would
+            # hand the client a revision one behind the task's real state —
+            # the same hazard `routes/sessions.py:restart_session` guards
+            # against with the same call after its own dispatch.
+            await session.refresh(updated)
         await record_event(
             session,
             "task",

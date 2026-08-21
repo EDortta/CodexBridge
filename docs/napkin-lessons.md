@@ -619,3 +619,39 @@ across pytest invocations. Not fixed here (unrelated to #18/#19/#20, and
 `.gitignore` already keeps the file out of the repo); worth its own issue —
 the fix is almost certainly giving `test_agent_ws_handshake.py` its own
 isolated app/engine the way every other integration test file already does.
+
+## 2026-08-21 — council round 2 on #20/PR #21, closure
+
+Round 2 (§4 of `.docs/agents/council.md`): one surviving round-1 finding on
+PR #21's same-request dispatch closed. `decisions.py`'s `_resolve()` fetches
+`updated` from `store.decide_task_approval`, then — for an `approved` outcome
+— calls `hub.dispatch_available(updated.executor_id)`, which (for a
+connected, idle executor) dispatches in the same request and bumps
+`task.revision` again through its *own* session
+(`AgentHub.session_factory`), not the request's. `updated` was never
+refreshed afterward, so the `200` response's `revision` and its `ETag`
+header both reported the pre-dispatch revision while the task's real DB
+revision was one higher — a client trusting that ETag for its next
+`If-Match` got a spurious `409` on a revision it was just handed as current.
+Round 1's own tests exercised the dispatch (`state == running`) but never
+asserted on the response body's `revision`/ETag, which is exactly why the
+gap survived round 1.
+
+Fixed by carrying over this codebase's own established pattern for the same
+hazard: `sessions.py`'s `restart_session` already calls `await
+session.refresh(updated)` right after its own `dispatch_next`/`send` pair,
+for the identical reason (a dispatch that ran in-request bumped the row a
+second time). `_resolve()` now does the same, right after
+`hub.dispatch_available`, before `_decision_dto(updated)`/`etag_for(updated.
+revision)` build the response.
+
+New test:
+`tests/integration/test_decisions.py::test_approve_response_revision_matches_the_post_dispatch_task_after_same_request_dispatch`.
+Verified failing against the pre-fix code (`git stash` on `decisions.py`
+alone, test kept): asserted `response.json()["revision"] == updated.revision`
+where the response reported `2` against the DB's actual `3`. Passes with the
+fix restored.
+
+`python3 -m pytest -q` → 500 passed, 4 failed (same
+`tests/integration/test_agent_ws_handshake.py` four, unchanged from the
+2026-08-20 baseline — the extra passing test is this round's own).

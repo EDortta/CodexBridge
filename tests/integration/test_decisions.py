@@ -625,6 +625,39 @@ async def test_approving_dispatches_to_a_connected_idle_executor(api) -> None:
     assert "task.dispatch" in sent_types
 
 
+async def test_approve_response_revision_matches_the_post_dispatch_task_after_same_request_dispatch(
+    api,
+) -> None:
+    """Council round-1 finding on this issue: `_resolve` fetches `updated`
+    before `hub.dispatch_available` runs, and `dispatch_available` bumps
+    `revision` again through its own session (`AgentHub.session_factory`) —
+    same-request dispatch, not a later event, moves the task to `running`.
+    Without refreshing `updated` afterward, the response body's `revision`
+    and its `ETag` header both report the pre-dispatch revision while the
+    task's real DB revision is one higher, so a client trusting that ETag
+    for its next `If-Match` gets a spurious 409 on a revision it was just
+    handed as current.
+    """
+    task = await make_decision(api.factory, "p1")
+    await api.hub.register("E1", _DummyWebSocket())
+
+    response = api.post(
+        f"/api/v1/decisions/{task.id}/approve",
+        headers={**auth(APPROVER_TOKEN), "If-Match": f'"{task.revision}"'},
+        json={"confirm": True},
+    )
+    assert response.status_code == 200
+
+    async with api.factory() as s:
+        updated = await store.get_task(s, task.id)
+    # Same-request dispatch happened (state is running, not waiting_executor,
+    # confirming the queue was nudged before the response was built) — so the
+    # response must reflect *that* revision, not the pre-dispatch one.
+    assert updated.state == TaskState.RUNNING.value
+    assert response.json()["revision"] == updated.revision
+    assert response.headers["ETag"] == f'"{updated.revision}"'
+
+
 async def test_approving_leaves_the_task_waiting_when_the_executor_is_offline(api) -> None:
     """No regression on the pre-existing (disconnected) case: `api.hub` has
     no registered executor, matching every other test in this file."""
