@@ -10,19 +10,47 @@ the credential it was called with.
 from __future__ import annotations
 
 import logging
+from typing import AsyncIterator
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from starlette.websockets import WebSocketDisconnect
 
+from gateway.app.db.base import Base
 from shared.protocol import EXECUTOR_TOKEN_HEADER
 
 
 @pytest.fixture
-def client() -> TestClient:
-    from gateway.app.main import app
+async def client(monkeypatch) -> AsyncIterator[TestClient]:
+    """A real app, but wired to its own isolated in-memory database.
 
-    return TestClient(app, raise_server_exceptions=False)
+    `gateway.app.main.app` normally gets its schema from the `startup` event
+    (`Base.metadata.create_all` against the module-level production `engine`,
+    which defaults to the file `./codex_bridge.db`). That event never fires
+    here — `TestClient` only runs ASGI lifespan when entered as `with client:`,
+    and nothing below does that — so, left alone, every test in this file
+    depended on whatever schema happened to already be sitting in that stray
+    file from a previous run, order- and CWD-sensitive (issue #28).
+
+    `/agent/ws` also reads its sessions from the module-level `SessionLocal`
+    directly rather than through `Depends(get_session)` (see
+    `gateway.app.main.agent_ws`), so an `app.dependency_overrides` swap — the
+    trick the rest of `tests/integration` uses — would never reach it either.
+    Patching `main.SessionLocal` itself, the same seam
+    `test_refusing_an_anonymous_handshake_touches_no_executor_record` already
+    exploited below, is what actually redirects it.
+    """
+    from gateway.app import main
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(main, "SessionLocal", factory)
+
+    yield TestClient(main.app, raise_server_exceptions=False)
+    await engine.dispose()
 
 
 def test_a_handshake_with_no_credential_is_refused(client: TestClient) -> None:
