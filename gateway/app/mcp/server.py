@@ -204,6 +204,26 @@ async def handle_mcp_call(
             requested_by_user_id=parent.requested_by_user_id,
             requested_by_email=parent.requested_by_email,
         )
+        if task.state == TaskState.QUEUED.value:
+            # Issue #24: unlike `submit_codex_task` (hand-rolled dispatch just
+            # above), this branch had no dispatch at all — a continuation to a
+            # connected, idle executor landed QUEUED and sat until an
+            # unrelated event nudged the queue. `dispatch_available` is the
+            # shared mechanism PR #21 introduced for the REST approve path
+            # (`gateway/app/api/routes/decisions.py`'s `_resolve`); it already
+            # no-ops for an offline/at-capacity executor, so this mirrors
+            # `submit_codex_task`'s outcome without hand-rolling another inline
+            # is_connected/dispatch_next/send sequence.
+            await hub.dispatch_available(task.executor_id)
+            # `dispatch_available` runs in its own session (`AgentHub`'s
+            # `session_factory`) and, when it dispatches, bumps the task's
+            # state (and revision) via `store.update_task_state` on that other
+            # session. `task` is still the pre-dispatch row in this session's
+            # identity map; `_resolve`'s same-shaped fix (`decisions.py`,
+            # issue #20) refreshes for exactly this reason, so this does too —
+            # otherwise the payload below would report `queued` even after a
+            # successful dispatch.
+            await session.refresh(task)
         payload = {"task_id": task.id, "state": task.state, "continued_from_task_id": parent.id}
         result = _text_result(f"Continuation task {task.id} created.", payload)
     elif tool_name == "cancel_codex_task":

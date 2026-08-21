@@ -655,3 +655,70 @@ fix restored.
 `python3 -m pytest -q` → 500 passed, 4 failed (same
 `tests/integration/test_agent_ws_handshake.py` four, unchanged from the
 2026-08-20 baseline — the extra passing test is this round's own).
+
+## 2026-08-21 — #23/#24: `continue_codex_session` datetime crash and missing dispatch
+
+Two more pre-existing (not #21/#22-introduced) findings from the same
+council-style second-caller pass, this time on the MCP transport's
+`continue_codex_session` — the one tool of the five in `gateway/app/mcp/
+server.py` with zero test coverage before this (`pytest -k
+continue_codex_session` selected 0 of 503 tests).
+
+**#23**: `continue_codex_session` forwards `parent.expires_at` — fetched via
+`store.get_task`, naive under SQLite despite `DateTime(timezone=True)` — into
+a freshly built `SubmitTaskRequest`, which `store.create_task` then compares
+directly against `datetime.now(timezone.utc)`
+(`if request.expires_at <= datetime.now(timezone.utc)`). Every real call
+raised `TypeError: can't compare offset-naive and offset-aware datetimes`
+before any dispatch logic ran — `submit_codex_task`'s request never hits
+this because its `expires_at` comes straight from validated MCP input, aware
+by construction; `continue_codex_session`'s is the one path that round-trips
+a `DateTime(timezone=True)` column back through Python first. Fixed by
+reusing this file's own established pattern for the exact same hazard —
+`store.py`'s `_as_utc` helper, already applied to this same `TaskModel.
+expires_at` field four other places in the file (`is_task_expired`,
+`decide_task_approval`, the two credential-purge spots) — rather than
+inventing a new normalization at the MCP call site. Normalized once in
+`create_task` and reused for both the comparison and the stored value, so a
+row this function writes is never itself the naive one a later caller has to
+defend against.
+
+**#24**: even past that crash, `continue_codex_session` never dispatched the
+continuation to a connected, idle executor — it landed `QUEUED` and waited for
+an unrelated event, exactly the starvation shape #17/#18/#20 already found at
+two other call sites. Its sibling `submit_codex_task` (same file) dispatches
+via a hand-rolled `is_connected`/`dispatch_next`/`send` sequence that
+predates PR #21; `approve_codex_task` was already routed onto the shared
+`AgentHub.dispatch_available` PR #21 introduced. `continue_codex_session` had
+neither — no dispatch attempt at all. Fixed by routing it through the same
+`dispatch_available`, mirroring the REST approve path's own
+`session.refresh(task)` afterward (`decisions.py`'s `_resolve`, the
+2026-08-21 council-round-2 entry above): `dispatch_available` runs in
+`AgentHub`'s own session and, when it dispatches, bumps the task's state and
+revision through that other session — without the refresh, the response
+would report the pre-dispatch `queued` state even after a same-request
+dispatch actually ran.
+
+New tests, all in `tests/integration/test_store_and_mcp.py` (a real `AgentHub`
+over its own database, same convention as the #18/#20 MCP-path tests just
+above them, not the always-`None`-`dispatch_next` `DummyHub` used elsewhere in
+this file):
+`test_mcp_continue_codex_session_succeeds_without_datetime_crash`,
+`test_mcp_continue_codex_session_dispatches_to_a_connected_idle_executor`,
+`test_mcp_continue_codex_session_leaves_task_queued_when_the_executor_is_offline`,
+`test_mcp_continue_codex_session_at_capacity_does_not_dispatch`. The dispatch
+test's own fixture (`_make_parent_task`) has to leave the parent task
+`COMPLETED`, not `QUEUED`: left `QUEUED`, it would still be the oldest
+QUEUED row for the executor by `next_dispatchable_task`'s own `created_at`
+ordering, and `dispatch_next` would hand *it* back out instead of the
+continuation the test means to observe — caught by the dispatch test
+initially failing with the parent's own task id coming back dispatched
+instead of the child's.
+
+`python3 -m pytest -q` on a clean `development` checkout (`git stash`,
+repeated twice) → 504 passed, 0 failed — a stray, gitignored
+`codex_bridge.db` left over from an earlier ad hoc debug run had caused one
+transient 4-failure blip in `test_agent_ws_handshake.py` matching the
+2026-08-20 entry's own root cause (that file imports the real `gateway.app.
+main.app` instead of an isolated in-memory one); gone on rerun. With this
+session's changes: 508 passed, 0 failed (504 baseline + 4 new).
