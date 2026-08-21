@@ -722,3 +722,80 @@ transient 4-failure blip in `test_agent_ws_handshake.py` matching the
 2026-08-20 entry's own root cause (that file imports the real `gateway.app.
 main.app` instead of an isolated in-memory one); gone on rerun. With this
 session's changes: 508 passed, 0 failed (504 baseline + 4 new).
+
+## 2026-08-21 — #25: the `contract` CI gate was blind, not the app
+
+Root cause found by refusing the trap every prior agent (and the issue itself)
+fell into: building a *fresh* venv the CI way (`pip install -e '.[test]'`,
+no cached `.venv`) instead of trusting a stale local one. `pyproject.toml`
+pins `fastapi>=0.116.0` with no upper bound — a floor, not a pin — and a
+fresh resolve on 2026-08-21 pulled `fastapi==0.141.1` (`starlette` along for
+the ride at `1.6.0`). Every stale local `.venv` any agent had been testing
+against still had a pre-0.141 FastAPI, so "passes locally, fails in CI" was
+never environment noise — CI was right, and local was stale.
+
+FastAPI 0.141 made `include_router()` lazy: `app.include_router(router)` used
+to eagerly copy `router`'s routes into `app.routes`, flattened, with the
+prefix baked in. Now it appends one `fastapi.routing._IncludedRouter` wrapper
+per `include_router()` call instead, and defers resolving the real
+`APIRoute`/`Route` objects — and their effective, prefixed `path` — until
+something asks. This project has ten `include_router()` calls in
+`gateway/app/main.py`, so `app.routes` went from ~40 real routes to ten
+opaque wrappers overnight. Every place in this repo that walked `app.routes`
+by hand and did `isinstance(route, StarletteRoute)` or `getattr(route,
+"path", ...)` — `tests/contract/test_openapi_document.py`'s `_route_entries`
+(feeding both `test_gate_sees_every_route_the_app_exposes` and
+`test_no_contract_path_is_unimplemented`), `tests/contract/
+test_docs_match_the_runtime.py`'s `_rate_limited_api_routes`, and two spots in
+`tests/integration/test_probes.py` (`_api_route_signals` and
+`test_every_served_api_route_carries_the_rate_limiter`) — silently stopped
+seeing routes. The two `test_openapi_document.py` tests failed loudly
+(exactly per the issue). `_rate_limited_api_routes` also failed loudly only
+because its own precondition assertion (`assert limited`) exists precisely to
+catch a query that stopped finding anything — the same "gate reports green
+over an unexamined surface" failure mode this file's own docstrings warn
+about elsewhere turned up in two more places (`_api_route_signals` and
+`test_every_served_api_route_carries_the_rate_limiter`) that had no such
+precondition and were quietly passing vacuously, `assert not []`, the whole
+time — a live blind spot with nothing reporting it.
+
+Fixed with (b), not (a): pinning FastAPI back below 0.141 would have hidden
+the same break again at the next unconstrained bump, and FastAPI's own
+`fastapi.openapi.utils.get_openapi` — the code that generates the very
+`/openapi.json` this project deliberately serves 404 for — already walks
+`_IncludedRouter` via a module-level (not underscore-prefixed)
+`fastapi.routing.iter_route_contexts()`, which recurses through
+`_IncludedRouter` and yields a `RouteContext` per real leaf route, exposing
+`.original_route` (the true `Route`/`WebSocketRoute`, for `isinstance`), the
+*effective* `.path` (prefix resolved), and — confirmed by reading
+`_EffectiveRouteContext.from_api_route` — the *effective*, merged
+`.dependant`/`.dependencies` (router-level `include_router(dependencies=
+[Depends(RateLimitDependency(...))])` folded in). That merge is why the raw
+`original_route.dependant` was never a valid substitute: the rate limiter is
+attached at `include_router()` time, invisible on the sub-router's own
+unresolved route. All four call sites now iterate `iter_route_contexts(app.
+routes)` instead of `app.routes` directly; `Mount`/`Host` blindness — the
+gate's other, deliberate blind spot — is unaffected, since `iter_route_contexts`
+does not recurse into either.
+
+Verified by reproducing red first: fresh venv, CI's exact `pip install -e
+'.[test]'`, `pytest tests/contract -q` → the two `test_openapi_document.py`
+failures plus all four `test_the_api_readme_does_not_deny_the_limiter_that_
+ships` parametrizations, byte-for-byte the CI log's own failure list,
+including the `_IncludedRouter <no path>` x10. Green after the fix, same
+fresh venv: `tests/contract` 26/26, `tests/unit tests/integration` 509/509
+(also confirmed `test_every_served_api_route_carries_the_rate_limiter` and
+`_api_route_signals`'s consumer, `test_capability_flags_match_what_the_
+served_routes_accept`, still pass for the right reason post-fix, not
+vacuously).
+
+Action next time: a floating dependency floor (`>=`, no ceiling) is a promise
+that "whatever the resolver picks, this code still works" — nobody was
+checking that promise against a fresh resolve, so it silently broke and
+stayed broken for 11+ days across every branch. Any test helper that walks
+`app.routes`/`router.routes` by hand for FastAPI ≥0.141 must go through
+`fastapi.routing.iter_route_contexts()`, not `isinstance`/`getattr` on the
+raw list — and per the 2026-08-20 entry above, this working tree still
+accumulates a stray gitignored `codex_bridge.db` from ad hoc runs that causes
+an unrelated `test_agent_ws_handshake.py` blip; unrelated to this fix, still
+unowned.

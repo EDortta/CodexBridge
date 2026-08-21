@@ -10,7 +10,13 @@ requires-python = ">=3.10"
 dependencies = [
   "aiomysql>=0.2.0",
   "aiosqlite>=0.20.0",
-  "fastapi>=0.116.0",
+  # >=0.141.1: tests/contract and tests/integration route-inventory helpers
+  # import fastapi.routing.iter_route_contexts() to see through
+  # _IncludedRouter (lazy include_router(), shipped in this release) — on an
+  # older FastAPI that name does not exist, and app.routes is still the
+  # pre-0.141 flattened list. See docs/napkin-lessons.md, "#25: the
+  # `contract` CI gate was blind, not the app".
+  "fastapi>=0.141.1",
   "greenlet>=3.1.1",
   "httpx>=0.28.0",
   "prometheus-client>=0.22.0",
