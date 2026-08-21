@@ -854,3 +854,31 @@ to check *how* its routes acquire sessions before reusing the
 `dependency_overrides[get_session]` pattern — a route that reads a
 module-level `SessionLocal` (or `engine`) directly needs that name monkeypatched
 instead, `app.dependency_overrides` never reaches it.
+
+## 2026-08-21 — WK-20260821-real-codex-integration-test
+
+Every existing `codex_runner.py` test (`tests/unit/test_codex_runner.py`,
+`tests/unit/test_agent_service.py`) runs against a fake subprocess by design —
+their own docstrings call it that. `grep -rln 'asyncio.create_subprocess_exec'
+tests/` matched nothing that spawns a real `codex` process anywhere in the repo,
+even though `codex_runner.py` is genuinely deployed and driving real work on
+`devel3`. Ran the real, installed `codex-cli 0.147.0` (confirmed authenticated via
+the operator's existing `~/.codex/auth.json`, nothing generated or copied) through
+`CodexRunner.run_task` unmodified, against a disposable scratch git repo, and found
+two concrete mismatches between what the code assumes and what the CLI does —
+plus one behavior that is real but config-dependent, not a code bug.
+
+- `[2026-08-21] WK-20260821-real-codex-integration-test - _find_session_id checks session_id/sessionId/conversation_id/conversationId, top-level or under event["payload"]. Real codex-cli 0.147.0 opens the --json stream with {"type":"thread.started","thread_id":"<uuid>"}: a key none of the four checks match. Every real run's codex_session_id comes back None; continue_codex_session can never have an id to resume with.`
+- `Action next time: when a field is extracted from a third-party CLI's JSON output, pin the exact key name with one real captured event in the test suite, not just an assumption about naming convention (session_id vs thread_id was the same concept, wrong noun).`
+- `[2026-08-21] WK-20260821-real-codex-integration-test - _build_command's resume branch emits [codex, exec, resume, <id>, --json, -C, <dir>, -o, <file>, instruction]. codex exec resume does not accept -C/--cd at all (codex exec resume --help lists no -C) — the real CLI rejects it before running anything: exit code 2, "error: unexpected argument '-C' found". Combined with the thread_id finding above, resume is broken twice over: no session id is ever captured, and the command built from one would fail to parse anyway. The subprocess is spawned with cwd=str(project_root) regardless (asyncio.create_subprocess_exec's cwd= kwarg), so the fix is simply dropping -C from the resume branch — the working directory is already set the other way.`
+- `Action next time: a subcommand (exec resume) is not guaranteed to accept every flag its parent command (exec) does. Check --help on the exact subcommand being invoked, not the top-level one, before assuming flags carry over.`
+- `[2026-08-21] WK-20260821-real-codex-integration-test - codex exec's default sandbox is read-only with approvals disabled non-interactively; _build_command never passes -s/--sandbox or any approval override. Writes only succeed if the target directory already carries trust_level = "trusted" in ~/.codex/config.toml on the executor host — 40 such entries exist on this dev machine from ordinary interactive use, none from anything codex_runner.py itself does. A newly-registered CodexBridge project (never opened with codex before) runs fully read-only in production: exit 0, TaskState.COMPLETED, no_changes: true, and the only signal is a payload field nothing forces a caller to check — confirmed live with codex exec -s workspace-write against the same scratch repo, which DID write the file, isolating the cause to the missing flag/trust rather than anything else.`
+- `Action next time: "the process exited 0" is not "the task succeeded" for a CLI whose default posture is read-only — a runner that dispatches to an arbitrary, possibly-first-time directory needs to either pass an explicit sandbox/trust override itself or have final_state read no_changes, not just return_code, before calling a task COMPLETED.`
+
+Tests added: `tests/integration/test_codex_runner_real_process.py`, gated on
+`RUN_REAL_CODEX_TESTS=1` plus the `codex` binary being on PATH (skipped by
+default, so CI — which has neither — is unaffected). Both pass against the real
+binary; full suite otherwise unchanged (507 passed / 2 pre-existing failures in
+`tests/integration/test_probes.py`, reproduced identically on `origin/development`
+before this change — a local `fastapi==0.128.8` short of the `>=0.141.1` the repo
+now requires, unrelated to this work).
