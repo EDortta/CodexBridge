@@ -882,3 +882,57 @@ binary; full suite otherwise unchanged (507 passed / 2 pre-existing failures in
 `tests/integration/test_probes.py`, reproduced identically on `origin/development`
 before this change — a local `fastapi==0.128.8` short of the `>=0.141.1` the repo
 now requires, unrelated to this work).
+
+## 2026-08-21 — #32, #33: fixing the two real-CLI mismatches PR #31 found, not just documenting them
+
+PR #31's real-process test found two bugs against real `codex-cli 0.147.0` but
+didn't fix them (by design — that PR's job was proving the gap existed). This
+work (`WK-20260821-fix-session-resume`) is the follow-through: fix both, then
+rewrite the two real-process tests to assert the FIXED behavior end-to-end
+against the real CLI, not just that the old bug reproduces. A test that keeps
+asserting "this is broken" after the code is fixed would fail forever and
+teach nothing — it had to become a test that the feature works.
+
+- `_find_session_id` (`agent/codex_bridge_agent/codex_runner.py`) now checks
+  `thread_id` first, alongside the original four keys (kept as defensive
+  fallbacks — never confirmed against any real CLI version, but no reason to
+  assume they're dead weight either). One-line fix once the real key was known;
+  the entire remaining cost was already paid by PR #31 pinning the exact real
+  event shape (`{"type":"thread.started","thread_id":"<uuid>"}`) in a test.
+- `_build_command`'s resume branch no longer passes `-C <project_root>`. Read
+  `codex exec resume --help` directly (not `codex exec --help`, which does list
+  `-C` — the two subcommands' flag sets are not the same, that mismatch is
+  exactly what caused the original bug): `resume` takes no `-C`/`--cd` at all.
+  The working directory still reaches the real CLI, just not as a flag —
+  `run_task` already spawns the subprocess with `cwd=str(project_root)`, and
+  `resume`'s own `--all` flag ("Show all sessions (disables cwd filtering)")
+  confirms `resume` locates/filters sessions by the process's actual cwd.
+- Rewrote `test_run_task_resume_branch_is_rejected_by_the_real_cli` into
+  `test_run_task_resume_actually_resumes_the_real_session`: a real first
+  `run_task` call captures a real `thread_id`-derived `codex_session_id`, a real
+  second call resumes it, and the real CLI accepts the command and completes —
+  exercising both fixes together, since resume was untestable end-to-end until
+  both landed (no session id to resume with, and a command the CLI would have
+  rejected outright even with one). `test_run_task_drives_a_real_codex_process_
+  end_to_end` now asserts `codex_session_id == first_event["thread_id"]` instead
+  of asserting it stays `None`.
+
+Verified against the real installed CLI, not just the fakes:
+`RUN_REAL_CODEX_TESTS=1 python3 -m pytest tests/integration/
+test_codex_runner_real_process.py -v` — both tests pass (65.5s). Full suite:
+`python3 -m pytest tests/ -q` (contract tests excluded, pre-existing environment
+gap, see below) — 510 passed, 2 skipped, same 2 pre-existing failures in
+`tests/integration/test_probes.py` (the `fastapi==0.128.8` vs `>=0.141.1` gap
+from the entry above — untouched by this work, reproduces identically before
+and after). `tests/unit/test_codex_runner.py` (the fake-based contract suite)
+still 13/13 — it never exercised `_build_command`'s resume branch or
+`_find_session_id` in the first place, so no fake-vs-real contract to
+reconcile.
+
+Action next time: when a real-process test finds and pins a bug (PR #31's
+model), fixing the bug is a separate, trackable follow-up (#32/#33 here) — but
+that follow-up must rewrite the pinning test's assertions to match the fixed
+behavior, not just patch the production code and leave a test that now asserts
+the wrong thing. A green suite with a stale "prove it's broken" assertion
+still passing is a silent trap: it means either the fix didn't really land, or
+the test stopped testing anything real.
