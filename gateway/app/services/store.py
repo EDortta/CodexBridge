@@ -9,6 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.models.entities import (
     AuditEventModel,
+    ConversationMessageModel,
+    ConversationModel,
+    ConversationReadStateModel,
     EpicModel,
     ExecutorModel,
     IssueModel,
@@ -21,6 +24,12 @@ from gateway.app.models.entities import (
     TaskModel,
 )
 from gateway.app.services.audit import record_event
+from gateway.app.services.conversation_types import (
+    MAX_ATTACHMENT_ID_LENGTH,
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    MAX_MESSAGE_BODY_LENGTH,
+    ConversationPlanningError,
+)
 from gateway.app.services.issue_types import (
     DEFAULT_EPIC_STATUS,
     DEFAULT_ISSUE_PRIORITY,
@@ -1732,3 +1741,273 @@ async def link_issue_to_epic(
     await session.commit()
     await session.refresh(issue)
     return issue
+
+
+# --------------------------------------------------------------------------
+# Conversations (issue #10) — contextual threads linked to product entities.
+# See gateway/app/services/conversation_types.py for the closed vocabulary of
+# context reference types and why `artifact` is not among them.
+# --------------------------------------------------------------------------
+
+
+async def create_conversation(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    title: str | None,
+    context: list[dict],
+    actor_user_id: str,
+    actor_email: str | None,
+) -> ConversationModel:
+    """Create a conversation from an already-resolved, already-authorized context.
+
+    Every entry in `context` has already been fetched through a
+    `*_for_projects` getter by the route (mirroring `link_issue_to_epic`'s
+    division of labour: the route resolves and authorizes, the store persists
+    and re-checks the invariant the write itself must never violate). This
+    function's own defense is that `project_id` names a real, enabled project
+    — the same check `create_epic`/`create_issue` make — because a caller
+    whose `allowed_projects` names a project the registry no longer has must
+    still fail here rather than write an orphaned row.
+    """
+    project = await session.get(ProjectModel, project_id)
+    if project is None or not project.enabled:
+        raise ConversationPlanningError("/context", "unknown_project", "No such project.")
+    if not context:
+        raise ConversationPlanningError("/context", "required", "At least one context reference is required.")
+    if title is not None:
+        title = title.strip() or None
+
+    now = datetime.now(timezone.utc)
+    conversation = ConversationModel(
+        id=str(uuid4()),
+        project_id=project_id,
+        title=title,
+        context_json=json.dumps(context, ensure_ascii=True),
+        created_by_user_id=actor_user_id,
+        created_by_email=actor_email,
+        created_at=now,
+        last_activity_at=None,
+    )
+    session.add(conversation)
+    await record_event(
+        session, "conversation", conversation.id, "conversation.created",
+        {"project_id": project_id, "actor_id": actor_user_id, "context": context},
+    )
+    # The creator starts caught up: they were just looking at what they wrote,
+    # so an empty conversation must not open already "unread" for its own author.
+    session.add(
+        ConversationReadStateModel(conversation_id=conversation.id, user_id=actor_user_id, last_read_at=now)
+    )
+    await session.commit()
+    await session.refresh(conversation)
+    return conversation
+
+
+async def get_conversation(session: AsyncSession, conversation_id: str) -> ConversationModel | None:
+    return await session.get(ConversationModel, conversation_id)
+
+
+async def get_conversation_for_projects(
+    session: AsyncSession, conversation_id: str, project_ids: list[str] | None
+) -> ConversationModel | None:
+    """A conversation the caller may see, or None. Mirrors `get_epic_for_projects`."""
+    conversation = await session.get(ConversationModel, conversation_id)
+    if conversation is None:
+        return None
+    if project_ids is not None and conversation.project_id not in project_ids:
+        return None
+    return conversation
+
+
+async def list_conversations_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[ConversationModel]:
+    """Conversations the caller may see, newest-created first, over-fetched by one.
+
+    Ordered by `created_at`/`id` — creation order, never `last_activity_at`.
+    A live-reordering feed is the opposite of the acceptance criterion
+    ("pagination preserves stable ordering"): sorting by an activity
+    timestamp would move a conversation's position in the list the moment a
+    new message lands mid-pagination, which can skip or repeat rows across
+    page fetches. `lastActivityAt` is still reported on every item; a client
+    that wants "most recently active first" sorts the page client-side.
+    """
+    statement = select(ConversationModel)
+    if project_ids is not None:
+        if not project_ids:
+            return []
+        statement = statement.where(ConversationModel.project_id.in_(project_ids))
+    if after is not None:
+        created_at, conversation_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                ConversationModel.created_at < created_at,
+                and_(ConversationModel.created_at == created_at, ConversationModel.id < conversation_id),
+            )
+        )
+    statement = statement.order_by(ConversationModel.created_at.desc(), ConversationModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def conversation_read_states(
+    session: AsyncSession, *, user_id: str, conversation_ids: list[str]
+) -> dict[str, datetime]:
+    """`{conversation_id: last_read_at}` for one actor, over the given ids.
+
+    One query for a whole page of conversations rather than one per row —
+    the same reasoning `executors_by_project` gives for loading its whole
+    small table at once instead of querying per project.
+    """
+    if not conversation_ids:
+        return {}
+    result = await session.execute(
+        select(ConversationReadStateModel.conversation_id, ConversationReadStateModel.last_read_at).where(
+            ConversationReadStateModel.user_id == user_id,
+            ConversationReadStateModel.conversation_id.in_(conversation_ids),
+        )
+    )
+    return {row.conversation_id: _as_utc(row.last_read_at) for row in result}
+
+
+def conversation_unread(
+    *, last_activity_at: datetime | None, last_read_at: datetime | None
+) -> bool:
+    """Whether an actor has unseen activity in a conversation.
+
+    `last_activity_at` is `None` for a conversation with no messages yet —
+    nothing to read, so never unread, regardless of who is asking. Otherwise
+    unread when the actor has no read state at all, or their read state is
+    older than the last message.
+    """
+    if last_activity_at is None:
+        return False
+    if last_read_at is None:
+        return True
+    return _as_utc(last_read_at) < _as_utc(last_activity_at)
+
+
+async def mark_conversation_read(
+    session: AsyncSession, *, conversation_id: str, user_id: str, at: datetime | None = None
+) -> None:
+    """Advance (never retreat) one actor's read cursor on one conversation.
+
+    Never retreating matters for the sender's own cursor in
+    `create_conversation_message`: two rapid sends must not let the second
+    call's `now()` — which could, on a slow clock, read earlier than the
+    first — undo the first call's own advancement.
+    """
+    # Normalized once, here: SQLite hands back a naive `created_at`/`last_read_at`
+    # while Postgres hands back an aware one (same split `timestamps.utc_z`
+    # documents), so comparing an unconverted `at` against `_as_utc(state.last_read_at)`
+    # raised on SQLite the moment a caller passed a DB-sourced timestamp
+    # (`routes/conversations.py`'s "newest message in this page").
+    at = _as_utc(at or datetime.now(timezone.utc))
+    state = await session.get(ConversationReadStateModel, (conversation_id, user_id))
+    if state is None:
+        session.add(ConversationReadStateModel(conversation_id=conversation_id, user_id=user_id, last_read_at=at))
+    elif _as_utc(state.last_read_at) < at:
+        state.last_read_at = at
+
+
+async def create_conversation_message(
+    session: AsyncSession,
+    *,
+    conversation_id: str,
+    author_user_id: str,
+    author_email: str | None,
+    body: str,
+    attachments: list[str] | None,
+    now: datetime | None = None,
+) -> ConversationMessageModel:
+    """Append a message. Immutable once written — there is no update path.
+
+    Bumps the conversation's `last_activity_at` and the sender's own read
+    cursor in the same transaction: a client that just posted a message must
+    not immediately see its own conversation reported as unread.
+    """
+    conversation = await session.get(ConversationModel, conversation_id)
+    if conversation is None:
+        raise ValueError("unknown_conversation")
+
+    body = body.strip()
+    if not body:
+        raise ConversationPlanningError("/body", "required", "body must not be empty.")
+    if len(body) > MAX_MESSAGE_BODY_LENGTH:
+        raise ConversationPlanningError(
+            "/body", "too_long", f"body must be at most {MAX_MESSAGE_BODY_LENGTH} characters."
+        )
+    normalized_attachments = list(dict.fromkeys(attachments or []))
+    if len(normalized_attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
+        raise ConversationPlanningError(
+            "/attachments", "too_many",
+            f"attachments must be at most {MAX_ATTACHMENTS_PER_MESSAGE} entries.",
+        )
+    for index, attachment_id in enumerate(normalized_attachments):
+        if len(attachment_id) > MAX_ATTACHMENT_ID_LENGTH:
+            raise ConversationPlanningError(
+                f"/attachments/{index}", "too_long",
+                f"attachment id must be at most {MAX_ATTACHMENT_ID_LENGTH} characters.",
+            )
+
+    now = now or datetime.now(timezone.utc)
+    message = ConversationMessageModel(
+        id=str(uuid4()),
+        conversation_id=conversation_id,
+        author_user_id=author_user_id,
+        author_email=author_email,
+        body=body,
+        attachments_json=json.dumps(normalized_attachments, ensure_ascii=True),
+        created_at=now,
+    )
+    session.add(message)
+    conversation.last_activity_at = now
+    await record_event(
+        session, "conversation", conversation_id, "conversation.message_created",
+        {"message_id": message.id, "actor_id": author_user_id, "attachments": len(normalized_attachments)},
+    )
+    await mark_conversation_read(session, conversation_id=conversation_id, user_id=author_user_id, at=now)
+    await session.commit()
+    await session.refresh(message)
+    return message
+
+
+async def list_conversation_messages_page(
+    session: AsyncSession,
+    *,
+    conversation_id: str,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[ConversationMessageModel]:
+    """A conversation's messages, oldest first — the order a thread reads in.
+
+    Same convention and same reasoning as `list_task_events_page`'s mission
+    timeline: unlike the newest-first collection endpoints, a message thread
+    is read forward from its start. Over-fetches by one, same as every other
+    collection here.
+    """
+    statement = select(ConversationMessageModel).where(
+        ConversationMessageModel.conversation_id == conversation_id
+    )
+    if after is not None:
+        created_at, message_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                ConversationMessageModel.created_at > created_at,
+                and_(ConversationMessageModel.created_at == created_at, ConversationMessageModel.id > message_id),
+            )
+        )
+    statement = statement.order_by(
+        ConversationMessageModel.created_at.asc(), ConversationMessageModel.id.asc()
+    ).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())

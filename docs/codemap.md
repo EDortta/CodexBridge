@@ -1,17 +1,16 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-20 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
+> Generated: 2026-08-21 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge/.claude/worktrees/agent-a0b0474577bded53e`
+> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge/.claude/worktrees/agent-a0b0474577bded53e map`
 
 ## Summary
 
-- 91 file(s) · 786 symbol(s) indexed
-- Languages: config (2), python (87), shell (2)
+- 94 file(s) · 841 symbol(s) indexed
+- Languages: config (2), python (90), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
 
-- `AGENTS.md`
 - `docs/required-reading.md`
 - `docs/project-rules.md`
 - `docs/software-overview.md`
@@ -60,6 +59,7 @@ gateway/
       routes/
         __init__.py  — "HTTP routers for the mobile contract surface."
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
+        conversations.py  — "Conversations and contextual messaging — issue #10."
         decisions.py  — "Operational decisions: sensitive tasks held for a human to resolve — issue #6."
         epics.py  — "Epics — issue #8."
         issues.py  — "Issues — issue #8."
@@ -92,6 +92,7 @@ gateway/
       __init__.py
       agent_hub.py
       audit.py
+      conversation_types.py  — "Closed vocabulary for conversation context references, and their error."
       issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
       metrics.py
       store.py
@@ -118,6 +119,7 @@ tests/
     test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
+    test_conversations.py  — "Conversations and contextual messaging — issue #10."
     test_decisions.py  — "Operational decisions — issue #6."
     test_epics_issues.py  — "Epics and issues — issue #8."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
@@ -276,6 +278,19 @@ tests/
 - `refresh(body, response, session)` *(async function)* — "Rotate a refresh token into a new pair."
 - `revoke(request, response, body, session)` *(async function)* — "Sign out: end the grant now rather than at expiry."
 - `current_actor(response, principal)` *(async function)* — "Who is calling, and what this build will let them do."
+
+### `gateway/app/api/routes/conversations.py`
+
+> Conversations and contextual messaging — issue #10.
+
+- **`ContextReference`** *(class)*
+- **`CreateConversationRequest`** *(class)*
+- **`CreateMessageRequest`** *(class)*
+- `list_conversations(response, project_id, cursor, limit, principal, session)` *(async function)* — "Conversations the caller may see, newest-created first."
+- `get_conversation(conversation_id, response, principal, session)` *(async function)*
+- `list_messages(conversation_id, response, cursor, limit, principal, session)` *(async function)* — "A conversation's messages, oldest first."
+- `create_conversation(payload, response, idempotency_key, principal, session)` *(async function)* — "Start a conversation. Every context reference is resolved and checked here."
+- `post_message(conversation_id, payload, response, idempotency_key, principal, session)` *(async function)* — "Post a message. `Idempotency-Key` is what makes an offline retry safe."
 
 ### `gateway/app/api/routes/decisions.py`
 
@@ -487,6 +502,9 @@ tests/
 - **`TaskModel`** *(class)*
 - **`EpicModel`** *(class)*
 - **`IssueModel`** *(class)*
+- **`ConversationModel`** *(class)* — "A contextual thread linked to at least one product entity — issue #10."
+- **`ConversationMessageModel`** *(class)* — "One message in a conversation. Immutable once written — no update path."
+- **`ConversationReadStateModel`** *(class)* — "How far one actor has read into one conversation."
 - **`TaskLogModel`** *(class)*
 - **`AuditEventModel`** *(class)*
 - **`MessageReceiptModel`** *(class)*
@@ -511,6 +529,13 @@ tests/
 ### `gateway/app/services/audit.py`
 
 - `record_event(session, entity_type, entity_id, event_type, payload)` *(async function)*
+
+### `gateway/app/services/conversation_types.py`
+
+> Closed vocabulary for conversation context references, and their error.
+
+- **`ConversationPlanningError`** *(class)* — "A create input that fails validation inside the store itself."
+  - `__init__(self, field, code, message)` *(method)*
 
 ### `gateway/app/services/issue_types.py`
 
@@ -581,6 +606,15 @@ tests/
 - `list_issues_page(session)` *(async function)*
 - `update_issue(session, issue_id)` *(async function)*
 - `link_issue_to_epic(session)` *(async function)* — "Attach `issue_id` to `epic_id`. Both must already exist in one project."
+- `create_conversation(session)` *(async function)* — "Create a conversation from an already-resolved, already-authorized context."
+- `get_conversation(session, conversation_id)` *(async function)*
+- `get_conversation_for_projects(session, conversation_id, project_ids)` *(async function)* — "A conversation the caller may see, or None. Mirrors `get_epic_for_projects`."
+- `list_conversations_page(session)` *(async function)* — "Conversations the caller may see, newest-created first, over-fetched by one."
+- `conversation_read_states(session)` *(async function)* — "`{conversation_id: last_read_at}` for one actor, over the given ids."
+- `conversation_unread()` — "Whether an actor has unseen activity in a conversation."
+- `mark_conversation_read(session)` *(async function)* — "Advance (never retreat) one actor's read cursor on one conversation."
+- `create_conversation_message(session)` *(async function)* — "Append a message. Immutable once written — there is no update path."
+- `list_conversation_messages_page(session)` *(async function)* — "A conversation's messages, oldest first — the order a thread reads in."
 
 ### `scripts/apply_migrations.py`
 
@@ -811,6 +845,44 @@ tests/
 - `test_the_report_and_the_endpoints_agree(api, who)` *(async function)* — "The claim the whole endpoint exists for."
 - `test_the_administrative_action_describes_what_the_list_endpoint_does(api)` *(async function)* — "`sessions.readAllProjects` is administrative because it crosses projects."
 - `test_the_administrative_action_describes_what_the_missions_list_endpoint_does(api)` *(async function)* — "`missions.readAllProjects` mirrors `sessions.readAllProjects` — same widening."
+
+### `tests/integration/test_conversations.py`
+
+> Conversations and contextual messaging — issue #10.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)*
+- `auth(token)`
+- `make_task(factory, project_id)` *(async function)*
+- `make_issue(factory, project_id, **kwargs)` *(async function)*
+- `make_conversation(factory)` *(async function)*
+- `create_payload(context, title)`
+- `test_conversations_require_a_token(api)` *(async function)*
+- `test_reader_cannot_create_a_conversation_or_post_a_message(api)` *(async function)*
+- `test_reader_can_still_list_get_and_read_messages(api)` *(async function)*
+- `test_a_conversation_in_an_invisible_project_is_not_found(api)` *(async function)* — "404, never 403 — confirming existence is what probing is for."
+- `test_create_requires_at_least_one_context_reference(api)` *(async function)*
+- `test_create_rejects_an_unknown_context_type(api)` *(async function)*
+- `test_create_with_a_context_reference_in_a_hidden_project_is_not_found(api)` *(async function)* — "Unauthorized entity references are rejected without disclosing hidden resources."
+- `test_create_with_an_unknown_context_id_is_not_found(api)` *(async function)* — "A reference to something that does not exist answers exactly like a hidden one."
+- `test_create_rejects_context_references_spanning_two_projects(api)` *(async function)*
+- `test_create_accepts_a_session_decision_or_mission_reference_to_the_same_task(api)` *(async function)* — "session/decision/mission all name the same TaskModel row."
+- `test_create_derives_project_id_from_the_context_and_deduplicates(api)` *(async function)*
+- `test_a_project_outside_the_caller_visibility_is_not_found_when_used_as_context(api)` *(async function)*
+- `test_a_retried_conversation_create_does_not_create_a_second_conversation(api)` *(async function)*
+- `test_post_message_stores_markdown_and_attachments_verbatim(api)` *(async function)*
+- `test_post_message_rejects_an_empty_body(api)` *(async function)*
+- `test_a_retried_message_post_does_not_create_a_second_message(api)` *(async function)* — "Message creation is idempotent for offline retries — the acceptance criterion."
+- `test_the_same_key_with_a_different_body_is_a_conflict(api)` *(async function)* — "Reusing a key for a different payload is a client bug, not a silent replay."
+- `test_a_message_without_an_idempotency_key_is_never_deduplicated(api)` *(async function)* — "No key means no replay protection — each call is a genuinely new message."
+- `test_a_new_message_makes_the_conversation_unread_for_others(api)` *(async function)*
+- `test_fetching_messages_marks_the_conversation_read(api)` *(async function)*
+- `test_an_early_page_of_messages_does_not_mark_later_ones_read(api)` *(async function)* — "Fetching the oldest page must not silently mark newer, unfetched messages seen."
+- `test_an_empty_conversation_is_never_unread(api)` *(async function)*
+- `test_the_conversation_list_cursor_walks_every_conversation_once(api)` *(async function)*
+- `test_the_message_list_cursor_walks_every_message_once_oldest_first(api)` *(async function)*
+- `test_a_conversation_cursor_from_a_different_project_is_rejected(api)` *(async function)*
+- `test_list_conversations_filters_by_project(api)` *(async function)*
 
 ### `tests/integration/test_decisions.py`
 

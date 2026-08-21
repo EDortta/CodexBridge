@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.4.0
+  version: 1.5.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -1839,6 +1839,230 @@ paths:
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
 
+  /api/v1/conversations:
+    get:
+      operationId: listConversations
+      tags: [conversations]
+      summary: Conversations the caller may see, newest-created first
+      description: |
+        Ordered by creation time, never by `lastActivityAt` — sorting by an
+        activity timestamp would move a conversation's position in the list
+        the instant a new message lands, which can skip or repeat rows across
+        a paginated walk. See `docs/api/README.md` "Conversations (issue
+        #10)". A client that wants "most recently active first" sorts the
+        page client-side using `lastActivityAt`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: projectId
+          in: query
+          required: false
+          description: Repeatable. Restricts to these projects, intersected with what the caller may see.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/ProjectId'
+      responses:
+        '200':
+          description: A page of conversations.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Conversation'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: createConversation
+      tags: [conversations]
+      summary: Start a conversation
+      description: |
+        `context` must name at least one product entity — the acceptance
+        criterion this field exists to satisfy. Every reference is resolved
+        and authorization-checked the same way `POST /api/v1/epics/{epicId}/issues/{issueId}`
+        checks both sides of its link: a reference to an entity the caller
+        cannot see answers `404`, indistinguishable from a reference to one
+        that does not exist. Every reference must resolve to the same
+        project, or the request is rejected (`400`); there is no `projectId`
+        field of its own — the project is derived from `context`.
+
+        With `Idempotency-Key`, a retry returns the first response rather
+        than creating a second conversation.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConversationRequest'
+      responses:
+        '201':
+          description: The created conversation.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/conversations/{conversationId}:
+    get:
+      operationId: getConversation
+      tags: [conversations]
+      summary: One conversation
+      description: |
+        `conversationId` outside the caller's visible projects answers
+        `404`, never `403` — the same probing-prevention rule a single hidden
+        session answers with.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The conversation.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/conversations/{conversationId}/messages:
+    get:
+      operationId: listMessages
+      tags: [conversations]
+      summary: A conversation's messages, oldest first
+      description: |
+        Oldest first, unlike every newest-first collection elsewhere in this
+        API — a thread is read forward from where it starts, the same
+        reasoning `GET /api/v1/missions/{missionId}/timeline` uses.
+
+        Fetching a page advances the caller's read cursor to the newest
+        message *in that page*, not to "now" — a client that has only fetched
+        an early page must not have later, unfetched messages marked as seen.
+        `docs/api/README.md` "Conversations (issue #10)" has the full
+        reasoning behind `unread`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of messages.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Message'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: postMessage
+      tags: [conversations]
+      summary: Post a message
+      description: |
+        `Idempotency-Key` is what makes an offline retry safe: a mobile
+        client that loses the network right after sending cannot know
+        whether the message landed, and retrying with the same key returns
+        the first response rather than posting a second copy. This is issue
+        #10's acceptance criterion ("message creation is idempotent for
+        offline retries") verbatim.
+
+        `attachments` are opaque artifact/file identifiers, recorded and
+        returned unvalidated — no `ArtifactModel` exists yet (issue #11). See
+        `docs/api/README.md` "Conversations (issue #10)".
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMessageRequest'
+      responses:
+        '201':
+          description: The created message.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
   /health:
     get:
       operationId: getHealth
@@ -3204,6 +3428,128 @@ components:
         blockedReason:
           type: [string, 'null']
           maxLength: 20000
+
+    ConversationContextType:
+      type: string
+      enum: [project, session, decision, mission, issue]
+      description: |
+        `session`, `decision` and `mission` all name the same `TaskModel` row
+        under three vocabularies — see `docs/api/README.md`'s "Decisions" and
+        "Missions" sections. `artifact` is deliberately absent: no
+        `ArtifactModel` exists yet (issue #11), so a reference of that type
+        could not be checked for existence or for project visibility. See
+        `docs/api/README.md` "Conversations (issue #10)".
+
+    ContextReference:
+      type: object
+      description: One product entity a conversation is about.
+      required: [type, id]
+      properties:
+        type:
+          $ref: '#/components/schemas/ConversationContextType'
+        id:
+          $ref: '#/components/schemas/Id'
+
+    Conversation:
+      type: object
+      description: |
+        A thread linked to at least one product entity. `projectId` is
+        derived from `context`, not supplied independently — every reference
+        in `context` resolves to the same project.
+      required: [id, projectId, context, unread, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        title:
+          type: [string, 'null']
+          maxLength: 255
+        context:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ContextReference'
+        unread:
+          type: boolean
+          description: |
+            Whether the caller has unseen activity. `false` for a
+            conversation with no messages yet. Advances only through
+            `GET .../messages` (up to the newest message actually fetched)
+            and `POST .../messages` (the sender's own cursor) — issue #10
+            names no "mark as read" endpoint. See `docs/api/README.md`
+            "Conversations (issue #10)".
+        lastActivityAt:
+          type: [string, 'null']
+          format: date-time
+          description: Timestamp of the most recent message, or `null` when there are none yet.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        createdBy:
+          type: [string, 'null']
+          description: Email, or id when no email is on record, of who started this.
+
+    CreateConversationRequest:
+      type: object
+      required: [context]
+      properties:
+        title:
+          type: string
+          maxLength: 255
+        context:
+          type: array
+          minItems: 1
+          maxItems: 16
+          description: |
+            At least one context reference is required — the acceptance
+            criterion this field exists to satisfy. Every reference must
+            resolve to the same project.
+          items:
+            $ref: '#/components/schemas/ContextReference'
+
+    Message:
+      type: object
+      required: [id, conversationId, body, attachments, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        conversationId:
+          $ref: '#/components/schemas/Id'
+        author:
+          type: [string, 'null']
+          description: Email, or id when no email is on record, of who sent this.
+        body:
+          type: string
+          maxLength: 50000
+          description: Markdown source, stored and returned unrendered. Rendering is the client's responsibility.
+        attachments:
+          type: array
+          description: |
+            Opaque artifact/file identifiers. Unvalidated: no `ArtifactModel`
+            exists yet (issue #11), so these are recorded and returned
+            exactly as sent.
+          items:
+            type: string
+            maxLength: 255
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+
+    CreateMessageRequest:
+      type: object
+      required: [body]
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 50000
+          description: Markdown source.
+        attachments:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 255
 
     LogLine:
       type: object

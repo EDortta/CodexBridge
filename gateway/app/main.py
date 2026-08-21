@@ -13,6 +13,7 @@ from gateway.app.api.idempotency import purge_expired
 from gateway.app.api.rate_limit import RateLimitDependency, client_key
 from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import decisions, missions, probes, projects, sessions
+from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import epics as epics_routes
 from gateway.app.api.routes import issues as issues_routes
 from gateway.app.api.setup import install_api_conventions
@@ -129,6 +130,11 @@ app.include_router(auth_routes.router, dependencies=[Depends(RateLimitDependency
 # authorization plumbing as sessions and auth above.
 app.include_router(epics_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 app.include_router(issues_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# Contextual conversations and messaging (issue #10): threads linked to
+# projects, sessions/decisions/missions and issues. Same limiter, same
+# authorization plumbing as epics and issues above.
+app.include_router(conversations_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:

@@ -857,6 +857,120 @@ it on sign-in.
 
 ---
 
+## Conversations (issue #10)
+
+`GET /api/v1/conversations`, `GET .../{id}`, `GET .../{id}/messages`,
+`POST .../{id}/messages`, `POST /api/v1/conversations`.
+
+A **conversation** is a thread linked to at least one product entity. A
+**context reference** names the entity: `project` (`ProjectModel`), `session`
+/ `decision` / `mission` (all the same `TaskModel` row, under the three
+vocabularies "Decisions" and "Missions" above already use), or `issue`
+(`IssueModel`, issue #8).
+
+### `artifact` is not a context type
+
+The issue's Objective names conversations "linked to projects, decisions,
+missions, issues, sessions and artifacts". Five of those six have a backing
+model this build can check a reference against; `artifact` does not —
+`ArtifactModel` has not shipped (issue #11) — so a reference of that type
+could not be validated for existence or for project visibility, which is
+exactly what the acceptance criterion below asks every context reference to
+get. Rather than accept an unverifiable reference, `artifact` is omitted from
+`ConversationContextType` until issue #11 gives it something to check
+against, the same discipline issue #8 applied to "missions, conversations and
+decisions" as issue links and issue #7 applied to `dependencies` /
+`relatedEntities`: no backing entity, no field. See
+`gateway/app/services/conversation_types.py`'s module docstring.
+
+This does not remove artifacts from the feature: "attachment references
+through artifact/file identifiers" is a *message* concept.
+`Message.attachments` carries opaque artifact/file ids on each message,
+recorded and returned unvalidated for the same reason
+`Issue.dependencies` records ids without this build owning a dependency
+graph — and is unaffected by the restriction above.
+
+### Every context reference is resolved and authorization-checked, not just stored
+
+`POST /api/v1/conversations` resolves each `context` entry through the same
+`*_for_projects` getter its analog already uses — `get_project_for_caller`,
+`get_task_for_projects`, `get_issue_for_projects` — the same functions
+`GET /api/v1/sessions/{id}` and `POST /api/v1/epics/{epicId}/issues/{issueId}`
+already rely on to make a hidden resource indistinguishable from a
+nonexistent one. A context reference the caller cannot see therefore answers
+`404`, never a `400` that would confirm the id exists to someone who was not
+given it — issue #10's acceptance criterion ("unauthorized entity references
+are rejected without disclosing hidden resources") verbatim.
+
+There is no independent `projectId` field on the create request. The
+conversation's project is *derived* from `context`: every reference must
+resolve to the same project, or the request is rejected with
+`400 validation_failed` / `mixed_project`. A conversation is always about one
+project's worth of work, the same assumption every other collection in this
+API already makes.
+
+### Unread and last-activity, without a "mark as read" endpoint
+
+Issue #10 names no such endpoint, so `ConversationReadStateModel` can only
+move as a side effect of an endpoint that already exists:
+
+- `GET .../messages` advances the caller's cursor to the newest message
+  **actually returned in that page**, not to "now". A client paging forward
+  from the oldest message must not have later, unfetched messages marked
+  seen just because an earlier page was fetched.
+- `POST .../messages` advances the sender's own cursor to the message just
+  sent, so posting never leaves the sender's own conversation reported back
+  to them as unread.
+- `POST /conversations` marks its creator caught up immediately — they were
+  just looking at what they wrote.
+
+`unread` is therefore a field that genuinely changes, in both directions,
+under exercise by this build's own endpoints — not a flag that can only ever
+read one way, the same discipline `probes.CAPABILITIES` and issue #7's
+dropped `dependencies` field are already held to elsewhere in this document.
+An empty conversation (`lastActivityAt: null`) is never unread, for anyone.
+
+### Ordering: the conversation list is stable, never "most recent first"
+
+`GET /api/v1/conversations` orders by `createdAt`/`id` — creation order —
+**never** by `lastActivityAt`. Sorting by an activity timestamp would move a
+conversation's position in the list the instant a new message lands, which
+can skip or repeat rows across a client's paginated walk: the direct opposite
+of this issue's own acceptance criterion ("pagination preserves stable
+ordering"). `lastActivityAt` is still reported on every item, for a client
+that wants to sort the page itself.
+
+`GET .../messages` is oldest-first — the order a thread reads in, the same
+reasoning `GET /api/v1/missions/{id}/timeline` already gives for a mission's
+timeline, and unlike every newest-first collection elsewhere in this API.
+
+### No `revision`, no `ETag`, no `If-Match`
+
+Every other writable entity in this contract publishes a monotonic
+`revision` because something can mutate it out from under a concurrent
+reader. Nothing here can: a conversation is never edited after creation (no
+`PATCH`), and a message is immutable once posted. `ProjectModel` is this
+contract's other GET-only, revision-less entity, for the same reason — see
+"Optimistic concurrency" below, which this section is a deliberate exception
+to, not an oversight.
+
+### Idempotency, reused rather than reinvented
+
+`POST /api/v1/conversations` and `POST .../{id}/messages` both accept
+`Idempotency-Key` and follow `POST /api/v1/issues`'s reserve-then-complete
+shape exactly, including the same convention
+`POST /api/v1/epics/{epicId}/issues/{issueId}` established: the idempotency
+record's `endpoint` is the literal route template, not the path with the
+concrete id interpolated in — the fingerprint (which does embed the
+conversation id and body) is what tells a key reused for a genuinely
+different operation apart from a legitimate retry, so a same-key,
+different-fingerprint call is answered `409`, never silently replayed. This
+is issue #10's "message creation is idempotent for offline retries"
+acceptance criterion, and the mechanism that also prevents the duplicate
+messages the issue's own test coverage requirement names.
+
+---
+
 ## Cross-cutting rules every endpoint inherits
 
 Implemented in `gateway/app/api/` (issue #12). An endpoint does not re-invent

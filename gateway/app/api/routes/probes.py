@@ -58,7 +58,11 @@ version_router = APIRouter()
 # (issue #7), and `GET/POST/PATCH /api/v1/epics/**` + `/api/v1/issues/**`
 # (issue #8). See each section of `docs/api/README.md` for the field-level
 # detail; none of the four alone is what "1.4.0" means.
-API_CONTRACT_VERSION = "1.4.0"
+#
+# 1.4.0 -> 1.5.0: `GET/POST /api/v1/conversations/**` (issue #10) — contextual
+# conversations and messaging. Additive only (new endpoints, new schemas), so
+# a minor bump per docs/api/README.md's "What is not breaking".
+API_CONTRACT_VERSION = "1.5.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a
