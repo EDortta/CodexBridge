@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from fastapi.routing import iter_route_contexts
 from fastapi.testclient import TestClient
 from openapi_spec_validator import validate
 from openapi_spec_validator.readers import read_from_filename
@@ -138,7 +139,7 @@ def _brace_error(path: str) -> str | None:
     return "unterminated '{'" if depth else None
 
 
-def _route_entries(route: object) -> set[tuple[str, str]]:
+def _route_entries(route_context: object) -> set[tuple[str, str]]:
     """Every (path, METHOD) pair one route object exposes.
 
     Deliberately typed against Starlette's base classes rather than FastAPI's
@@ -150,16 +151,29 @@ def _route_entries(route: object) -> set[tuple[str, str]]:
     this gate while it reported green. Those four are switched off now
     (`test_generated_openapi_is_not_served`), but the blind spot was in the
     filter, not in them.
+
+    `route_context` is a `fastapi.routing.RouteContext` as yielded by
+    `iter_route_contexts`, not a raw route. Since FastAPI's lazy router
+    include (`_IncludedRouter`), `app.routes` holds one `_IncludedRouter` per
+    `include_router()` call rather than that router's flattened routes, and
+    the mounted path prefix is only resolved lazily. `original_route` still
+    carries the true leaf type — the same `Route`/`WebSocketRoute` classes as
+    before — so the Mount/Host blind spot this docstring describes stays
+    intact: `iter_route_contexts` recurses through `_IncludedRouter` but not
+    through `Mount`/`Host`, so those still surface here as unrecognised and
+    still fail `test_gate_sees_every_route_the_app_exposes` on purpose.
     """
-    path = getattr(route, "path", None)
+    original_route = getattr(route_context, "original_route", route_context)
+    path = getattr(route_context, "path", None)
     if path is None:
         return set()
-    if isinstance(route, StarletteWebSocketRoute):
+    if isinstance(original_route, StarletteWebSocketRoute):
         return {(_normalize(path), WEBSOCKET_METHOD)}
-    if isinstance(route, StarletteRoute):
+    if isinstance(original_route, StarletteRoute):
+        methods = getattr(route_context, "methods", None)
         return {
             (_normalize(path), method)
-            for method in (route.methods or set())
+            for method in (methods or set())
             if method not in IMPLICIT_METHODS
         }
     return set()
@@ -168,8 +182,8 @@ def _route_entries(route: object) -> set[tuple[str, str]]:
 def _app_routes() -> set[tuple[str, str]]:
     """Every (path, METHOD) pair the application exposes, HTTP and WebSocket."""
     pairs: set[tuple[str, str]] = set()
-    for route in app.routes:
-        pairs |= _route_entries(route)
+    for route_context in iter_route_contexts(app.routes):
+        pairs |= _route_entries(route_context)
     return pairs
 
 
@@ -233,9 +247,10 @@ def test_gate_sees_every_route_the_app_exposes() -> None:
     escaped the first cut of this file.
     """
     invisible = [
-        f"{type(route).__name__} {getattr(route, 'path', '<no path>')}"
-        for route in app.routes
-        if not _route_entries(route)
+        f"{type(route_context.original_route).__name__} "
+        f"{route_context.path or '<no path>'}"
+        for route_context in iter_route_contexts(app.routes)
+        if not _route_entries(route_context)
     ]
     assert not invisible, (
         f"routes the gate cannot see, so cannot check: {invisible}. Mounting a "
@@ -366,8 +381,8 @@ def test_route_paths_are_well_formed(spec: dict) -> None:
     this file would report it as a mysterious path mismatch.
     """
     malformed = []
-    for route in app.routes:
-        path = getattr(route, "path", None)
+    for route_context in iter_route_contexts(app.routes):
+        path = route_context.path
         if isinstance(path, str) and (problem := _brace_error(path)):
             malformed.append(f"served {path!r}: {problem}")
     for path in (spec.get("paths") or {}):

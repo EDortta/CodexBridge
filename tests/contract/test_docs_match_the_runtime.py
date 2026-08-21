@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from fastapi.routing import iter_route_contexts
 from starlette.routing import Route as StarletteRoute
 
 from gateway.app.api.rate_limit import RateLimitDependency
@@ -110,15 +111,26 @@ def _rate_limited_api_routes() -> list[str]:
     stale if the thing it denies is actually there.
     """
     limited: list[str] = []
-    for route in app.routes:
-        if not isinstance(route, StarletteRoute) or not route.path.startswith("/api"):
+    # `app.routes` holds one `_IncludedRouter` per `include_router()` call
+    # rather than that router's flattened routes (FastAPI's lazy router
+    # include), and the router-level `dependencies=[Depends(RateLimitDependency(...))]`
+    # that actually guards these routes is only folded into the *effective*
+    # dependant, not the sub-router's own unresolved one. `iter_route_contexts`
+    # is the same recursion FastAPI's own `get_openapi` uses to see through
+    # `_IncludedRouter`, and its `dependant` is the merged one.
+    for route_context in iter_route_contexts(app.routes):
+        path = route_context.path
+        if not isinstance(route_context.original_route, StarletteRoute) or not path or not path.startswith("/api"):
+            continue
+        dependant = getattr(route_context, "dependant", None)
+        if dependant is None:
             continue
         if any(
             isinstance(dependency.call, RateLimitDependency)
-            for dependency in route.dependant.dependencies
+            for dependency in dependant.dependencies
             if dependency.call is not None
         ):
-            limited.append(route.path)
+            limited.append(path)
     return limited
 
 

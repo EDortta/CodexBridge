@@ -240,17 +240,23 @@ def _api_route_signals() -> dict[str, bool]:
     list: a capability flag is a promise about request handling, so the evidence
     has to come from the handlers.
     """
+    from fastapi.routing import iter_route_contexts
+
     from gateway.app.main import app
 
     query_names: set[str] = set()
     header_names: set[str] = set()
     paths: set[str] = set()
-    for route in app.routes:
-        path = str(getattr(route, "path", ""))
+    # `app.routes` holds one `_IncludedRouter` per `include_router()` call
+    # rather than that router's flattened routes (FastAPI's lazy router
+    # include); `iter_route_contexts` is the same recursion FastAPI's own
+    # `get_openapi` uses to see through it to the real, prefixed routes.
+    for route_context in iter_route_contexts(app.routes):
+        path = route_context.path or ""
         if not (path == "/api" or path.startswith("/api/")):
             continue
         paths.add(path)
-        dependant = getattr(route, "dependant", None)
+        dependant = getattr(route_context, "dependant", None)
         if dependant is not None:
             _collect_params(dependant, query_names, header_names)
 
@@ -645,15 +651,21 @@ def test_every_served_api_route_carries_the_rate_limiter() -> None:
     route added with `@app.get("/api/v1/...")` further down the module would be
     unlimited. This asserts the claim instead of trusting the comment.
     """
+    from fastapi.routing import iter_route_contexts
+
     from gateway.app.api.rate_limit import RateLimitDependency
     from gateway.app.main import app
 
     unlimited = []
-    for route in app.routes:
-        path = str(getattr(route, "path", ""))
+    # See `_api_route_signals` above: `app.routes` no longer holds flattened
+    # routes, and the limiter is attached via `include_router(dependencies=…)`,
+    # which is only folded into the *effective* route's `dependencies` — not
+    # into the sub-router's own unresolved `APIRoute.dependencies`.
+    for route_context in iter_route_contexts(app.routes):
+        path = route_context.path or ""
         if not (path == "/api" or path.startswith("/api/")):
             continue
-        dependencies = getattr(route, "dependencies", []) or []
+        dependencies = getattr(route_context, "dependencies", []) or []
         calls = [getattr(dep, "dependency", None) for dep in dependencies]
         if not any(isinstance(call, RateLimitDependency) for call in calls):
             unlimited.append(path)
