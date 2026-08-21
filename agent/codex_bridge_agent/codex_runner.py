@@ -251,14 +251,20 @@ class CodexRunner:
         continue_session_id: str | None,
     ) -> list[str]:
         if continue_session_id:
+            # `codex exec resume` (unlike `codex exec`) has no `-C`/`--cd` flag at
+            # all — confirmed via `codex exec resume --help` against the real CLI
+            # (issue #33); passing it makes clap reject the whole command with exit
+            # code 2 before anything runs. `resume` instead scopes/finds sessions by
+            # the process's actual cwd (see its `--all` flag: "Show all sessions
+            # (disables cwd filtering)"), which `run_task` already sets via
+            # `create_subprocess_exec(..., cwd=str(project_root))` below — so the
+            # project directory still reaches it, just not as a flag.
             return [
                 self.settings.codex_bin,
                 "exec",
                 "resume",
                 continue_session_id,
                 "--json",
-                "-C",
-                str(project_root),
                 "-o",
                 str(output_path),
                 instruction,
@@ -293,15 +299,28 @@ class CodexRunner:
         return tests[:50]
 
     def _find_session_id(self, raw_events: list[dict]) -> str | None:
+        """Looks for the resumable session id across every JSON event shape we know of.
+
+        `thread_id` is the real one: codex-cli 0.147.0's `codex exec --json` opens
+        every stream with `{"type": "thread.started", "thread_id": "<uuid>"}`
+        (issue #32, confirmed by driving the real CLI in
+        `tests/integration/test_codex_runner_real_process.py`). The other four keys
+        (`session_id`/`sessionId`/`conversation_id`/`conversationId`) were never
+        observed against a real CLI version — they predate the real-process test and
+        are kept as defensive fallbacks in case an older/newer `codex` build, or a
+        differently-configured one, emits one of those shapes instead. `thread_id` is
+        checked first since it is the one shape known to actually occur.
+        """
+        keys = ("thread_id", "session_id", "sessionId", "conversation_id", "conversationId")
         for event in raw_events:
             if isinstance(event, dict):
-                for key in ("session_id", "sessionId", "conversation_id", "conversationId"):
+                for key in keys:
                     value = event.get(key)
                     if isinstance(value, str) and value:
                         return value
                 payload = event.get("payload")
                 if isinstance(payload, dict):
-                    for key in ("session_id", "sessionId", "conversation_id", "conversationId"):
+                    for key in keys:
                         value = payload.get(key)
                         if isinstance(value, str) and value:
                             return value

@@ -9,28 +9,32 @@ the real CLI does. This file closes exactly that gap by driving one real `codex 
 (codex-cli 0.147.0) subprocess end-to-end through `CodexRunner.run_task`, against a
 disposable scratch git repo (never a real project, never given a remote).
 
-Two real, reproducible mismatches between what `codex_runner.py` assumes and what the
+Two real, reproducible mismatches between what `codex_runner.py` assumed and what the
 installed `codex` 0.147.0 binary actually does came out of writing this file — both
-demonstrated live below, not inferred from reading the code:
+demonstrated live below, not inferred from reading the code. Both are now FIXED
+(issues #32 and #33); the tests below assert the fixed behavior against the real CLI,
+not just that the bugs exist.
 
-1. `CodexRunner._find_session_id` looks for `session_id`, `sessionId`,
-   `conversation_id` or `conversationId`, top-level or nested under `event["payload"]`.
-   Real `codex exec --json` opens the stream with
-   `{"type": "thread.started", "thread_id": "<uuid>"}` — the id lives under a key
-   `_find_session_id` never checks. Every real run's `codex_session_id` comes back
-   `None`; `test_run_task_drives_a_real_codex_process_end_to_end` below asserts this
-   directly against real output, not a guess.
+1. (issue #32, fixed) `CodexRunner._find_session_id` used to look only for
+   `session_id`, `sessionId`, `conversation_id` or `conversationId`, top-level or
+   nested under `event["payload"]`. Real `codex exec --json` opens the stream with
+   `{"type": "thread.started", "thread_id": "<uuid>"}` — a key `_find_session_id`
+   never checked, so `codex_session_id` always came back `None`.
+   `_find_session_id` now also checks `thread_id` (checked first, since it's the
+   shape actually observed); `test_run_task_drives_a_real_codex_process_end_to_end`
+   below asserts `codex_session_id` is populated from a real run.
 
-2. The resume branch of `_build_command` builds
+2. (issue #33, fixed) The resume branch of `_build_command` used to build
    `[codex, exec, resume, <id>, --json, -C, <dir>, -o, <file>, instruction]`. The real
    `codex exec resume` subcommand does not accept `-C`/`--cd` at all (confirmed via
-   `codex exec resume --help`); it rejects the flag with exit code 2 before running
-   anything: `error: unexpected argument '-C' found`.
-   `test_run_task_resume_branch_is_rejected_by_the_real_cli` below reproduces that
-   exit code through `run_task` itself, unmodified. Combined with (1) — no session id
-   is ever captured to resume with in the first place — session continuation
-   (`continue_codex_session` on the gateway side) cannot work against this CLI version
-   today, in two independent ways.
+   `codex exec resume --help`); it used to reject the flag with exit code 2 before
+   running anything: `error: unexpected argument '-C' found`. `_build_command` no
+   longer passes `-C` in the resume branch — the project directory still reaches the
+   subprocess via `cwd=` on `create_subprocess_exec`, which is how `resume` itself
+   scopes sessions (see its `--all` flag: "disables cwd filtering").
+   `test_run_task_resume_actually_resumes_the_real_session` below drives a real
+   resume, end to end, using the session id captured from a real first run — both
+   bugs had to be fixed together for that to be possible at all.
 
 A third finding, not asserted as a hard regression here because it depends on the
 executor host's local trust registry rather than on `codex_runner.py` itself:
@@ -141,12 +145,12 @@ async def test_run_task_drives_a_real_codex_process_end_to_end(tmp_path: Path) -
         "the thread.started event"
     )
 
-    # Finding (1): _find_session_id never looks for 'thread_id', so it can never
-    # find the id codex-cli actually emits. If this assertion ever starts
-    # failing, _find_session_id has been fixed to read 'thread_id' (or codex
-    # changed its event shape again) — update this test and the docstring above
-    # together, don't just delete the assertion.
-    assert result["codex_session_id"] is None
+    # Finding (1), fixed: _find_session_id now reads 'thread_id' off the real
+    # thread.started event, so a real run's session id is actually captured. If
+    # this assertion ever starts failing, either _find_session_id regressed or
+    # codex changed its event shape again — update this test and the docstring
+    # above together, don't just delete the assertion.
+    assert result["codex_session_id"] == first_event["thread_id"]
 
     # Finding (3, structural half): the scratch repo is not pre-registered as
     # trusted anywhere, `_build_command` passes no sandbox override, and
@@ -162,27 +166,48 @@ async def test_run_task_drives_a_real_codex_process_end_to_end(tmp_path: Path) -
 
 @requires_real_codex
 @pytest.mark.asyncio
-async def test_run_task_resume_branch_is_rejected_by_the_real_cli(tmp_path: Path) -> None:
-    """Finding (2), reproduced through `run_task` itself rather than by shelling
-    out separately: the resume branch of `_build_command` includes `-C
-    <project_root>`, and the real `codex exec resume` subcommand does not accept
-    that flag. clap rejects it before any model call happens, so this is fast
-    and needs no real session id — any string reaches the same failure, because
-    the argument parser never gets far enough to look at it.
+async def test_run_task_resume_actually_resumes_the_real_session(tmp_path: Path) -> None:
+    """Finding (2), now fixed, driven through `run_task` itself end to end:
+    `_build_command`'s resume branch no longer passes `-C <project_root>`, so
+    `codex exec resume <id> --json -o <file> <instruction>` is what actually
+    reaches the real CLI, and the real CLI accepts it.
+
+    This needs a real session id to resume with, which needs finding (1) fixed
+    too (`_find_session_id` reading `thread_id`) — so this test exercises both
+    fixes together: a first real run captures a resumable `codex_session_id`,
+    then a second real run resumes it and the real CLI actually accepts the
+    command instead of rejecting it with exit code 2 before doing anything.
     """
     _init_scratch_repo(tmp_path)
-
     runner = CodexRunner(AgentSettings())
-    result = await runner.run_task(
-        task_id="real-codex-resume-smoke-1",
+
+    first = await runner.run_task(
+        task_id="real-codex-resume-smoke-first",
+        project_root=tmp_path,
+        instruction="Say the word PING and do nothing else.",
+        timeout_seconds=60,
+        continue_session_id=None,
+        send_log=_collect_logs,
+    )
+    assert first["return_code"] == 0
+    session_id = first["codex_session_id"]
+    assert session_id, "first run must capture a resumable session id before resume can be tested"
+
+    second = await runner.run_task(
+        task_id="real-codex-resume-smoke-second",
         project_root=tmp_path,
         instruction="Say the word PONG and do nothing else.",
-        timeout_seconds=30,
-        continue_session_id="00000000-0000-0000-0000-000000000000",
+        timeout_seconds=60,
+        continue_session_id=session_id,
         send_log=_collect_logs,
     )
 
-    assert result["return_code"] == 2
-    assert result["final_state"] == "failed"
-    assert "-C" in result["command"]
-    assert result["command"][2] == "resume"
+    # The real CLI no longer rejects the command outright (it used to, exit code
+    # 2, before this fix — see the docstring above and issue #33).
+    assert second["return_code"] == 0
+    assert second["final_state"] == "completed"
+    assert second["command"][2] == "resume"
+    assert second["command"][3] == session_id
+    assert "-C" not in second["command"], (
+        "codex exec resume does not accept -C/--cd; _build_command must not pass it"
+    )
