@@ -722,3 +722,58 @@ transient 4-failure blip in `test_agent_ws_handshake.py` matching the
 2026-08-20 entry's own root cause (that file imports the real `gateway.app.
 main.app` instead of an isolated in-memory one); gone on rerun. With this
 session's changes: 508 passed, 0 failed (504 baseline + 4 new).
+
+## 2026-08-21 — #28: `test_agent_ws_handshake.py`'s isolated-DB fix, closing the chronic 4-failure flake
+
+The root cause the 2026-08-20 entry above named but didn't fix, finally owned
+as its own issue (#28) because #25's contract-drift fix removed the noise that
+had been masking it: after #25, this file's four failures were the *only* red
+left in CI, not one line among several.
+
+Confirmed the diagnosis exactly, plus one detail the earlier entry didn't
+have: it isn't only that `client`'s fixture builds `TestClient` around the
+real `gateway.app.main.app` — every other integration test file avoids that
+by building its own `FastAPI()` instance and overriding
+`app.dependency_overrides[get_session]`. This file could not use that same
+trick even if it built its own app, because `/agent/ws` (`gateway/app/
+main.py`'s `agent_ws`) never goes through `Depends(get_session)` at all — it
+opens sessions from the module-level `SessionLocal` directly, the same seam
+`test_refusing_an_anonymous_handshake_touches_no_executor_record` already
+monkeypatches to a database-touch-detector for one test. And the real
+`gateway.app.main.app`'s schema only ever gets created by its `startup` event
+(`Base.metadata.create_all` against the *production* `engine`, default
+`sqlite+aiosqlite:///./codex_bridge.db`) — an event that never fires here in
+the first place, because none of the six tests enters `TestClient` as `with
+client:` (the only thing that runs ASGI lifespan). So every test's outcome
+always depended entirely on whatever schema a stray `codex_bridge.db` already
+had on disk from some unrelated earlier run — CWD- and order-sensitive by
+construction, not a flake in any test's own logic.
+
+Fix: rebuilt the `client` fixture around an isolated `sqlite+aiosqlite:///
+:memory:` engine, `Base.metadata.create_all` run explicitly (no dependence on
+the `startup` event), and `monkeypatch.setattr(main, "SessionLocal", factory)`
+pointed at it — the one seam that actually reaches `/agent/ws`, since there is
+no `Depends(get_session)` to override. `main.app` itself is still the real
+app (needed for the real route and the real `gateway.app.main` logger the
+`caplog` assertions target); only its database is swapped. The fixture had to
+become `async` to build the engine, which pytest's `asyncio_mode = "auto"`
+handles transparently even though all six test functions stayed synchronous
+(`TestClient` calls are blocking regardless) — no need to convert them.
+
+Verified not just "passes once": the isolated file 10/10 in a row, in three
+interleavings with other integration files (before, after, and sandwiched
+between `test_agent_ack_handling.py` / `test_sessions.py` /
+`test_store_and_mcp.py` / `test_probes.py`), and the full suite 4 times in a
+row including once with a stray pre-existing `codex_bridge.db` deliberately
+left in place — the exact condition that used to flip these four tests red.
+Every run: `535 passed, 0 failed`. No `codex_bridge.db` file is created as a
+side effect of running this file anymore either (confirmed by `ls` between
+runs) — the earlier code always created one lazily on first connection even
+though it left it schemaless.
+
+Action next time: an integration test file that imports `gateway.app.main.
+app` directly (rather than building its own minimal `FastAPI()`) is a signal
+to check *how* its routes acquire sessions before reusing the
+`dependency_overrides[get_session]` pattern — a route that reads a
+module-level `SessionLocal` (or `engine`) directly needs that name monkeypatched
+instead, `app.dependency_overrides` never reaches it.
