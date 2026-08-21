@@ -42,6 +42,9 @@ REQUIRED_TABLES: dict[str, str] = {
     "oauth_refresh_tokens": "0003_mobile_auth.sql",
     "epics": "0006_epics_issues.sql",
     "issues": "0006_epics_issues.sql",
+    "conversations": "0007_conversations.sql",
+    "conversation_messages": "0007_conversations.sql",
+    "conversation_read_states": "0007_conversations.sql",
 }
 
 REQUIRED_COLUMNS: dict[str, dict[str, str]] = {

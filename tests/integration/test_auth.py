@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from gateway.app.api import permissions
 from gateway.app.api.routes import auth as auth_routes
+from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import decisions as decisions_routes
 from gateway.app.api.routes import epics as epics_routes
 from gateway.app.api.routes import issues as issues_routes
@@ -162,6 +163,7 @@ async def api(users_file, monkeypatch):
     app.include_router(missions_routes.router)
     app.include_router(epics_routes.router)
     app.include_router(issues_routes.router)
+    app.include_router(conversations_routes.router)
 
     async def override():
         async with factory() as s:
@@ -1033,6 +1035,9 @@ ENDPOINT_FOR_ACTION = {
     "issues.update": ("PATCH", "/api/v1/issues/{id}"),
     "epics.create": ("POST", "/api/v1/epics"),
     "epics.linkIssue": ("POST", "/api/v1/epics/e1/issues/{id}"),
+    "conversations.read": ("GET", "/api/v1/conversations"),
+    "conversations.create": ("POST", "/api/v1/conversations"),
+    "conversations.postMessage": ("POST", "/api/v1/conversations/{id}/messages"),
 }
 
 # Actions with no endpoint of their own, each naming the test that covers it
