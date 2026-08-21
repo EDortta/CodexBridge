@@ -125,6 +125,72 @@ class IssueModel(Base):
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
 
 
+class ConversationModel(Base):
+    """A contextual thread linked to at least one product entity — issue #10.
+
+    `context_json` is a JSON list of `{"type", "id"}` pairs, not a join table:
+    the scope here is "record and surface which entities this conversation is
+    about", the same reasoning `IssueModel.dependencies_json` documents, and a
+    join table with a single consumer is the architecture expansion
+    `docs/limits.md` rules out. `project_id` is denormalized from the context
+    references at creation time (every reference resolves to exactly one
+    project, checked in `store.resolve_conversation_context`) so authorization
+    and listing do not have to parse `context_json` on every query.
+    """
+
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    context_json: Mapped[str] = mapped_column(Text)
+    created_by_user_id: Mapped[str] = mapped_column(String(255))
+    created_by_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Null until the first message. Bumped by `store.create_conversation_message`
+    # alone — this row itself is never PATCHable, so unlike Epic/Issue there is
+    # no `revision`/`ETag` on a conversation: nothing here can go stale under a
+    # concurrent write, because nothing here can be written except by appending
+    # a message, which is its own idempotent, unconditional operation.
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ConversationMessageModel(Base):
+    """One message in a conversation. Immutable once written — no update path."""
+
+    __tablename__ = "conversation_messages"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(128), ForeignKey("conversations.id"))
+    author_user_id: Mapped[str] = mapped_column(String(255))
+    author_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Markdown source, stored and returned verbatim. The server never renders
+    # it; rendering is the mobile client's responsibility (docs/api/README.md).
+    body: Mapped[str] = mapped_column(Text)
+    # Opaque artifact/file identifiers, JSON-encoded. Not validated against a
+    # backing model: no `ArtifactModel` exists yet (issue #11), so these are
+    # recorded as caller-supplied references and returned unchanged, the same
+    # way `IssueModel.dependencies_json` records ids without owning a graph.
+    attachments_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ConversationReadStateModel(Base):
+    """How far one actor has read into one conversation.
+
+    Not exposed by any endpoint of its own: `GET .../messages` advances it as a
+    side effect of fetching the current messages, and `POST .../messages`
+    advances the sender's own past the message just sent — issue #10 names no
+    "mark as read" endpoint, so this is the only mechanism that can move it.
+    """
+
+    __tablename__ = "conversation_read_states"
+
+    conversation_id: Mapped[str] = mapped_column(String(128), ForeignKey("conversations.id"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    last_read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class TaskLogModel(Base):
     __tablename__ = "task_logs"
 

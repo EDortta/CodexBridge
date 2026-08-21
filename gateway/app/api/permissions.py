@@ -46,6 +46,11 @@ ADMIN_SCOPE = "codexbridge.admin"
 # Distinct from CANCEL_SCOPE: stopping a session and writing a project plan are
 # different capabilities an operator may grant separately.
 ISSUES_WRITE_SCOPE = "codexbridge.issues.write"
+# Creating a conversation or posting a message to one (issue #10). Distinct
+# from ISSUES_WRITE_SCOPE for the same reason that scope is distinct from
+# CANCEL_SCOPE: writing a project plan and starting a discussion about it are
+# different capabilities an operator may grant separately.
+CONVERSATIONS_WRITE_SCOPE = "codexbridge.conversations.write"
 
 READ = "read"
 OPERATIONAL = "operational"
@@ -227,6 +232,27 @@ EPICS_LINK_ISSUE = Action(
     summary="Attach an issue to an epic.",
 )
 
+CONVERSATIONS_READ = Action(
+    name="conversations.read",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="List conversations and read one, within the actor's projects.",
+)
+
+CONVERSATIONS_CREATE = Action(
+    name="conversations.create",
+    category=OPERATIONAL,
+    scope=CONVERSATIONS_WRITE_SCOPE,
+    summary="Start a conversation linked to at least one product entity.",
+)
+
+CONVERSATIONS_POST_MESSAGE = Action(
+    name="conversations.postMessage",
+    category=OPERATIONAL,
+    scope=CONVERSATIONS_WRITE_SCOPE,
+    summary="Post a message to a conversation.",
+)
+
 # Order is the reported order. Grouped by class, read first, so a client that
 # renders the list without sorting produces something sensible.
 CATALOGUE: tuple[Action, ...] = (
@@ -239,6 +265,7 @@ CATALOGUE: tuple[Action, ...] = (
     MISSIONS_EXPLAIN,
     EPICS_READ,
     ISSUES_READ,
+    CONVERSATIONS_READ,
     SESSIONS_STOP,
     SESSIONS_PAUSE,
     SESSIONS_RESUME,
@@ -248,6 +275,8 @@ CATALOGUE: tuple[Action, ...] = (
     ISSUES_CREATE,
     ISSUES_UPDATE,
     EPICS_LINK_ISSUE,
+    CONVERSATIONS_CREATE,
+    CONVERSATIONS_POST_MESSAGE,
     SESSIONS_READ_ALL_PROJECTS,
     DECISIONS_READ,
     DECISIONS_DECIDE,

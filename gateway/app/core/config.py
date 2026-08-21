@@ -45,7 +45,8 @@ class Settings(BaseSettings):
     oauth_allowed_client_ids: str = "chatgpt-codexbridge"
     oauth_allowed_redirect_uri_prefixes: str = "https://chatgpt.com,https://chat.openai.com,https://auth.openai.com"
     oauth_default_scopes: str = (
-        "codexbridge.read codexbridge.task.submit codexbridge.task.cancel codexbridge.issues.write"
+        "codexbridge.read codexbridge.task.submit codexbridge.task.cancel "
+        "codexbridge.issues.write codexbridge.conversations.write"
     )
     oauth_access_token_ttl_seconds: int = 3600
     oauth_authorization_code_ttl_seconds: int = 600
