@@ -285,6 +285,19 @@ async def _resolve(
             )
 
         updated = await store.decide_task_approval(session, task.id, outcome, reason)
+        if updated.state == TaskState.WAITING_EXECUTOR.value:
+            # Issue #20 (duplicate: #18): this was the only caller of
+            # `decide_task_approval` that never nudged the queue afterward —
+            # the MCP transport's `approve_codex_task` has done this since
+            # before this REST API existed. `dispatch_available` is the
+            # shared entry point both now use (`AgentHub.dispatch_available`);
+            # it already no-ops for an offline or at-capacity executor, so no
+            # extra guard is needed here. `reject`/`request-revision` never
+            # reach this branch: `decide_task_approval` only sets
+            # `WAITING_EXECUTOR` for an `APPROVED` outcome.
+            from gateway.app.main import hub  # imported late: main includes this router
+
+            await hub.dispatch_available(updated.executor_id)
         await record_event(
             session,
             "task",

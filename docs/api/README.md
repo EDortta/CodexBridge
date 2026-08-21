@@ -587,6 +587,17 @@ resolved since before this API existed. `GET /api/v1/sessions/{id}` and
 same relationship `docs/api/README.md`'s "Sessions" section already draws
 between a session and `TaskModel`.
 
+### `approve` dispatches in the same request, not on a later event
+
+An `approved` outcome that leaves the task in `waiting_executor` is offered to
+its executor before the response returns — `AgentHub.dispatch_available`, the
+same mechanism `approve_codex_task` (MCP) now also calls, rather than each
+transport hand-rolling `is_connected` + `dispatch_next` + `send` (issues
+#18/#20). An offline or already-busy executor is unaffected: the task stays
+`waiting_executor` and is picked up the same way it always was — the next
+`mark_task_finished` call (issue #17) or the executor's own reconnect.
+`reject` and `request-revision` never dispatch; both resolve to `CANCELLED`.
+
 ### Every decision this build serves is critical
 
 Approval is withheld only at `PolicyLevel.SENSITIVE`, so `risk` is `sensitive`

@@ -536,3 +536,86 @@ diffed its paths list against a clean base. Dropped from the integration
 branch; not fixed on gh-7 itself, since an integration branch should not
 alter what its source branches contain. Filed in this session's `RESUME.md`
 for whoever eventually merges gh-7 standalone.
+
+## 2026-08-21 — gh-20 (duplicate: gh-18) and gh-19, recovering a lost session
+
+A prior session (ephemeral cloud container, 2026-08-20) implemented this same
+fix but never got it out: `git push` hit 403/404 and the container recycled
+before anything could be recovered — no branch, no diff, nothing survived.
+This session redid the work from a cold read of the two issues rather than
+trying to reconstruct what the lost session did, since there was nothing to
+reconstruct from.
+
+**#20 (duplicate: #18)**: `POST /api/v1/decisions/{id}/approve` called
+`store.decide_task_approval` and returned 200 without ever touching
+`AgentHub` — an approved task landed `waiting_executor` and stayed there
+until an unrelated event (another task finishing on the same executor,
+a reconnect) happened to nudge the queue. The MCP transport's
+`approve_codex_task` already did this correctly
+(`is_connected` + `dispatch_next` + `send`, hand-rolled inline). Rather than
+duplicate that sequence a third time in `decisions.py`, extracted it into
+`AgentHub.dispatch_available` (`gateway/app/services/agent_hub.py`) — the
+same shape issue #17 already established with `mark_task_finished` for the
+finish/cancel side — and converted **both** known callers onto it: the new
+REST call site, and MCP's `approve_codex_task` (its inline version deleted,
+not left "for compatibility" — design-standards.md §7). `mark_task_finished`
+itself was refactored onto `dispatch_available` too, so the method has three
+callers, not one dressed up as general.
+
+Considered putting the dispatch inside `store.decide_task_approval` itself,
+per the issue's own suggestion and §7's "an extension point with zero
+adopters is dead code" framing. Decided against: `store.py` has no import of
+`AgentHub` anywhere in the codebase today (the dependency only ever runs the
+other way, `agent_hub.py` imports `store`), and every existing hub-effect —
+`mark_task_finished`, `sessions.py`'s `restart_session` — already lives on
+the caller side of a `decide_task_approval`/`restart_finished_task` return,
+never inside the store function itself. Inverting that for one caller would
+have been the actual novel architecture change here, not a reuse of an
+existing pattern.
+
+Found but explicitly left alone: `sessions.py`'s `restart_session` is a
+*third* hand-rolled `is_connected` + `dispatch_next` + `send` sequence,
+predating this fix, not mentioned in scope by #18 or #20. Not converted onto
+`dispatch_available` — doing so would be the same kind of scope creep the
+2026-08-20 gh-5/6/7/8 integration session declined for gh-7's duplicate
+`/health:` key. Left as a note for whoever next touches that function.
+
+**#19**: MCP's `approve_codex_task` recorded only the generic
+`task.approval_decision` event (written inside `decide_task_approval` for
+every caller); the actor-attributed `task.decision_resolved_by_actor` event
+the REST path's `_resolve()` records was missing, so an MCP approval could be
+seen in `audit_events` but never attributed to who approved it — the same gap
+the #17 council already found and fixed for MCP's `cancel_codex_task`
+(`task.stopped_by_actor`), one action later. Fixed by mirroring that call
+exactly, `via: "mcp"`.
+
+Both issues turned out to be one PR: same call site, same audit gap, found by
+the same retroactive council pass. Tested against a real `AgentHub`, not a
+stub, per #18's own DoD — `tests/integration/test_decisions.py`'s fixture now
+wires a real hub (disconnected by default, so every pre-existing test's
+"approval leaves the task at `waiting_executor`" assertion stays true
+unchanged) and `tests/integration/test_store_and_mcp.py` gained its own
+real-hub tests for the MCP path (the existing `DummyHub` there always returns
+`None` from `dispatch_next`, which is exactly why it could not have caught
+either bug).
+
+`python3 -m pytest -q` → 499 passed, 4 failed
+(`tests/integration/test_agent_ws_handshake.py`, all four). Verified this
+failure is not this session's: reproduces identically with none of this
+session's changes applied (`git stash`), and — the more interesting finding —
+depends entirely on whether a stray, gitignored `codex_bridge.db` file
+already exists in the working tree with its schema created. That file is the
+*real* production sqlite target (`gateway/app/core/config.py`'s
+`database_url` default, `sqlite+aiosqlite:///./codex_bridge.db`), and
+`test_agent_ws_handshake.py`'s `client` fixture imports the real
+`gateway.app.main.app` rather than building an isolated in-memory app like
+every other integration test file does — so its outcome depends on
+leftover disk state from whatever last ran the real app's startup event, not
+on anything in the test suite itself. Confirmed by deleting the file and
+re-running clean `development` with zero changes: same 4 failures. The
+"order-dependency" framing in the 2026-08-19/20 entries above is real but
+incomplete — it's not only test execution order, it's shared physical state
+across pytest invocations. Not fixed here (unrelated to #18/#19/#20, and
+`.gitignore` already keeps the file out of the repo); worth its own issue —
+the fix is almost certainly giving `test_agent_ws_handshake.py` its own
+isolated app/engine the way every other integration test file already does.

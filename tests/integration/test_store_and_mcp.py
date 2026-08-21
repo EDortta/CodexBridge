@@ -12,6 +12,7 @@ from gateway.app.db.base import Base
 from gateway.app.mcp.server import handle_mcp_call
 from gateway.app.models.entities import AuditEventModel
 from gateway.app.services import store
+from gateway.app.services.agent_hub import AgentHub
 from shared.protocol import ApprovalDecision, ExecutorRegistration, ProjectRegistration, SubmitTaskRequest, TaskMode, TaskPriority, TaskState
 
 
@@ -421,3 +422,186 @@ async def test_startup_recovery_marks_pending_control_states_as_lost(
     assert recovered["lost"] == 1
     reloaded = await store.get_task(db_session, task.id)
     assert reloaded.state == TaskState.LOST.value
+
+
+# --------------------------------------------------------------------------
+# approve_codex_task via MCP — issues #18/#19/#20
+#
+# `DummyHub` above is a stub (`dispatch_next` always returns `None`), which is
+# exactly why it could not have caught #20's REST-side gap or proven this
+# transport's own dispatch still works after `approve_codex_task` was
+# refactored onto `AgentHub.dispatch_available`. These use a real `AgentHub`
+# over its own database, same as `tests/integration/test_agent_ack_handling.py`.
+# --------------------------------------------------------------------------
+
+
+class _DummyWebSocket:
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+
+    async def send_json(self, payload: dict) -> None:
+        self.sent.append(payload)
+
+
+@pytest.fixture
+async def mcp_hub_factory():
+    """A session factory over a fresh database, seeded like `db_session` but
+    exposed as a factory rather than one open session — `AgentHub` needs to
+    open sessions of its own."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_factory() as session:
+        await store.upsert_registry(
+            session,
+            executors=[
+                ExecutorRegistration(
+                    executor_id="T610",
+                    display_name="T610",
+                    machine_token="token-1",
+                    allowed_projects=["p1"],
+                    max_concurrent_tasks=1,
+                )
+            ],
+            projects=[
+                ProjectRegistration(project_id="p1", name="Projeto 1", path="/srv/p1", max_timeout_seconds=600),
+            ],
+        )
+    yield session_factory
+    await engine.dispose()
+
+
+async def _make_sensitive_task(factory):
+    async with factory() as session:
+        task = await store.create_task(
+            session,
+            SubmitTaskRequest(
+                executor_id="T610",
+                project_id="p1",
+                instruction="fazer deploy em production",
+                mode=TaskMode.IMPLEMENT,
+                timeout_seconds=300,
+                priority=TaskPriority.NORMAL,
+                run_when_available=True,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            ),
+            executor_online=False,
+        )
+    assert task.state == TaskState.AWAITING_APPROVAL.value
+    return task
+
+
+@pytest.mark.asyncio
+async def test_mcp_approve_dispatches_to_a_connected_idle_executor(mcp_hub_factory):
+    """Issue #20 asks this of the REST path specifically because the MCP
+    transport already got it right; this pins that MCP's own behaviour
+    survives the refactor onto the shared `AgentHub.dispatch_available`
+    (`gateway/app/mcp/server.py`'s `approve_codex_task` no longer hand-rolls
+    `is_connected` + `dispatch_next` + `send`)."""
+    task = await _make_sensitive_task(mcp_hub_factory)
+
+    hub = AgentHub(mcp_hub_factory)
+    await hub.register("T610", _DummyWebSocket())
+
+    async with mcp_hub_factory() as session:
+        response = await handle_mcp_call(
+            {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "tools/call",
+                "params": {
+                    "name": "approve_codex_task",
+                    "arguments": {"task_id": task.id, "decision": "approved"},
+                },
+            },
+            session,
+            hub,
+            ADMIN,
+        )
+    assert response["result"]["structuredContent"]["approval_state"] == "approved"
+
+    async with mcp_hub_factory() as session:
+        reloaded = await store.get_task(session, task.id)
+    # RUNNING, not just WAITING_EXECUTOR: `dispatch_next` moves a dispatched
+    # task straight to RUNNING. Stuck at WAITING_EXECUTOR would mean the same
+    # bug #18/#20 describe, just relocated to the transport this issue is not
+    # about.
+    assert reloaded.state == TaskState.RUNNING.value
+
+    connection = hub.connections["T610"]
+    sent_types = [msg["type"] for msg in connection.websocket.sent]
+    assert "task.dispatch" in sent_types
+
+
+@pytest.mark.asyncio
+async def test_mcp_approve_records_the_deciding_actor(mcp_hub_factory):
+    """Issue #19: only the generic `task.approval_decision` (written inside
+    `store.decide_task_approval` itself, for every caller) used to land for
+    an MCP approval — the actor-attributed `task.decision_resolved_by_actor`
+    event the REST path's `_resolve()` records was missing here, so an audit
+    reader could see *that* an MCP approval happened but never *who* did it.
+    """
+    task = await _make_sensitive_task(mcp_hub_factory)
+    hub = AgentHub(mcp_hub_factory)  # T610 left offline; this test is about the audit trail, not dispatch
+
+    async with mcp_hub_factory() as session:
+        await handle_mcp_call(
+            {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "tools/call",
+                "params": {
+                    "name": "approve_codex_task",
+                    "arguments": {"task_id": task.id, "decision": "approved", "reason": "looks safe"},
+                },
+            },
+            session,
+            hub,
+            ADMIN,
+        )
+
+    async with mcp_hub_factory() as session:
+        events = (
+            await session.execute(select(AuditEventModel).where(AuditEventModel.entity_id == task.id))
+        ).scalars().all()
+
+    actor_events = [e for e in events if e.event_type == "task.decision_resolved_by_actor"]
+    assert len(actor_events) == 1
+    assert '"actor_id": "admin"' in actor_events[0].payload_json
+    assert '"actor_email": "admin@example.com"' in actor_events[0].payload_json
+    assert '"via": "mcp"' in actor_events[0].payload_json
+    assert '"outcome": "approved"' in actor_events[0].payload_json
+
+    # The generic event `decide_task_approval` itself records must still be
+    # there too — this issue adds an event, it does not replace one.
+    generic_events = [e for e in events if e.event_type == "task.approval_decision"]
+    assert len(generic_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_mcp_reject_and_request_revision_do_not_dispatch(mcp_hub_factory):
+    task = await _make_sensitive_task(mcp_hub_factory)
+    hub = AgentHub(mcp_hub_factory)
+    await hub.register("T610", _DummyWebSocket())
+
+    async with mcp_hub_factory() as session:
+        await handle_mcp_call(
+            {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "tools/call",
+                "params": {
+                    "name": "approve_codex_task",
+                    "arguments": {"task_id": task.id, "decision": "rejected", "reason": "not now"},
+                },
+            },
+            session,
+            hub,
+            ADMIN,
+        )
+
+    async with mcp_hub_factory() as session:
+        reloaded = await store.get_task(session, task.id)
+    assert reloaded.state == TaskState.CANCELLED.value
+    assert hub.connections["T610"].websocket.sent == []

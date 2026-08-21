@@ -1035,6 +1035,11 @@ paths:
 
         Only a `pending` decision may be approved; a decision already resolved,
         or otherwise no longer awaiting approval, answers `409`.
+
+        If the task's executor is connected and has a free concurrency slot,
+        it is dispatched the task in the same request — not left for a later,
+        unrelated event to discover it. An offline or already-busy executor
+        is unaffected: the task stays `waiting_executor`.
       security:
         - bearerAuth: []
       parameters:

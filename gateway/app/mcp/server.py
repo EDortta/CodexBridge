@@ -274,16 +274,41 @@ async def handle_mcp_call(
         require_scope("codexbridge.task.approve")
         if principal is not None and not (principal.can_approve_sensitive or principal.is_admin()):
             raise HTTPException(status_code=403, detail="approval_not_allowed")
+        decision = ApprovalDecision(arguments["decision"])
         task = await store.decide_task_approval(
             session,
             arguments["task_id"],
-            ApprovalDecision(arguments["decision"]),
+            decision,
             arguments.get("reason"),
         )
-        if task.state in {TaskState.QUEUED.value, TaskState.WAITING_EXECUTOR.value} and hub.is_connected(task.executor_id):
-            dispatch_payload = await hub.dispatch_next(task.executor_id)
-            if dispatch_payload is not None:
-                await hub.send(task.executor_id, hub_envelope(task.executor_id, "task.dispatch", dispatch_payload))
+        if task.state == TaskState.WAITING_EXECUTOR.value:
+            # Issue #20: was `is_connected(...)` + `dispatch_next` + `send`
+            # hand-rolled here — the REST `POST /api/v1/decisions/{id}/approve`
+            # (`gateway/app/api/routes/decisions.py`) never had an equivalent
+            # and left an approved task stranded in `waiting_executor` (#18,
+            # duplicate). Both now call the same `AgentHub.dispatch_available`,
+            # which already no-ops for an offline/at-capacity executor.
+            await hub.dispatch_available(task.executor_id)
+        # Issue #19: the REST path's `_resolve()` (`routes/decisions.py`)
+        # already records this actor-attributed event alongside the generic
+        # `task.approval_decision` `decide_task_approval` itself writes; this
+        # transport never did, so an approval via MCP/ChatGPT could be seen in
+        # `audit_events` but never attributed to who approved it. Mirrors
+        # `cancel_codex_task`'s own `task.stopped_by_actor` fix for the same
+        # gap (issue #17 council).
+        await record_event(
+            session,
+            "task",
+            task.id,
+            "task.decision_resolved_by_actor",
+            {
+                "actor_id": principal.user_id,
+                "actor_email": principal.email,
+                "via": "mcp",
+                "outcome": decision.value,
+            },
+        )
+        await session.commit()
         payload = {"task_id": task.id, "state": task.state, "approval_state": task.approval_state}
         result = _text_result(f"Approval decision recorded for task {task.id}.", payload)
     elif tool_name == "list_recent_tasks":
