@@ -728,6 +728,17 @@ independent implementations (concurrency, idempotency and audit each written
 once per router) rather than one sharing a helper, so that this issue does
 not touch `gateway/app/api/routes/sessions.py`'s already-tested code path.
 
+**Issue #36's `reason` is a missions-door-only addition, not shared by this
+lock.** `/sessions/{id}/stop` still writes `task.stopped_by_actor` with no
+`reason` key at all — the two doors are no longer identical, only
+"same event type, same row." A client that only ever cancels through
+`/sessions` has nowhere to send an operator-typed reason today; issue #36's
+own scope (`gh issue view 36`) names only the missions endpoint and
+CodexBridgeMobile's mission-control cancel dialog, so extending `/stop` to
+match was left out rather than folded in here. If a session-vocabulary
+cancel flow ever needs the same field, that is a new issue against
+`routes/sessions.py`, not an assumption this section should still make.
+
 ### Destructive commands are authenticated and audited
 
 `cancel` requires `require_action(permissions.MISSIONS_CANCEL)` — an
