@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-21 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge/.claude/worktrees/agent-a0b0474577bded53e`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge/.claude/worktrees/agent-a0b0474577bded53e map`
+> Generated: 2026-08-22 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 94 file(s) · 841 symbol(s) indexed
-- Languages: config (2), python (90), shell (2)
+- 95 file(s) · 859 symbol(s) indexed
+- Languages: config (2), python (91), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -119,6 +119,7 @@ tests/
     test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
+    test_codex_runner_real_process.py  — "CodexRunner against a REAL `codex` subprocess — not the fake used everywhere else."
     test_conversations.py  — "Conversations and contextual messaging — issue #10."
     test_decisions.py  — "Operational decisions — issue #6."
     test_epics_issues.py  — "Epics and issues — issue #8."
@@ -523,6 +524,7 @@ tests/
   - `unregister(self, executor_id)` *(async method)*
   - `send(self, executor_id, envelope)` *(async method)*
   - `dispatch_next(self, executor_id)` *(async method)*
+  - `dispatch_available(self, executor_id)` *(async method)* — "Dispatches the next queued/waiting task to `executor_id`, if one is"
   - `mark_task_finished(self, executor_id, task_id)` *(async method)* — "Releases the slot `task_id` held and, if the executor is still"
 - `hub_envelope(executor_id, message_type, payload)` — "Build a message for an executor."
 
@@ -723,7 +725,7 @@ tests/
 
 > The `/agent/ws` handshake stops carrying the token in the URL — issue #15.
 
-- `client()`
+- `client(monkeypatch)` *(async function)* — "A real app, but wired to its own isolated in-memory database."
 - `test_a_handshake_with_no_credential_is_refused(client)`
 - `test_refusing_an_anonymous_handshake_touches_no_executor_record(client, monkeypatch)` — "4401 must be decided before the database, not after a lookup."
 - `test_the_header_is_bound_and_reaches_the_registry_check(client)` — "An unknown executor authenticating by header gets 4404, not 4401."
@@ -846,6 +848,13 @@ tests/
 - `test_the_administrative_action_describes_what_the_list_endpoint_does(api)` *(async function)* — "`sessions.readAllProjects` is administrative because it crosses projects."
 - `test_the_administrative_action_describes_what_the_missions_list_endpoint_does(api)` *(async function)* — "`missions.readAllProjects` mirrors `sessions.readAllProjects` — same widening."
 
+### `tests/integration/test_codex_runner_real_process.py`
+
+> CodexRunner against a REAL `codex` subprocess — not the fake used everywhere else.
+
+- `test_run_task_drives_a_real_codex_process_end_to_end(tmp_path)` *(async function)* — "A real `codex exec --json -C <dir> -o <file> <instruction>` subprocess,"
+- `test_run_task_resume_actually_resumes_the_real_session(tmp_path)` *(async function)* — "Finding (2), now fixed, driven through `run_task` itself end to end:"
+
 ### `tests/integration/test_conversations.py`
 
 > Conversations and contextual messaging — issue #10.
@@ -872,6 +881,7 @@ tests/
 - `test_a_retried_conversation_create_does_not_create_a_second_conversation(api)` *(async function)*
 - `test_post_message_stores_markdown_and_attachments_verbatim(api)` *(async function)*
 - `test_post_message_rejects_an_empty_body(api)` *(async function)*
+- `test_post_message_rejects_an_oversized_attachment_id(api)` *(async function)* — "`MAX_ATTACHMENT_ID_LENGTH` (255) must be enforced, same as its three"
 - `test_a_retried_message_post_does_not_create_a_second_message(api)` *(async function)* — "Message creation is idempotent for offline retries — the acceptance criterion."
 - `test_the_same_key_with_a_different_body_is_a_conflict(api)` *(async function)* — "Reusing a key for a different payload is a client bug, not a silent replay."
 - `test_a_message_without_an_idempotency_key_is_never_deduplicated(api)` *(async function)* — "No key means no replay protection — each call is a genuinely new message."
@@ -917,6 +927,12 @@ tests/
 - `test_approving_an_already_resolved_decision_is_a_conflict(api)` *(async function)*
 - `test_a_retried_approve_replays_instead_of_acting_twice(api)` *(async function)*
 - `test_approve_records_the_deciding_actor(api)` *(async function)*
+- `test_approving_dispatches_to_a_connected_idle_executor(api)` *(async function)*
+- `test_approve_response_revision_matches_the_post_dispatch_task_after_same_request_dispatch(api)` *(async function)* — "Council round-1 finding on this issue: `_resolve` fetches `updated`"
+- `test_approving_leaves_the_task_waiting_when_the_executor_is_offline(api)` *(async function)* — "No regression on the pre-existing (disconnected) case: `api.hub` has"
+- `test_approving_when_the_executor_is_at_capacity_does_not_bypass_the_concurrency_gate(api)` *(async function)*
+- `test_reject_never_dispatches(api)` *(async function)*
+- `test_request_revision_never_dispatches(api)` *(async function)*
 - `test_reject_requires_a_non_empty_reason(api)` *(async function)*
 - `test_reject_with_no_body_is_refused(api)` *(async function)*
 - `test_rejecting_cancels_the_underlying_session(api)` *(async function)*
@@ -1189,6 +1205,14 @@ tests/
 - `test_mcp_cancel_records_who_cancelled_it(db_session, initial_state, connect_executor, slot_was_held)` *(async function)* — "issue #17 council round 1, "the second caller": HTTP `/stop` records"
 - `test_startup_recovery_marks_running_as_lost(db_session)` *(async function)*
 - `test_startup_recovery_marks_pending_control_states_as_lost(db_session, pending_state)` *(async function)* — "council 2026-08-18, round 2, "the second caller": issue #16 added these"
+- `mcp_hub_factory()` *(async function)* — "A session factory over a fresh database, seeded like `db_session` but"
+- `test_mcp_approve_dispatches_to_a_connected_idle_executor(mcp_hub_factory)` *(async function)* — "Issue #20 asks this of the REST path specifically because the MCP"
+- `test_mcp_approve_records_the_deciding_actor(mcp_hub_factory)` *(async function)* — "Issue #19: only the generic `task.approval_decision` (written inside"
+- `test_mcp_reject_and_request_revision_do_not_dispatch(mcp_hub_factory)` *(async function)*
+- `test_mcp_continue_codex_session_succeeds_without_datetime_crash(mcp_hub_factory)` *(async function)* — "Issue #23: `continue_codex_session` forwards `parent.expires_at` —"
+- `test_mcp_continue_codex_session_dispatches_to_a_connected_idle_executor(mcp_hub_factory)` *(async function)* — "Issue #24: unlike its sibling `submit_codex_task` (same file), this"
+- `test_mcp_continue_codex_session_leaves_task_queued_when_the_executor_is_offline(mcp_hub_factory)` *(async function)* — "No regression on the pre-existing (disconnected) case: an offline"
+- `test_mcp_continue_codex_session_at_capacity_does_not_dispatch(mcp_hub_factory)` *(async function)* — "A connected executor already at its concurrency limit must not be sent"
 
 ### `tests/unit/test_agent_auth.py`
 
