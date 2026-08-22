@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.5.0
+  version: 1.6.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -1412,6 +1412,11 @@ paths:
         carries `executorNotified: false` — nothing replays `task.cancel` on
         reconnect (issue #17), so the run may continue while the mission
         reads as cancelled.
+
+        `reason` (issue #36) is optional free text — an operator-typed
+        explanation for the cancellation. It has no dedicated field on
+        `Mission`; it is recorded on the mission's timeline the same way
+        a decision's resolution reason already is.
       security:
         - bearerAuth: []
       parameters:
@@ -1422,6 +1427,17 @@ paths:
             $ref: '#/components/schemas/Id'
         - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 4000
+                  description: Optional. Recorded on the mission's timeline.
       responses:
         '200':
           description: The mission after cancellation.

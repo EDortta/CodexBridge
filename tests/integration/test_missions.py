@@ -599,6 +599,101 @@ async def test_cancel_is_audited_with_the_actor(api) -> None:
     assert payload["via"] == "missions_api"
 
 
+async def test_cancel_accepts_no_body_exactly_as_before(api) -> None:
+    """Issue #36 is additive: a client that sends no body at all must still work."""
+    task = await make_task(api.factory, "p1", state="running")
+    detail = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN))
+    response = api.post(
+        f"/api/v1/missions/{task.id}/cancel",
+        headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+    )
+    assert response.status_code == 200
+    assert response.json()["state"] == TaskState.CANCELLED.value
+
+
+async def test_cancel_records_an_operator_typed_reason(api) -> None:
+    """Issue #36: the reason has somewhere to go, on the same audit event."""
+    from sqlalchemy import select
+
+    from gateway.app.models.entities import AuditEventModel
+
+    task = await make_task(api.factory, "p1", state="running")
+    detail = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN))
+    response = api.post(
+        f"/api/v1/missions/{task.id}/cancel",
+        headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+        json={"reason": "Duplicate of another running mission."},
+    )
+    assert response.status_code == 200
+
+    async with api.factory() as s:
+        rows = (
+            await s.execute(
+                select(AuditEventModel).where(
+                    AuditEventModel.entity_id == task.id,
+                    AuditEventModel.event_type == "task.stopped_by_actor",
+                )
+            )
+        ).scalars().all()
+    assert len(rows) == 1
+    payload = json.loads(rows[0].payload_json)
+    assert payload["reason"] == "Duplicate of another running mission."
+
+
+async def test_cancel_with_no_reason_records_none(api) -> None:
+    """No `reason` is sent — the field must not silently default to something else."""
+    from sqlalchemy import select
+
+    from gateway.app.models.entities import AuditEventModel
+
+    task = await make_task(api.factory, "p1", state="running")
+    detail = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN))
+    api.post(
+        f"/api/v1/missions/{task.id}/cancel",
+        headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+    )
+
+    async with api.factory() as s:
+        rows = (
+            await s.execute(
+                select(AuditEventModel).where(
+                    AuditEventModel.entity_id == task.id,
+                    AuditEventModel.event_type == "task.stopped_by_actor",
+                )
+            )
+        ).scalars().all()
+    assert json.loads(rows[0].payload_json)["reason"] is None
+
+
+async def test_the_cancel_reason_appears_on_the_timeline(api) -> None:
+    task = await make_task(api.factory, "p1", state="running")
+    detail = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN))
+    api.post(
+        f"/api/v1/missions/{task.id}/cancel",
+        headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+        json={"reason": "Operator changed their mind."},
+    )
+
+    timeline = api.get(f"/api/v1/missions/{task.id}/timeline", headers=auth(ALICE_TOKEN)).json()
+    entry = next(item for item in timeline["items"] if item["type"] == "task.stopped_by_actor")
+    assert entry["summary"] == "Cancelled by an operator. Operator changed their mind."
+
+
+async def test_a_reused_idempotency_key_with_a_different_reason_is_a_conflict(api) -> None:
+    """Same shape as `routes/decisions.py`'s reason-in-fingerprint: a reused key
+    with a different payload is a client bug, reported rather than silently
+    dropping the second write's reason."""
+    task = await make_task(api.factory, "p1", state="running")
+    detail = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN))
+    headers = {**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"], "Idempotency-Key": "k-reason"}
+
+    first = api.post(f"/api/v1/missions/{task.id}/cancel", headers=headers, json={"reason": "A"})
+    second = api.post(f"/api/v1/missions/{task.id}/cancel", headers=headers, json={"reason": "B"})
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+
+
 async def test_cancel_releases_the_executor_slot(api) -> None:
     task = await make_task(api.factory, "p1", state="running")
     api.hub.running_tasks["E1"] = {task.id}

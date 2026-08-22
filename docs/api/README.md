@@ -737,6 +737,19 @@ reads, same as sessions' `stop`. This is issue #7's acceptance criterion
 ("destructive commands require authenticated actor context and are
 audited").
 
+### An optional cancel reason (issue #36)
+
+`POST .../{id}/cancel`'s body may carry an optional `reason` (free text, up
+to 4000 chars) — the operator-typed explanation CodexBridgeMobile's cancel
+dialog already collects and, before this, had nowhere to send. It is not a
+new column on `TaskModel`: there is no `Mission.cancelReason` field, only the
+`reason` this endpoint's own `task.stopped_by_actor` audit event now carries,
+the same way `task.decision_resolved_by_actor` already carries a decision's
+resolution reason. The mission's timeline (`GET .../{id}/timeline`) surfaces
+it in the cancellation entry's summary when present. Omitting `reason`, or
+the body entirely, behaves exactly as before — this is purely additive
+(contract `1.5.0` → `1.6.0`).
+
 ### State-transition validation
 
 `cancel` refuses with `409 conflict` outside `CANCELLABLE`, which is

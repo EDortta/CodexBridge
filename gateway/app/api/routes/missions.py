@@ -38,7 +38,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Header, Query, Response
+from fastapi import APIRouter, Body, Depends, Header, Query, Response
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.api import concurrency, idempotency, pagination, permissions, timestamps
@@ -67,6 +68,18 @@ MISSIONS_ENDPOINT = "/api/v1/missions"
 CANCELLABLE = STOPPABLE_TASK_STATES
 
 BLOCKED_REASON_AWAITING_APPROVAL = "awaiting_approval"
+
+
+class MissionCancelRequest(BaseModel):
+    """Issue #36: an operator-typed reason has nowhere to go without this.
+
+    Optional and defaults to no body at all (`Body(default=None)` on the
+    handler), the same shape `routes/auth.py:revoke`'s `RevokeRequest` uses —
+    an existing client that cancels with no body must keep working exactly as
+    before.
+    """
+
+    reason: str | None = Field(default=None, max_length=4000)
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -273,7 +286,8 @@ def _timeline_summary(event_type: str, payload: dict) -> str:
     if event_type == "task.result":
         return "Execution finished."
     if event_type == "task.stopped_by_actor":
-        return "Cancelled by an operator."
+        reason = redact(payload.get("reason")) if payload.get("reason") else None
+        return "Cancelled by an operator." + (f" {reason}" if reason else "")
     if event_type == "task.recovered":
         state = payload.get("state") or "unknown"
         return f"Recovered after a gateway restart; marked {state}."
@@ -347,6 +361,7 @@ async def cancel_mission(
     response: Response,
     if_match: str | None = Header(default=None, alias="If-Match"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    body: MissionCancelRequest | None = Body(default=None),
     principal: AuthenticatedPrincipal = Depends(require_action(permissions.MISSIONS_CANCEL)),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
@@ -356,15 +371,28 @@ async def cancel_mission(
     protocol reason Sessions' `stop` is the only one there: see the module
     docstring. Requires `If-Match`. With `Idempotency-Key`, a retry replays
     the first response and cancels nothing twice.
+
+    `reason` (issue #36) is optional and free text, recorded on the mission's
+    timeline the same way `task.decision_resolved_by_actor` already records
+    why a decision was resolved — there is no dedicated column for it, only
+    the audit event, which is enough for an operator to see why on the
+    timeline without inventing a new piece of mission state.
     """
     from gateway.app.main import hub  # imported late: main includes this router
+
+    reason = body.reason if body else None
 
     projects = visible_projects(principal)
     task = await store.get_task_for_projects(session, mission_id, projects)
     if task is None:
         raise _not_found()
 
-    fingerprint = idempotency.fingerprint(f"cancel:{mission_id}".encode())
+    # `reason` folds into the fingerprint, same as `routes/decisions.py`'s
+    # `_resolve`: a retry with the *same* key and the *same* reason is the
+    # replay this mechanism exists for, but a caller that reuses a key with a
+    # different reason gets the `409` `idempotency.reserve` already gives a
+    # body mismatch, rather than the first reason silently winning.
+    fingerprint = idempotency.fingerprint(f"cancel:{mission_id}:{reason or ''}".encode())
     claim = None
     if idempotency_key:
         outcome = await idempotency.reserve(
@@ -410,6 +438,7 @@ async def cancel_mission(
                 "actor_email": principal.email,
                 "via": "missions_api",
                 "executor_notified": notified,
+                "reason": reason,
             },
         )
         await session.commit()
