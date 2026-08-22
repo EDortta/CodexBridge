@@ -11,7 +11,6 @@
 
 ## Governance
 
-- `AGENTS.md`
 - `docs/required-reading.md`
 - `docs/project-rules.md`
 - `docs/software-overview.md`
