@@ -18,6 +18,16 @@ from shared.security import filtered_environment, sanitize_log_line
 
 LogSender = Callable[[str, str], Awaitable[None]]
 
+# codex-cli 0.147.0's `codex exec -s/--sandbox <MODE>` (confirmed via
+# `codex exec --help`, issue #34): `read-only`, `workspace-write`,
+# `danger-full-access`. This runner only ever emits the first two — the third
+# is a real, accepted value that this codebase must never pass regardless of
+# caller input, so it is deliberately left out of the allowed set rather than
+# merely undocumented.
+SANDBOX_READ_ONLY = "read-only"
+SANDBOX_WORKSPACE_WRITE = "workspace-write"
+_ALLOWED_SANDBOX_MODES = frozenset({SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE})
+
 
 @dataclass
 class RunningTask:
@@ -123,7 +133,33 @@ class CodexRunner:
         timeout_seconds: int,
         continue_session_id: str | None,
         send_log: LogSender,
+        sandbox: str = SANDBOX_READ_ONLY,
     ) -> dict:
+        """Issue #34: `sandbox` is now always explicit, never implicit.
+
+        Before this, `_build_command` passed no `-s`/`--sandbox` at all, so
+        whether a task could actually write depended on whether the executor
+        host's `~/.codex/config.toml` already marked `project_root`
+        `trust_level = "trusted"` — invisible here, and untouched by anything
+        `codex_runner.py` itself does. A freshly-registered project ran fully
+        read-only: exit 0, `TaskState.COMPLETED`, `no_changes: true`, no error
+        anywhere (confirmed live against codex-cli 0.147.0,
+        `docs/napkin-lessons.md` 2026-08-21).
+
+        The default here (`read-only`) is deliberately the *safe* one — a
+        caller that does not think about sandboxing at all gets the
+        restrictive behavior, not the permissive one. `AgentService._handle_dispatch`
+        is the only caller in this codebase and always passes an explicit
+        value derived from the task's policy level
+        (`shared.policy.policy_level_for_mode`), so this default is what a
+        test or a future caller gets for saying nothing — never what a real
+        dispatched task gets by omission.
+        """
+        if sandbox not in _ALLOWED_SANDBOX_MODES:
+            raise ValueError(
+                f"sandbox must be one of {sorted(_ALLOWED_SANDBOX_MODES)}, got {sandbox!r} "
+                "(danger-full-access is a real codex-cli value this runner refuses to pass)"
+            )
         pre = await collect_git_snapshot(project_root, self.settings.max_diff_chars)
         start = time.monotonic()
         deadline = start + timeout_seconds
@@ -157,7 +193,7 @@ class CodexRunner:
                 remaining = max(1, int(deadline - time.monotonic()))
                 with NamedTemporaryFile(prefix="codex-last-message-", suffix=".txt", delete=False) as handle:
                     output_path = Path(handle.name)
-                cmd = self._build_command(project_root, instruction, output_path, continue_session_id)
+                cmd = self._build_command(project_root, instruction, output_path, continue_session_id, sandbox)
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
                     cwd=str(project_root),
@@ -249,6 +285,7 @@ class CodexRunner:
         instruction: str,
         output_path: Path,
         continue_session_id: str | None,
+        sandbox: str,
     ) -> list[str]:
         if continue_session_id:
             # `codex exec resume` (unlike `codex exec`) has no `-C`/`--cd` flag at
@@ -259,6 +296,15 @@ class CodexRunner:
             # (disables cwd filtering)"), which `run_task` already sets via
             # `create_subprocess_exec(..., cwd=str(project_root))` below — so the
             # project directory still reaches it, just not as a flag.
+            #
+            # Same check for `-s`/`--sandbox` (issue #34): `codex exec resume
+            # --help` lists no such option either — confirmed against codex-cli
+            # 0.147.0, the same version issue #33 was confirmed against. `sandbox`
+            # is accepted here (not ignored) so a caller does not have to special-
+            # case resume, but it deliberately does not reach the command; a
+            # resumed session's sandbox is whatever the original `codex exec`
+            # call that created it established, which this codebase does not
+            # currently have a verified way to override after the fact.
             return [
                 self.settings.codex_bin,
                 "exec",
@@ -273,6 +319,8 @@ class CodexRunner:
             self.settings.codex_bin,
             "exec",
             "--json",
+            "-s",
+            sandbox,
             "-C",
             str(project_root),
             "-o",

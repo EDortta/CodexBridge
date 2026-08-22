@@ -22,6 +22,15 @@ class AgentSettings(BaseSettings):
     max_prompt_chars: int = 12000
     max_diff_chars: int = 120000
     max_result_chars: int = 200000
+    # Issue #34: a write-intending task's mode (edit/implement) is the normal
+    # way to opt into `-s workspace-write` (see `service.py:_handle_dispatch`).
+    # This is the machine-level kill switch beneath that: an operator who wants
+    # one specific executor to never write, regardless of what any task asks
+    # for, sets `CODEX_BRIDGE_AGENT_ALLOW_WORKSPACE_WRITE=false` and every
+    # dispatch on that host runs `-s read-only` no matter its policy level —
+    # the same "last barrier on this machine" role `allowed_projects_file`
+    # already plays for project scope (`docs/software-overview.md`).
+    allow_workspace_write: bool = True
 
     model_config = SettingsConfigDict(env_prefix="CODEX_BRIDGE_AGENT_", env_file=".env")
 

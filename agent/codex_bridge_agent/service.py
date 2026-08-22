@@ -9,13 +9,14 @@ from uuid import uuid4
 
 import websockets
 
-from agent.codex_bridge_agent.codex_runner import CodexRunner
+from agent.codex_bridge_agent.codex_runner import SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE, CodexRunner
 from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects
 from shared.policy import evaluate_task_policy
 from shared.protocol import (
     EXECUTOR_TOKEN_HEADER,
     AgentEnvelope,
     AgentMessageType,
+    PolicyLevel,
     SubmitTaskRequest,
     TaskMode,
     TaskPriority,
@@ -29,6 +30,25 @@ BASE_PROMPT = (
     "Do not access parent directories, secrets, deployment targets, or other hosts. "
     "Do not push, deploy, migrate production, or modify infrastructure unless explicitly approved."
 )
+
+
+def _sandbox_for(policy_level: PolicyLevel, *, allow_workspace_write: bool) -> str:
+    """Issue #34: the sandbox `codex exec` runs a dispatched task under.
+
+    Read-only unless the task's own mode already opted into writing
+    (`PolicyLevel.CONTROLLED_WRITE`/`SENSITIVE` — see
+    `shared/policy.py:policy_level_for_mode`; a `SENSITIVE` task only reaches
+    here at all once `_handle_dispatch`'s approval gate above has let it
+    through, so by the time this runs it is exactly as write-intending as a
+    `CONTROLLED_WRITE` one). `allow_workspace_write=False` is the executor's
+    own machine-level override (`AgentSettings.allow_workspace_write`) and
+    wins regardless of what the task asked for — the same "last barrier on
+    this machine" shape `allowed_projects_file` already has for project
+    scope.
+    """
+    if policy_level == PolicyLevel.READ:
+        return SANDBOX_READ_ONLY
+    return SANDBOX_WORKSPACE_WRITE if allow_workspace_write else SANDBOX_READ_ONLY
 
 
 class AgentService:
@@ -199,6 +219,7 @@ class AgentService:
                     ).model_dump_json()
                 )
 
+            sandbox = _sandbox_for(decision.level, allow_workspace_write=self.settings.allow_workspace_write)
             try:
                 result = await self.runner.run_task(
                     task_id=task_id,
@@ -207,6 +228,7 @@ class AgentService:
                     timeout_seconds=int(envelope.payload["timeout_seconds"]),
                     continue_session_id=envelope.payload.get("continue_session_id"),
                     send_log=send_log,
+                    sandbox=sandbox,
                 )
             except Exception as exc:
                 await send_log("stderr", f"Codex execution failed before completion: {exc}")
