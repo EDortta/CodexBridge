@@ -91,8 +91,10 @@ por alcance de sistema de arquivos, `~/.gitconfig`, credential helpers do Git,
   sem chaves SSH pessoais e sem credenciais Git de escrita em repositório de
   produção — assim o que o subprocesso alcança é o mínimo que o `codex` exige
 
-A política de sandbox do `codex exec` (que hoje é o default do CLI, sem flag
-explícita) está em aberto e será decidida à parte. Ver `docs/development.md`.
+A política de sandbox do `codex exec` é explícita, não mais o default herdado
+do CLI (issue #34): `read-only` a menos que o `policy_level` da tarefa já
+indicasse escrita, com trava adicional por executor
+(`AgentSettings.allow_workspace_write`). Ver `docs/development.md`.
 
 ### Escalada local no executor
 

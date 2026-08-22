@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from agent.codex_bridge_agent.config import AgentSettings
-from agent.codex_bridge_agent.service import AgentService
-from shared.protocol import AgentEnvelope, AgentMessageType, ProjectRegistration
+from agent.codex_bridge_agent.service import AgentService, _sandbox_for
+from shared.protocol import AgentEnvelope, AgentMessageType, PolicyLevel, ProjectRegistration
 
 
 class DummyWebSocket:
@@ -371,3 +371,123 @@ async def test_handle_dispatch_forgets_the_task_only_after_the_result_is_sent(tm
         "send:task.result",
         "forget:task-1",
     ]
+
+
+# --------------------------------------------------------------------------
+# Issue #34: sandbox derived from policy level, and the machine-level override
+# --------------------------------------------------------------------------
+
+
+def test_sandbox_for_is_read_only_for_the_read_policy_level() -> None:
+    assert _sandbox_for(PolicyLevel.READ, allow_workspace_write=True) == "read-only"
+    # The machine override cannot make a read-level task write either way —
+    # there is nothing for it to override here.
+    assert _sandbox_for(PolicyLevel.READ, allow_workspace_write=False) == "read-only"
+
+
+def test_sandbox_for_is_workspace_write_for_controlled_write_and_sensitive() -> None:
+    assert _sandbox_for(PolicyLevel.CONTROLLED_WRITE, allow_workspace_write=True) == "workspace-write"
+    assert _sandbox_for(PolicyLevel.SENSITIVE, allow_workspace_write=True) == "workspace-write"
+
+
+def test_sandbox_for_machine_override_forces_read_only_even_for_write_levels() -> None:
+    """`AgentSettings.allow_workspace_write=False` is the executor's own kill
+    switch — it must win over what the task's mode asked for, not merely
+    default the same way."""
+    assert _sandbox_for(PolicyLevel.CONTROLLED_WRITE, allow_workspace_write=False) == "read-only"
+    assert _sandbox_for(PolicyLevel.SENSITIVE, allow_workspace_write=False) == "read-only"
+
+
+class _SandboxRecordingRunner:
+    """Only cares about the `sandbox=` kwarg `_handle_dispatch` passes to
+    `run_task` — everything else is `_RecordingRunner`'s minimal success stub."""
+
+    def __init__(self) -> None:
+        self.sandboxes: list[str] = []
+
+    def mark_dispatched(self, _: str) -> None:
+        pass
+
+    def forget(self, _: str) -> None:
+        pass
+
+    async def run_task(self, *, task_id: str, sandbox: str, **_: object) -> dict:
+        self.sandboxes.append(sandbox)
+        return {
+            "task_id": task_id,
+            "final_state": "completed",
+            "return_code": 0,
+            "duration_seconds": 0,
+            "command": [],
+            "command_redacted": [],
+            "codex_session_id": None,
+            "codex_version": "",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "last_message": "",
+            "pre_git": {},
+            "post_git": {},
+            "tests_ran": [],
+            "no_changes": True,
+            "raw_events": [],
+        }
+
+
+def _dispatch_envelope(*, task_id: str, mode: str, instruction: str = "do the thing") -> AgentEnvelope:
+    return AgentEnvelope(
+        message_id=f"dispatch-{task_id}",
+        executor_id="devel3",
+        sent_at=datetime.now(timezone.utc),
+        type=AgentMessageType.TASK_DISPATCH,
+        payload={
+            "task_id": task_id,
+            "project_id": "codexbridge",
+            "instruction": instruction,
+            "mode": mode,
+            "timeout_seconds": 60,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_dispatch_sends_read_only_for_a_read_mode_task(tmp_path: Path) -> None:
+    service = AgentService(AgentSettings())
+    runner = _SandboxRecordingRunner()
+    service.runner = runner
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+
+    await service._handle_dispatch(DummyWebSocket(), _dispatch_envelope(task_id="t-read", mode="analyze"))
+
+    assert runner.sandboxes == ["read-only"]
+
+
+@pytest.mark.asyncio
+async def test_handle_dispatch_sends_workspace_write_for_a_write_mode_task(tmp_path: Path) -> None:
+    service = AgentService(AgentSettings())
+    runner = _SandboxRecordingRunner()
+    service.runner = runner
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+
+    await service._handle_dispatch(DummyWebSocket(), _dispatch_envelope(task_id="t-write", mode="edit"))
+
+    assert runner.sandboxes == ["workspace-write"]
+
+
+@pytest.mark.asyncio
+async def test_handle_dispatch_honours_the_machine_level_read_only_override(tmp_path: Path) -> None:
+    """A write-mode task still only gets `read-only` when this executor's own
+    `allow_workspace_write` is off — the override must reach `run_task`, not
+    just exist on `AgentSettings`."""
+    service = AgentService(AgentSettings(allow_workspace_write=False))
+    runner = _SandboxRecordingRunner()
+    service.runner = runner
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+
+    await service._handle_dispatch(DummyWebSocket(), _dispatch_envelope(task_id="t-locked", mode="implement"))
+
+    assert runner.sandboxes == ["read-only"]

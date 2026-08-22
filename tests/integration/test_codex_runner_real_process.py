@@ -9,11 +9,11 @@ the real CLI does. This file closes exactly that gap by driving one real `codex 
 (codex-cli 0.147.0) subprocess end-to-end through `CodexRunner.run_task`, against a
 disposable scratch git repo (never a real project, never given a remote).
 
-Two real, reproducible mismatches between what `codex_runner.py` assumed and what the
-installed `codex` 0.147.0 binary actually does came out of writing this file — both
-demonstrated live below, not inferred from reading the code. Both are now FIXED
-(issues #32 and #33); the tests below assert the fixed behavior against the real CLI,
-not just that the bugs exist.
+Three real, reproducible mismatches between what `codex_runner.py` assumed and what
+the installed `codex` 0.147.0 binary actually does came out of this file — all three
+demonstrated live below, not inferred from reading the code. All three are now FIXED
+(issues #32, #33 and #34); the tests below assert the fixed behavior against the real
+CLI, not just that the bugs exist.
 
 1. (issue #32, fixed) `CodexRunner._find_session_id` used to look only for
    `session_id`, `sessionId`, `conversation_id` or `conversationId`, top-level or
@@ -36,20 +36,20 @@ not just that the bugs exist.
    resume, end to end, using the session id captured from a real first run — both
    bugs had to be fixed together for that to be possible at all.
 
-A third finding, not asserted as a hard regression here because it depends on the
-executor host's local trust registry rather than on `codex_runner.py` itself:
-`_build_command` never passes `-s`/`--sandbox` (or any approval override), and
-`codex exec`'s default sandbox is read-only with approvals disabled in non-interactive
-mode. Writes only succeed for a project directory codex has *already* marked
-`trust_level = "trusted"` in `~/.codex/config.toml` on the machine running the agent.
-A freshly-registered project — exactly the scratch repo this test creates — runs
-fully read-only: exit 0, `TaskState.COMPLETED`, `no_changes: True`, and the model's
-own last-message explaining it could not write. `test_run_task_drives_a_real_codex_process_end_to_end`
-asserts the structural half of that (`no_changes is True`, the file is byte-identical
-before/after) without asserting on the model's prose, which is not stable across
-runs. See `docs/napkin-lessons.md` for the full writeup, including the direct
-`codex exec -s workspace-write ...` run that confirms this diagnosis (a pre-trusted
-or explicitly sandboxed directory does receive the edit).
+3. (issue #34, fixed) `_build_command` used to pass no `-s`/`--sandbox` at all, so
+   whether a task could write depended entirely on whether the executor host's
+   `~/.codex/config.toml` already marked the project directory
+   `trust_level = "trusted"` — invisible to `codex_runner.py`, and untouched by
+   anything it does. A freshly-registered project ran fully read-only: exit 0,
+   `TaskState.COMPLETED`, `no_changes: True`, no error anywhere. `run_task` now
+   takes an explicit `sandbox` argument (default `"read-only"`, the safe one for
+   a caller that says nothing) and always passes `-s <sandbox>` itself, so this
+   no longer depends on the host's local trust registry at all.
+   `test_run_task_drives_a_real_codex_process_end_to_end` below still exercises
+   the (now deliberate, not accidental) read-only default;
+   `test_run_task_actually_writes_when_dispatched_with_workspace_write_sandbox`
+   is new and proves the override side: the same scratch repo, explicitly
+   sandboxed `workspace-write`, really does receive the edit.
 
 Gated behind `RUN_REAL_CODEX_TESTS=1` (and the `codex` binary being on PATH) so the
 default `pytest` run — and CI, which has neither the binary nor a logged-in
@@ -152,16 +152,63 @@ async def test_run_task_drives_a_real_codex_process_end_to_end(tmp_path: Path) -
     # above together, don't just delete the assertion.
     assert result["codex_session_id"] == first_event["thread_id"]
 
-    # Finding (3, structural half): the scratch repo is not pre-registered as
-    # trusted anywhere, `_build_command` passes no sandbox override, and
-    # codex exec's non-interactive default is read-only with approvals
-    # disabled — so nothing was actually written, even though the process
-    # reported success. Assert on the file content and the runner's own diff,
-    # not on the model's prose (which is not byte-stable across runs).
+    # Finding (3), fixed, now exercised on purpose rather than by accident:
+    # this call passes no `sandbox=`, so `run_task`'s own default
+    # (`SANDBOX_READ_ONLY`) applies and `_build_command` sends `-s read-only`
+    # explicitly — the scratch repo's trust status in `~/.codex/config.toml`
+    # (there is none) no longer matters at all. Assert on the file content and
+    # the runner's own diff, not on the model's prose (which is not
+    # byte-stable across runs).
     after = (tmp_path / "README.md").read_text(encoding="utf-8")
     assert after == before
     assert result["no_changes"] is True
     assert result["pre_git"]["diff"] == result["post_git"]["diff"] == ""
+    assert result["command"][result["command"].index("-s") + 1] == "read-only"
+
+
+@requires_real_codex
+@pytest.mark.asyncio
+async def test_run_task_actually_writes_when_dispatched_with_workspace_write_sandbox(tmp_path: Path) -> None:
+    """The override side of finding (3): the same scratch repo, still not
+    trusted anywhere in `~/.codex/config.toml`, actually receives the edit
+    once `run_task` is told `sandbox="workspace-write"` — proving the write
+    path this codebase's whole purpose depends on works independent of the
+    executor host's local trust registry, not just that the safe default
+    blocks writes (the previous test). This is the live check
+    `docs/napkin-lessons.md`'s 2026-08-21 entry describes doing manually
+    (`codex exec -s workspace-write ...` against a scratch repo); this test
+    makes it permanent and driven through `CodexRunner.run_task` itself.
+    """
+    _init_scratch_repo(tmp_path)
+    before = (tmp_path / "README.md").read_text(encoding="utf-8")
+
+    runner = CodexRunner(AgentSettings())
+    result = await runner.run_task(
+        task_id="real-codex-workspace-write-smoke-1",
+        project_root=tmp_path,
+        instruction=(
+            "Add a one-line HTML comment at the very top of README.md that says "
+            "'reviewed by codex'. Do not change anything else in the file or "
+            "repository. Then stop."
+        ),
+        timeout_seconds=120,
+        continue_session_id=None,
+        send_log=_collect_logs,
+        sandbox="workspace-write",
+    )
+
+    assert result["return_code"] == 0
+    assert result["final_state"] == "completed"
+    assert result["command"][result["command"].index("-s") + 1] == "workspace-write"
+
+    after = (tmp_path / "README.md").read_text(encoding="utf-8")
+    assert after != before, (
+        "workspace-write must actually let codex exec write, independent of "
+        "whether this scratch directory is 'trusted' in ~/.codex/config.toml "
+        "(it never is)"
+    )
+    assert result["no_changes"] is False
+    assert result["post_git"]["diff"] != ""
 
 
 @requires_real_codex

@@ -5,7 +5,7 @@
 
 ## Summary
 
-- 95 file(s) · 865 symbol(s) indexed
+- 95 file(s) · 876 symbol(s) indexed
 - Languages: config (2), python (91), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -159,7 +159,7 @@ tests/
   - `pause(self, task_id)` *(async method)*
   - `resume(self, task_id)` *(async method)*
   - `restart(self, task_id)` *(async method)*
-  - `run_task(self, task_id, project_root, instruction, timeout_seconds, continue_session_id, send_log)` *(async method)*
+  - `run_task(self, task_id, project_root, instruction, timeout_seconds, continue_session_id, send_log, sandbox)` *(async method)* — "Issue #34: `sandbox` is now always explicit, never implicit."
 
 ### `agent/codex_bridge_agent/config.py`
 
@@ -854,6 +854,7 @@ tests/
 > CodexRunner against a REAL `codex` subprocess — not the fake used everywhere else.
 
 - `test_run_task_drives_a_real_codex_process_end_to_end(tmp_path)` *(async function)* — "A real `codex exec --json -C <dir> -o <file> <instruction>` subprocess,"
+- `test_run_task_actually_writes_when_dispatched_with_workspace_write_sandbox(tmp_path)` *(async function)* — "The override side of finding (3): the same scratch repo, still not"
 - `test_run_task_resume_actually_resumes_the_real_session(tmp_path)` *(async function)* — "Finding (2), now fixed, driven through `run_task` itself end to end:"
 
 ### `tests/integration/test_conversations.py`
@@ -1252,6 +1253,12 @@ tests/
 - `test_cancel_of_an_unknown_task_still_acks_over_the_socket(monkeypatch)` *(async function)* — "issue #17 council round 1, "the claim auditor" / "the second caller":"
 - `test_pause_of_an_unknown_task_reports_known_false(monkeypatch)` *(async function)* — "The control-message sibling of the cancel case above (issue #17"
 - `test_handle_dispatch_forgets_the_task_only_after_the_result_is_sent(tmp_path)` *(async function)* — "finding 14 (council round 2, "the second caller"): before this fix,"
+- `test_sandbox_for_is_read_only_for_the_read_policy_level()`
+- `test_sandbox_for_is_workspace_write_for_controlled_write_and_sensitive()`
+- `test_sandbox_for_machine_override_forces_read_only_even_for_write_levels()` — "`AgentSettings.allow_workspace_write=False` is the executor's own kill"
+- `test_handle_dispatch_sends_read_only_for_a_read_mode_task(tmp_path)` *(async function)*
+- `test_handle_dispatch_sends_workspace_write_for_a_write_mode_task(tmp_path)` *(async function)*
+- `test_handle_dispatch_honours_the_machine_level_read_only_override(tmp_path)` *(async function)* — "A write-mode task still only gets `read-only` when this executor's own"
 
 ### `tests/unit/test_apply_migrations.py`
 
@@ -1289,6 +1296,10 @@ tests/
 - `test_terminate_gracefully_resumes_a_paused_process_before_terminating()` *(async function)*
 - `test_terminate_gracefully_does_not_signal_cont_when_not_paused()` *(async function)*
 - `test_terminate_gracefully_falls_back_to_kill_if_still_stuck()` *(async function)* — "The safety net behind the SIGCONT fix: a process that does not end"
+- `test_build_command_passes_the_sandbox_flag_on_a_fresh_run()`
+- `test_build_command_workspace_write_is_also_passed_through()`
+- `test_build_command_resume_branch_never_gets_a_sandbox_flag()` — "`codex exec resume --help` lists no `-s`/`--sandbox` option (confirmed"
+- `test_run_task_refuses_a_sandbox_value_this_codebase_never_passes()` *(async function)* — "`danger-full-access` is a real, accepted `codex exec -s` value — exactly"
 
 ### `tests/unit/test_config_settings.py`
 

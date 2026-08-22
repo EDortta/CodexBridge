@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from pathlib import Path
 
 import pytest
 
@@ -217,3 +218,57 @@ async def test_terminate_gracefully_falls_back_to_kill_if_still_stuck() -> None:
 
     assert process.killed is True
     assert process.events == ["SIGCONT", "terminate", "kill", "wait_ok"]
+
+
+# --------------------------------------------------------------------------
+# Issue #34: explicit sandbox on `_build_command`/`run_task`
+# --------------------------------------------------------------------------
+
+
+def test_build_command_passes_the_sandbox_flag_on_a_fresh_run() -> None:
+    runner = CodexRunner(AgentSettings())
+    cmd = runner._build_command(  # noqa: SLF001
+        Path("/tmp/project"), "do the thing", Path("/tmp/out.txt"), None, "read-only"
+    )
+    assert cmd[cmd.index("-s") + 1] == "read-only"
+
+
+def test_build_command_workspace_write_is_also_passed_through() -> None:
+    runner = CodexRunner(AgentSettings())
+    cmd = runner._build_command(  # noqa: SLF001
+        Path("/tmp/project"), "do the thing", Path("/tmp/out.txt"), None, "workspace-write"
+    )
+    assert cmd[cmd.index("-s") + 1] == "workspace-write"
+
+
+def test_build_command_resume_branch_never_gets_a_sandbox_flag() -> None:
+    """`codex exec resume --help` lists no `-s`/`--sandbox` option (confirmed
+    against codex-cli 0.147.0, same as the `-C` omission issue #33 already
+    fixed) — passing one would either be silently ignored or, worse, rejected
+    by clap the way `-C` used to be. `_build_command` must not emit it here
+    regardless of what `sandbox` it was given."""
+    runner = CodexRunner(AgentSettings())
+    cmd = runner._build_command(  # noqa: SLF001
+        Path("/tmp/project"), "do the thing", Path("/tmp/out.txt"), "session-abc", "workspace-write"
+    )
+    assert "-s" not in cmd
+    assert "-C" not in cmd
+
+
+@pytest.mark.asyncio
+async def test_run_task_refuses_a_sandbox_value_this_codebase_never_passes() -> None:
+    """`danger-full-access` is a real, accepted `codex exec -s` value — exactly
+    why this runner must actively refuse it rather than merely never emit it
+    on its own. Raises before touching the filesystem or spawning anything,
+    so a bogus `project_root` is fine here."""
+    runner = CodexRunner(AgentSettings())
+    with pytest.raises(ValueError, match="danger-full-access"):
+        await runner.run_task(
+            task_id="t-bad-sandbox",
+            project_root=Path("/tmp/does-not-need-to-exist"),
+            instruction="anything",
+            timeout_seconds=1,
+            continue_session_id=None,
+            send_log=lambda *_: asyncio.sleep(0),
+            sandbox="danger-full-access",
+        )

@@ -99,18 +99,31 @@ Para um ciclo completo local, aponte o projeto de exemplo para um repositório g
 descartável criado no scratchpad da sessão. **Nunca aponte a allowlist de teste
 para um repositório real.**
 
-## Política de sandbox do `codex exec` — decisão em aberto
+## Política de sandbox do `codex exec` (issue #34, decidido em 2026-08-22)
 
-`CodexRunner.run_task` monta o comando com `--json`, `-C` e `-o` apenas. Nenhuma
-flag de sandbox ou de aprovação é passada, então o nível de escrita que o Codex
-tem dentro do projeto alvo é **o default do CLI**, herdado e não declarado.
+Decisão tomada pelo operador: `CodexRunner.run_task` agora sempre passa `-s`
+explicitamente — nunca herda o default silencioso do CLI. `read-only` é o
+padrão para uma tarefa que não pede escrita (`sandbox` não informado, ou
+`PolicyLevel.READ` — modos `analyze`/`review`/`test`); `workspace-write` é
+emitido quando `AgentService._handle_dispatch` calcula, a partir do
+`policy_level` da própria tarefa (`edit`/`implement` → `CONTROLLED_WRITE`,
+ou `SENSITIVE` já aprovado), que a tarefa pretende escrever — ver
+`shared/policy.py:policy_level_for_mode` e
+`agent/codex_bridge_agent/service.py:_sandbox_for`. `AgentSettings.
+allow_workspace_write=False` é o trava adicional no nível da máquina: um
+operador pode travar um executor específico em somente-leitura
+independentemente do que qualquer tarefa peça.
 
-O `README.md` lista `--skip-git-repo-check` e `--ephemeral` entre as capacidades
-verificadas do Codex CLI 0.145.0, e nenhuma das duas é usada.
-
-Num produto cuja função é modificar repositórios de terceiros, isso precisa ser
-escolha explícita. A decisão está pendente com o operador; até que seja tomada,
-não altere as flags do runner por conta própria.
+Antes disso, o nível de escrita do Codex dentro do projeto alvo era **o
+default do CLI**, herdado e não declarado — na prática dependia de
+`trust_level = "trusted"` já estar gravado em `~/.codex/config.toml` no host
+do executor, um estado externo, silencioso e não relacionado a nada que o
+CodexBridge decide. Uma tarefa de escrita apontada a um projeto recém
+registrado terminava com sucesso (`exit 0`, `TaskState.COMPLETED`) sem
+alterar nada — ver `docs/napkin-lessons.md`, entrada de 2026-08-21, e
+`tests/integration/test_codex_runner_real_process.py`, que agora prova as
+duas pontas (leitura bloqueia escrita; `workspace-write` explícito escreve de
+verdade) contra o CLI real.
 
 ## Antes de entregar
 

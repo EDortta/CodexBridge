@@ -91,6 +91,18 @@ A implementação usa apenas capacidades verificadas em `2026-07-28`:
 `codex exec [PROMPT]`, `--json`, `-C <DIR>`, `-o <FILE>`, `--skip-git-repo-check`,
 `--ephemeral`, `codex exec resume`. Nenhuma flag fora dessa lista é presumida.
 
+Verificado adicionalmente em `2026-08-22` contra `codex-cli 0.147.0` (issue #34):
+`codex exec -s/--sandbox <read-only|workspace-write|danger-full-access>`.
+`codex exec resume` **não** aceita `-s`/`--sandbox` (mesma lacuna já confirmada
+para `-C`, issue #33) — `_build_command` nunca emite a flag nesse ramo.
+`codex_runner.py` agora sempre passa `-s` explicitamente no dispatch inicial
+(nunca em branco): `read-only` por padrão, `workspace-write` apenas quando o
+`policy_level` da tarefa já indicava escrita (`edit`/`implement`) — ver
+`shared/policy.py:policy_level_for_mode`. Antes disso a escrita dependia de
+`trust_level = "trusted"` já estar gravado em `~/.codex/config.toml` no host
+do executor, um estado externo e silencioso que fazia tarefas de escrita
+"terminarem com sucesso" sem alterar nada.
+
 ## Distinção crítica para agentes
 
 O CodexBridge **é uma ferramenta cujo propósito é despachar execução para outros
