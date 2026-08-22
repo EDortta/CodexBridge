@@ -728,6 +728,17 @@ independent implementations (concurrency, idempotency and audit each written
 once per router) rather than one sharing a helper, so that this issue does
 not touch `gateway/app/api/routes/sessions.py`'s already-tested code path.
 
+**Issue #36's `reason` is a missions-door-only addition, not shared by this
+lock.** `/sessions/{id}/stop` still writes `task.stopped_by_actor` with no
+`reason` key at all — the two doors are no longer identical, only
+"same event type, same row." A client that only ever cancels through
+`/sessions` has nowhere to send an operator-typed reason today; issue #36's
+own scope (`gh issue view 36`) names only the missions endpoint and
+CodexBridgeMobile's mission-control cancel dialog, so extending `/stop` to
+match was left out rather than folded in here. If a session-vocabulary
+cancel flow ever needs the same field, that is a new issue against
+`routes/sessions.py`, not an assumption this section should still make.
+
 ### Destructive commands are authenticated and audited
 
 `cancel` requires `require_action(permissions.MISSIONS_CANCEL)` — an
@@ -736,6 +747,19 @@ did it (`actor_id`, `actor_email`) in the same audit trail the timeline
 reads, same as sessions' `stop`. This is issue #7's acceptance criterion
 ("destructive commands require authenticated actor context and are
 audited").
+
+### An optional cancel reason (issue #36)
+
+`POST .../{id}/cancel`'s body may carry an optional `reason` (free text, up
+to 4000 chars) — the operator-typed explanation CodexBridgeMobile's cancel
+dialog already collects and, before this, had nowhere to send. It is not a
+new column on `TaskModel`: there is no `Mission.cancelReason` field, only the
+`reason` this endpoint's own `task.stopped_by_actor` audit event now carries,
+the same way `task.decision_resolved_by_actor` already carries a decision's
+resolution reason. The mission's timeline (`GET .../{id}/timeline`) surfaces
+it in the cancellation entry's summary when present. Omitting `reason`, or
+the body entirely, behaves exactly as before — this is purely additive
+(contract `1.5.0` → `1.6.0`).
 
 ### State-transition validation
 

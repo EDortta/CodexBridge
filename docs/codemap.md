@@ -5,7 +5,7 @@
 
 ## Summary
 
-- 95 file(s) · 859 symbol(s) indexed
+- 95 file(s) · 865 symbol(s) indexed
 - Languages: config (2), python (91), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -330,10 +330,11 @@ tests/
 
 > Missions: the mission-control view of the same run Sessions exposes — issue #7.
 
+- **`MissionCancelRequest`** *(class)* — "Issue #36: an operator-typed reason has nowhere to go without this."
 - `list_missions(response, project_id, stage, state, risk, blocked, cursor, limit, principal, session)` *(async function)* — "Missions the caller may see, newest first."
 - `get_mission(mission_id, response, principal, session)` *(async function)*
 - `get_mission_timeline(mission_id, response, cursor, limit, principal, session)` *(async function)* — "The mission's recorded events, oldest first — the order a narrative reads in."
-- `cancel_mission(mission_id, response, if_match, idempotency_key, principal, session)` *(async function)* — "Cancel a mission that is queued, waiting, running or awaiting approval."
+- `cancel_mission(mission_id, response, if_match, idempotency_key, body, principal, session)` *(async function)* — "Cancel a mission that is queued, waiting, running or awaiting approval."
 - `explain_mission(mission_id, principal, session)` *(async function)* — "A structured account of a mission's current state, assembled server-side."
 
 ### `gateway/app/api/routes/probes.py`
@@ -1026,6 +1027,11 @@ tests/
 - `test_a_disconnected_executor_does_not_block_cancel(api)` *(async function)*
 - `test_a_retried_cancel_replays_instead_of_acting_twice(api)` *(async function)*
 - `test_cancel_is_audited_with_the_actor(api)` *(async function)* — "Destructive commands require authenticated actor context and are audited."
+- `test_cancel_accepts_no_body_exactly_as_before(api)` *(async function)* — "Issue #36 is additive: a client that sends no body at all must still work."
+- `test_cancel_records_an_operator_typed_reason(api)` *(async function)* — "Issue #36: the reason has somewhere to go, on the same audit event."
+- `test_cancel_with_no_reason_records_none(api)` *(async function)* — "No `reason` is sent — the field must not silently default to something else."
+- `test_the_cancel_reason_appears_on_the_timeline(api)` *(async function)*
+- `test_a_reused_idempotency_key_with_a_different_reason_is_a_conflict(api)` *(async function)* — "Same shape as `routes/decisions.py`'s reason-in-fingerprint: a reused key"
 - `test_cancel_releases_the_executor_slot(api)` *(async function)*
 - `test_explain_reports_mission_control_fields_alongside_evidence(api)` *(async function)*
 - `test_explain_on_a_blocked_mission_reports_it(api)` *(async function)*

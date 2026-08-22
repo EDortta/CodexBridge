@@ -62,7 +62,12 @@ version_router = APIRouter()
 # 1.4.0 -> 1.5.0: `GET/POST /api/v1/conversations/**` (issue #10) — contextual
 # conversations and messaging. Additive only (new endpoints, new schemas), so
 # a minor bump per docs/api/README.md's "What is not breaking".
-API_CONTRACT_VERSION = "1.5.0"
+#
+# 1.5.0 -> 1.6.0: `POST /api/v1/missions/{missionId}/cancel` (issue #36) gains
+# an optional `reason` field on its request body, recorded on the mission's
+# timeline. Additive only (new optional field; an existing client sending no
+# body is unaffected), so another minor bump.
+API_CONTRACT_VERSION = "1.6.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a

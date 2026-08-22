@@ -936,3 +936,80 @@ behavior, not just patch the production code and leave a test that now asserts
 the wrong thing. A green suite with a stale "prove it's broken" assertion
 still passing is a silent trap: it means either the fix didn't really land, or
 the test stopped testing anything real.
+
+## 2026-08-22 — council on PR #37 (#25 CI followup) and PR #38 (#36 cancel reason), operator-requested
+
+Operator-requested round (§4's `[DEFAULT] Whenever the operator asks`), round
+1: 3 lenses (sweep skeptic, claim auditor, second caller), run against both
+already-open PRs' full diffs in parallel by three independent agents (each
+given only the lens and the diffs, not each other's findings). 3 findings
+survived §2, all closed; 2 questions left open. `governancekit --root . council
+--record` bound the record to the merge commit's staged diff
+(fingerprint `bd2a1fe4e...`), gate state `satisfied`.
+
+Findings, all with trigger/wrong-outcome/location/evidence:
+
+1. **(sweep skeptic + claim auditor, independently)** Both PRs' regenerated
+   `docs/codemap.md` listed `AGENTS.md` under `## Governance` — picked up from
+   a local, gitignored file (`.gitignore:12`) present on the authoring
+   machine's disk, not from anything tracked. Self-contradicted the same
+   page's own `## Ignored Paths` line three lines below, and would never
+   reproduce from a clean CI checkout. Proven by regenerating from a clean
+   `git worktree` (tracked files only) and diffing: the *only* line that
+   differed was `- AGENTS.md`. Closed by regenerating both branches'
+   `docs/codemap.md` the same way (`fix/gh-25-codemap-drift-followup@d70a6f5`,
+   `fix/gh-36-mission-cancel-reason@1bc8c04`) — `governancekit --root . map`
+   itself has no "ignore gitignored files" behavior, so the real fix is
+   procedural: regenerate from a clean worktree or with the untracked file
+   moved aside, not from an everyday working directory that happens to carry
+   kit-installed files. Worth carrying forward as a standing habit for this
+   command specifically.
+2. **(sweep skeptic)** Merging the two PRs (both regenerated `docs/codemap.md`
+   independently from the same base) produced a real git conflict, and the
+   contract gate that supposedly guards this file
+   (`test_the_codemap_names_every_module_it_claims_to_index`) only checks that
+   every module *has* a header — not that a module's *listed symbols* are
+   current — so a careless resolution (`git checkout --ours`/`--theirs`
+   instead of regenerating) would have passed CI while silently omitting one
+   PR's new symbols. Closed correctly at merge time: resolved by rerunning
+   `governancekit --root . map` against the fully merged tree and grepping
+   for both branches' new symbols (`MissionCancelRequest`,
+   `test_codex_runner_real_process.py`, the 5 new `test_missions.py`
+   functions) before staging, not by picking a side.
+3. **(second caller + sweep skeptic, independently convergent)**
+   `docs/api/README.md`'s "Cancel and stop are two doors onto the same lock"
+   section, unmodified by PR #38's diff, still claimed both
+   `/missions/{id}/cancel` and `/sessions/{id}/stop` "write the same audit
+   event type" with only `via` differing — true before #38, false after: only
+   the missions door gained `reason`. Closed in
+   `fix/gh-36-mission-cancel-reason@fb159b0` by naming the asymmetry
+   explicitly rather than leaving a claim the diff itself had falsified;
+   `/sessions/{id}/stop` was deliberately **not** extended to match — issue
+   #36's own scope names only the missions endpoint, and widening a session
+   lifecycle endpoint's contract on a council finding rather than an issue
+   would be exactly the "no out-of-scope architecture expansion" this
+   project's own delivery-loop rules forbid.
+
+Questions left open (evidence-backed but not closed as findings, since
+closing them would mean expanding scope beyond what either issue asked for):
+
+- MCP tool `cancel_codex_task` (`gateway/app/mcp/tools.py`) has no `reason` in
+  its `inputSchema` (`additionalProperties: false`), unlike its sibling
+  `approve_codex_task`, which already has one. Pre-existing (not introduced by
+  either PR) and out of #36's stated scope (REST + mobile client only).
+  Recommended as a follow-up issue, not implemented here.
+- `tests/integration/test_oauth_authorize.py::test_a_flood_of_bad_logins_does_not_stall_the_liveness_probe`
+  is a pre-existing, load-sensitive timing test that failed 1/5 runs under
+  contended hardware during the claim-auditor's independent verification
+  (unrelated file, present identically on both PR branches, its own docstring
+  already concedes "shared CI hardware can promise a ratio and not a
+  deadline"). Accepted as a known flake, not fixed here.
+
+Both PRs' full suites reproduced green after the fixes:
+`fix/gh-25-codemap-drift-followup@d70a6f5` — `pytest tests/contract -q` 26
+passed, `pytest tests/unit tests/integration -q` 509 passed/2 skipped.
+`fix/gh-36-mission-cancel-reason@fb159b0` — same contract count, full suite
+514 passed/2 skipped. Merged into `development` (PR #37 clean, PR #38 with
+the anticipated `docs/codemap.md` conflict resolved by regeneration as
+described in finding 2); `development` itself reproduced 26 passed / 514
+passed, 2 skipped after both merges, before pushing.
