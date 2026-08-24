@@ -4,4 +4,7 @@ operator.json
 secrets.json
 context-telemetry.jsonl
 overwritten/
+pre-upgrade/
+pre-migrate/
+remove-agents-backup/
 council/

@@ -86,7 +86,7 @@ Rules:
 
 Nunca executar deploy, restart de serviço em host remoto, push para produção, ou
 qualquer ação que afete um ambiente de produção **sem aprovação explícita do
-operador (`{{OPERATOR_NAME}}`)**.
+operador (`Esteban`)**.
 
 Inclui — sem se limitar a:
 - scripts de deploy com `--yes`, `--force`, `--skip-confirm` ou equivalentes

@@ -8,6 +8,9 @@ build/
 *.egg-info/
 .venv/
 venv/
+
+# Per-instance host identity (never tracked)
+.governancekit-identity.json
 # AI-Agents kit — managed by governancekit install-agents
 AGENTS.md
 .cursorrules
@@ -16,7 +19,6 @@ CLAUDE.md
 GEMINI.md
 .github/copilot-instructions.md
 .amazonq/rules/ai-agents.md
-.credentials
 handoff.md
 new-tag.sh
 scripts/install-agents-kit.sh
@@ -26,6 +28,13 @@ scripts/agent-worktree.sh
 .gk/secrets.json
 .gk/context-telemetry.jsonl
 .gk/overwritten/
+.gk/pre-upgrade/
+.gk/pre-migrate/
+.gk/remove-agents-backup/
+.gk/remove-agents-plan.json
+.gk/context-proposal/
+*.kit-new
+*.pre-draft
 .env
 .env.*
 .envrc
