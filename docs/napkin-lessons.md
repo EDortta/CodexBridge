@@ -1013,3 +1013,12 @@ passed, `pytest tests/unit tests/integration -q` 509 passed/2 skipped.
 the anticipated `docs/codemap.md` conflict resolved by regeneration as
 described in finding 2); `development` itself reproduced 26 passed / 514
 passed, 2 skipped after both merges, before pushing.
+
+## 2026-08-24 — kit identity format and council gate are both mechanical
+
+The shell installer does not read `.credentials/identity.json` as a flat object.
+It expects `state_version`, `values`, and `refs`; a hand-written flat JSON with
+`OPERATOR_NAME` looks correct to a human and still fails the installer gate. For
+shared-contract kit refreshes, stage the real delivery first and record the
+council round against that staged diff, because the fingerprint binding is what
+actually clears the gate.
