@@ -1022,3 +1022,41 @@ It expects `state_version`, `values`, and `refs`; a hand-written flat JSON with
 shared-contract kit refreshes, stage the real delivery first and record the
 council round against that staged diff, because the fingerprint binding is what
 actually clears the gate.
+
+## 2026-08-26 — council on gh-4 adversarial review (auth/mobile sessions), Squad E
+
+Two rounds, three lenses (security, skeptic, second-caller), against the merged
+#4 delivery. Branch `feature/gh-4/adversarial-review-fixes`.
+
+- Round 1 — raised: 22 · survived §2: 22 · became tests: 6 (8 tests) · left to operator: 6 (+3 doc-accuracy questions)
+- Round 2 — raised: 5 · survived §2: 5 · became tests: 1 · questions/operator: 4
+
+Lessons that cost real rework this session:
+
+- A "no-op /revoke writes an audit row" test that drove the no-op through
+  unknown/already-revoked *access* tokens passed against the unfixed code too:
+  the handler guards `if item is not None`, and `get_oauth_access_token` returns
+  None for a revoked/expired token, so those paths never reach the audit write.
+  The only no-op that actually writes a `0/0` row is an already-**revoked
+  refresh** token — `inspect_refresh_token` still returns the row. A regression
+  test that cannot fail without the fix is not a test; verify the fail-first on
+  the exact path, not a plausible-looking neighbour.
+- Capping `accessTokenExpiresAt` at the grant deadline without also deriving
+  `expiresIn` from it is a half-fix: `expiresIn` is the field the contract tells
+  the client to schedule from, so the uncapped TTL there reopens the same
+  "schedule past the grant, eat the 401" the cap exists to prevent. The
+  pre-commit critique caught it; the first cut shipped the timestamp capped and
+  the seconds-counter not.
+- Detecting a duplicate registry key on the raw `user_id` while lookup resolves
+  `.lower()` first leaves the exact escalation open: `user_id "OPS@EXAMPLE.COM"`
+  never byte-matches another account's `email "ops@example.com"` yet resolves to
+  it. Detection must use the key resolution uses — fold both sides.
+- Clamping the *target* iteration count (`min(max, ceiling)`) reopens the timing
+  oracle for an account written above the ceiling: its real verify cost exceeds
+  the clamped target, so padding is negative and it answers faster. The correct
+  shape is to make the over-ceiling hash *unusable* (0 in `_iterations_of`,
+  refused in `verify_password`) so the constant-cost padding covers it — and set
+  the ceiling well above any honest cost (10M) so hardening does not self-lock.
+- The council never modifies code, so round 2's `became tests: 1` is honest: it
+  reports; the programmer closes. Do not record round-2 findings as "fixed" in
+  the same breath as raising them.
