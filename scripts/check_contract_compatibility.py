@@ -14,36 +14,63 @@ breaking change" and §"What is not breaking", transcribed into a comparison:
     removing an endpoint, a field, an enum value, a response status      breaking
     renaming anything                                                    breaking
     narrowing a type, tightening a constraint, a new required field      breaking
+    a required field that stops being required (on a response)           breaking
+    changing a `default`, or which credential an operation accepts       breaking
     an endpoint that stops being unauthenticated                         breaking
     adding an endpoint / an optional field / a response field            fine
     relaxing a constraint, widening a type                               fine
     adding a value to `ErrorCode`                                        fine (see below)
     editing `description` / `summary` text                               fine
 
+A constraint counts as a *tightening* only when the thing it constrains already
+existed. A brand-new endpoint's `required: true` path parameter constrains
+nobody — and getting that wrong is not theoretical: before council round 1 this
+gate reported 31 breaking changes against `feature/gh-11` and 21 against
+`feature/gh-13`, both purely additive, and not one finding named a pointer a
+1.6.0 client could address.
+
 ## What this cannot see, stated plainly
 
 Read a green run as *"no mechanically visible break"*, never as *"compatible"*.
-Four classes of breaking change pass this gate, and three of them are in the
-README's own list:
+**Three** classes of breaking change pass this gate in silence, and all three
+are in the README's own list:
 
 - **A meaning change that keeps the name and the type.** `status` growing a new
   interpretation, `limit` counting something else, a field that used to be
   UTC becoming local. No schema diff catches this — the README says so where it
   lists the rule ("the most dangerous kind"). Nothing here changes that.
-- **Default sort order, and the identity or lifetime of a pagination cursor.**
-  Neither is expressible in the schema.
-- **A rename is reported as a removal**, because that is what a rename looks
-  like from the outside: the verdict is right, the wording is imprecise.
+- **Default sort order.** A `default` *value* is compared; the order rows come
+  back in is not expressible in the schema at all.
+- **The identity or lifetime of a pagination cursor.** Same reason.
+
+Two more are imprecise rather than silent, which is a different thing:
+
+- **A rename is reported as a removal.** The verdict is right and the pointer is
+  right; only the wording is imprecise.
 - **Inside `allOf` / `anyOf` / `oneOf`**, members are compared as a set and not
-  recursed into, so a constraint tightened *within* a composition branch is
-  invisible. Compared positionally instead, reordering two equivalent branches
-  would report two breaks — and a gate that cries wolf is a gate that gets
-  deleted rather than obeyed. Five such keywords exist in the document today.
-- **Inside a `securitySchemes` entry.** Its *removal* reports, like any
-  component; changing an existing one (bearer to apiKey, a different header
-  name) does not. Every operation in this contract carries the same scheme, so
-  the case has never arisen — teach `_Facts._document` about the group before it
-  does.
+  recursed into, so a constraint tightened *within* an existing branch reports
+  as "1 branch removed" rather than naming the constraint. Compared positionally
+  instead, reordering two equivalent branches would report two breaks — and a
+  gate that cries wolf is a gate that gets deleted rather than obeyed. A branch
+  *added* to an `allOf` is caught, because `allOf` is an AND. Five composition
+  keywords exist in the document today.
+
+And one is neither, because the gate says so out loud:
+
+- **A restriction keyword this walker does not model** (`dependentRequired`,
+  `readOnly`, `uniqueItems`, `if`/`then`, …) makes the gate **fail** with
+  "this gate does not model … so it abstained rather than approving". None
+  appears in the contract today. Silence over an unread keyword was the failure
+  mode; a red build asking for a human is the fix.
+
+Council round 1 found seven more gaps that are now closed rather than
+documented, and this list is what it looked like before: `servers`,
+path-item-level `parameters`, `components.requestBodies`, a `default` value,
+which credential an operation accepts, a branch added to an `allOf`, and a
+`required` name removed from a response schema — every one of them green.
+`components.securitySchemes` **contents** are still not compared (its removal
+is); every operation here carries the same scheme, so teach `_Facts._document`
+about the group before that changes.
 
 ## Two conservative calls, on purpose
 
@@ -82,6 +109,14 @@ DOCUMENT_NAME = "codex-bridge.openapi.yaml"
 #: this repository. Same reason `x-contract-excluded-paths` lives there.
 MINIMUM_VERSION_KEY = "x-minimum-supported-version"
 
+#: Written reason for a floor that is no longer the oldest published version.
+#: Raising the floor is a deprecation — it drops the promise to every client
+#: still on the old pin — and it is also the cheapest way to make a red
+#: compatibility gate green, which is why it may not be a silent one-line diff.
+#: `tests/contract/test_contract_compatibility.py::test_raising_the_floor_past_a_published_version_is_written_down`
+#: is what enforces it, the same shape as the `reason` on an excluded path.
+RAISED_FLOOR_KEY = "x-minimum-supported-version-raised"
+
 OPERATIONS = frozenset(
     {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 )
@@ -102,7 +137,7 @@ FLOORS = ("minLength", "minItems", "minProperties", "minimum", "exclusiveMinimum
 #: relaxation — which is explicitly not breaking.
 ADDRESSABLE = frozenset(
     {"endpoint", "operation", "response", "component", "property", "parameter",
-     "header", "media"}
+     "header", "media", "server", "serverVariable"}
 )
 
 #: Fact kinds that are a restriction, so *appearing* where the baseline had
@@ -111,6 +146,18 @@ TIGHTENING_WHEN_ADDED = frozenset(
     {"required", "pattern", "format", "const", "ceiling", "floor",
      "closedProperties"}
 )
+
+#: JSON Schema keywords that *restrict* a value and that this walker does not
+#: model. It does not compare them; it reports that one is present so the
+#: reviewer knows the gate abstained, instead of the gate abstaining silently.
+#: None of them appears in the contract today — the tripwire is what makes the
+#: day one arrives a red build rather than an invisible one.
+UNMODELLED_RESTRICTIONS = frozenset({
+    "dependentRequired", "dependentSchemas", "propertyNames", "patternProperties",
+    "prefixItems", "contains", "minContains", "maxContains", "uniqueItems",
+    "multipleOf", "not", "if", "then", "else", "readOnly", "writeOnly",
+    "unevaluatedProperties", "unevaluatedItems", "discriminator",
+})
 
 
 # --------------------------------------------------------------------------
@@ -155,15 +202,22 @@ class _Facts:
     # -- document ----------------------------------------------------------
 
     def _document(self, document: dict) -> None:
+        self._servers(document.get("servers"))
+
         for path, item in (document.get("paths") or {}).items():
             if not isinstance(item, dict):
                 continue
             pointer = f"paths[{path}]"
             self._emit(pointer, "endpoint")
+            # OpenAPI lets a path item declare parameters that apply to *every*
+            # operation under it. Walking only the operation keys dropped them:
+            # a new required one landed invisibly, and hoisting existing ones up
+            # — a pure refactor — reported them all as removed.
+            inherited = [p for p in (item.get("parameters") or []) if isinstance(p, dict)]
             for key, operation in item.items():
                 if key.lower() not in OPERATIONS or not isinstance(operation, dict):
                     continue
-                self._operation(operation, f"{pointer}.{key.lower()}")
+                self._operation(operation, f"{pointer}.{key.lower()}", inherited)
 
         for group, entries in (document.get("components") or {}).items():
             if not isinstance(entries, dict):
@@ -179,8 +233,41 @@ class _Facts:
                     self._response(entry, pointer)
                 elif group == "headers":
                     self._header(entry, pointer)
+                elif group == "requestBodies" and isinstance(entry, dict):
+                    self._emit(pointer, "parameter", bool(entry.get("required")))
+                    self._content(entry.get("content"), pointer)
 
-    def _operation(self, operation: dict, pointer: str) -> None:
+    def _servers(self, servers: Any) -> None:
+        """`servers` is where a generated client gets its base URL.
+
+        Renaming a server variable renames it in every generated client, which
+        §"What is a breaking change" covers under "renaming anything, in either
+        direction". Keyed by URL template rather than by list position, so
+        reordering two servers is not a rename.
+        """
+        if not isinstance(servers, list):
+            return
+        for server in servers:
+            if not isinstance(server, dict):
+                continue
+            url = str(server.get("url", ""))
+            pointer = f"servers[{url}]"
+            self._emit(pointer, "server")
+            for name, variable in (server.get("variables") or {}).items():
+                variable_pointer = f"{pointer}.variables[{name}]"
+                self._emit(variable_pointer, "serverVariable")
+                if isinstance(variable, dict) and "enum" in variable:
+                    values = variable["enum"]
+                    if isinstance(values, list):
+                        self._emit(
+                            f"{variable_pointer}.enum",
+                            "enum",
+                            frozenset(_canonical(value) for value in values),
+                        )
+
+    def _operation(
+        self, operation: dict, pointer: str, inherited: list[dict] | None = None
+    ) -> None:
         self._emit(pointer, "operation")
         # An endpoint that stops being reachable without a credential breaks
         # every client that reached it — the probes are the whole reason a
@@ -190,7 +277,17 @@ class _Facts:
             "unauthenticated",
             operation.get("security") == [],
         )
-        for parameter in operation.get("parameters") or []:
+        # …and separately, *which* credential. Collapsing the whole block to
+        # that one boolean made a scheme swap or an added scope invisible on
+        # every authenticated operation in the contract.
+        security = operation.get("security")
+        if isinstance(security, list):
+            self._emit(
+                f"{pointer}.security.requirements",
+                "securityRequirements",
+                frozenset(_canonical(requirement) for requirement in security),
+            )
+        for parameter in [*(inherited or []), *(operation.get("parameters") or [])]:
             self._parameter(parameter, pointer)
         body = operation.get("requestBody")
         if isinstance(body, dict):
@@ -288,6 +385,25 @@ class _Facts:
             if name in schema:
                 self._emit(f"{pointer}.{name}", "floor", schema[name])
 
+        if "default" in schema:
+            # A client that omits the field gets the server's default. Moving it
+            # changes that client's behaviour with no code change on either
+            # side — the same invisible flip §"What is a breaking change" names
+            # for default sort order.
+            self._emit(f"{pointer}.default", "default", _canonical(schema["default"]))
+
+        # Tripwire. Every keyword above is modelled; a restriction keyword this
+        # walker does not know about would otherwise be dropped in silence, and
+        # the honesty list would keep claiming a completeness it lost. Reporting
+        # it as "reviewed by hand" is the fail-loud version of a blind spot.
+        unmodelled = sorted(UNMODELLED_RESTRICTIONS & set(schema))
+        if unmodelled:
+            self._emit(
+                f"{pointer}.<unmodelled>",
+                "unmodelled",
+                _canonical({name: schema[name] for name in unmodelled}),
+            )
+
         extra = schema.get("additionalProperties")
         if extra is False:
             self._emit(f"{pointer}.additionalProperties", "closedProperties", True)
@@ -340,18 +456,67 @@ def _removals(before: dict, after: dict) -> Iterator[Finding]:
                 f"this {kind} was removed or renamed. A client that addresses "
                 "it by name stops working."
             )
+        elif kind == "required":
+            # The whole `required` list vanished. On a *response* schema that is
+            # a break: a generated client makes a required field non-nullable
+            # and reads it unconditionally. It is a relaxation only on a
+            # request-only schema, which a pointer cannot tell — most schemas
+            # here are shared. Reported, with the direction named, so a
+            # reviewer can say which it is instead of the gate guessing.
+            yield pointer, (
+                "every field here stopped being required. On a response that "
+                "breaks a client reading them unconditionally; on a "
+                "request-only schema it is a relaxation — say which in review."
+            )
+        elif kind == "default":
+            yield pointer, (
+                "the default was removed. A client that omits this field no "
+                "longer gets the value it was written against."
+            )
+
+
+def _new_addressables(before: dict, after: dict) -> tuple[str, ...]:
+    """Pointers of things the candidate introduces wholesale.
+
+    A constraint is only a *tightening* when the thing it constrains already
+    existed. Without this, adding an endpoint whose new query parameter carries
+    a `pattern`, or adding an optional field with a `maxLength`, reported as
+    breaking — three of the changes §"What is not breaking" lists by name. Two
+    sibling branches are adding endpoints right now, so the gate would have gone
+    red on exactly the work it is supposed to wave through.
+    """
+    return tuple(
+        pointer
+        for pointer in sorted(set(after) - set(before))
+        if after[pointer][0] in ADDRESSABLE
+    )
 
 
 def _additions(before: dict, after: dict) -> Iterator[Finding]:
     """Facts the candidate gained. Only a *restriction* that appears is breaking."""
+    fresh = _new_addressables(before, after)
     for pointer in sorted(set(after) - set(before)):
         kind, value = after[pointer]
-        if kind == "parameter" and value:
+        if any(pointer.startswith(f"{ancestor}.") for ancestor in fresh):
+            # Born inside something that is itself new: nothing existed to
+            # tighten. Applies to a new *required parameter* too — required on
+            # an endpoint no client has ever called constrains nobody.
+            # `test_a_compatible_change_is_left_alone[add_an_endpoint_with_a_required_constrained_parameter]`
+            # is what keeps this branch honest.
+            continue
+        if kind == "unmodelled":
+            yield pointer, (
+                f"this schema uses restriction keyword(s) this gate does not "
+                f"model, so it abstained rather than approving: {value}. Review "
+                "the change against docs/api/README.md §\"What is a breaking "
+                "change\" by hand."
+            )
+        elif kind == "parameter" and value:
             yield pointer, "a new *required* parameter. Existing callers do not send it."
         elif kind == "required":
             yield pointer, (
-                f"{sorted(value)} became required where nothing was. A request "
-                "that omits them is now rejected."
+                f"{sorted(value)} became required where nothing was; a message "
+                "that omits them is now invalid."
             )
         elif kind == "enum":
             # `type: string` -> `enum: [a, b]` closes an open field. The
@@ -401,10 +566,48 @@ def _changes(before: dict, after: dict) -> Iterator[Finding]:
             arrived = sorted(new - old)
             if arrived:
                 yield pointer, f"{arrived} became required."
+            departed = sorted(old - new)
+            if departed:
+                # See `_removals` for why this is reported rather than waved
+                # through as a relaxation.
+                yield pointer, (
+                    f"{departed} stopped being required. On a response that "
+                    "breaks a client reading them unconditionally; on a "
+                    "request-only schema it is a relaxation — say which in review."
+                )
         elif kind == "composition":
             gone = sorted(old - new)
             if gone:
                 yield pointer, f"{len(gone)} branch(es) removed from the composition."
+            arrived = sorted(new - old)
+            if arrived and pointer.endswith(".allOf"):
+                # `allOf` is an AND: a new branch is a new constraint on every
+                # value that already validated. `oneOf`/`anyOf` are ORs, where
+                # a new branch widens, so only `allOf` reports here.
+                yield pointer, (
+                    f"{len(arrived)} branch(es) added to an `allOf`, which "
+                    "narrows every value that validated before."
+                )
+        elif kind == "securityRequirements":
+            lost = sorted(old - new)
+            if lost:
+                yield pointer, (
+                    "the credential this operation accepts changed; it no "
+                    f"longer accepts {lost}. A client holding one stops working."
+                )
+        elif kind == "default":
+            if old != new:
+                yield pointer, (
+                    f"the default changed from {old} to {new}. A client that "
+                    "omits this field silently gets different behaviour."
+                )
+        elif kind == "unmodelled":
+            yield pointer, (
+                f"this schema uses restriction keyword(s) this gate does not "
+                f"model, so it abstained rather than approving: {new}. Review "
+                "the change against docs/api/README.md §\"What is a breaking "
+                "change\" by hand."
+            )
         elif kind == "ceiling":
             if _lt(new, old):
                 yield pointer, f"ceiling lowered from {old!r} to {new!r}."

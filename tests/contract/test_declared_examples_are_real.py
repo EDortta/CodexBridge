@@ -108,6 +108,53 @@ def _resolve_response(response: Any) -> dict | None:
     return response
 
 
+def _declared_properties(schema: Any, seen: frozenset[str] = frozenset()) -> set[str] | None:
+    """Top-level property names a schema describes, following `$ref` and `allOf`.
+
+    `None` means "this schema genuinely describes no named properties" — a
+    free-form object, or a non-object — which is the only case that may be
+    skipped.
+
+    Council round 1: reading `schema["properties"]` directly returned `None` for
+    every `{"$ref": …}` and `{"allOf": […]}` response, and the test read that as
+    "not a described JSON object" and skipped. It *is* described. Every error
+    shape in this contract is one of those two, so a response could carry an
+    undeclared field — a server filesystem path, say, which
+    `docs/api/README.md` §"Fields that must never ship" calls the canonical trap
+    — and the check would step over it in silence.
+    """
+    if not isinstance(schema, dict):
+        return None
+
+    reference = schema.get("$ref")
+    if isinstance(reference, str):
+        if reference in seen:
+            return None  # a cycle; refuse rather than recurse forever
+        prefix = "#/components/schemas/"
+        if not reference.startswith(prefix):
+            return None
+        target = (SPEC.get("components") or {}).get("schemas", {}).get(
+            reference[len(prefix):]
+        )
+        return _declared_properties(target, seen | {reference})
+
+    names: set[str] = set()
+    found = False
+    if isinstance(schema.get("properties"), dict):
+        names |= set(schema["properties"])
+        found = True
+    # `allOf` is an AND: the object may carry the properties of every branch.
+    # `oneOf`/`anyOf` are deliberately not unioned — which branch applies
+    # depends on the value, so a union would silently permit fields from a
+    # branch this response is not.
+    for branch in schema.get("allOf") or []:
+        branch_names = _declared_properties(branch, seen)
+        if branch_names is not None:
+            names |= branch_names
+            found = True
+    return names if found else None
+
+
 def _declared_examples(media: dict) -> Iterator[tuple[str, Any]]:
     """Every example in one media-type object, `example` and `examples` alike."""
     if "example" in media:
@@ -118,28 +165,84 @@ def _declared_examples(media: dict) -> Iterator[tuple[str, Any]]:
 
 
 def _example_cases() -> list[tuple[str, dict, Any]]:
-    """(label, schema, example) for every response example the document declares."""
+    """(label, schema, example) for **every** example the document declares.
+
+    Council round 1: the first cut walked `paths.*.*.responses.*.content.*` and
+    nothing else, reaching 5 of the 24 example values in the document while both
+    `README.md` and `testing.md` told the mobile team it checked every one. The
+    19 it missed are the identifier and envelope examples — `Id`, `Timestamp`,
+    `Actor`, `Permission`, `PageInfo`, `Error` — which is precisely the set a
+    client author lifts as fixtures first.
+
+    Three shapes carry an example, and each validates against a different
+    schema: a media-type object's `example`/`examples` against the media type's
+    own schema; a schema's `examples` **list** against that schema; a
+    header's or parameter's `example` against its `schema`.
+    """
     cases: list[tuple[str, dict, Any]] = []
+
     for path, item in (SPEC.get("paths") or {}).items():
         if not isinstance(item, dict):
             continue
         for method, operation in item.items():
             if method.lower() not in OPERATIONS or not isinstance(operation, dict):
                 continue
+            where = f"{method.upper()} {path}"
+            body = operation.get("requestBody")
+            if isinstance(body, dict):
+                cases += _content_cases(body.get("content"), f"{where} requestBody")
+            for parameter in operation.get("parameters") or []:
+                cases += _keyed_example_cases(parameter, f"{where} parameter")
             for status, raw in (operation.get("responses") or {}).items():
                 response = _resolve_response(raw)
                 if not response:
                     continue
-                for media_type, media in (response.get("content") or {}).items():
-                    schema = (media or {}).get("schema")
-                    if not isinstance(schema, dict):
-                        continue
-                    for label, value in _declared_examples(media):
-                        cases.append(
-                            (f"{method.upper()} {path} {status} {media_type} {label}",
-                             schema, value)
-                        )
+                cases += _content_cases(response.get("content"), f"{where} {status}")
+                for name, header in (response.get("headers") or {}).items():
+                    cases += _keyed_example_cases(header, f"{where} {status} header {name}")
+
+    components = SPEC.get("components") or {}
+    for name, schema in (components.get("schemas") or {}).items():
+        # A *schema* `examples` is a plain list of values, not a map of example
+        # objects — a different shape from the media-type keyword of the same
+        # name, and the reason a single helper missed it.
+        if isinstance(schema, dict) and isinstance(schema.get("examples"), list):
+            for index, value in enumerate(schema["examples"]):
+                cases.append((f"components.schemas.{name} examples[{index}]", schema, value))
+    for group in ("headers", "parameters"):
+        for name, entry in (components.get(group) or {}).items():
+            cases += _keyed_example_cases(entry, f"components.{group}.{name}")
+    for name, body in (components.get("requestBodies") or {}).items():
+        if isinstance(body, dict):
+            cases += _content_cases(body.get("content"), f"components.requestBodies.{name}")
+
     return cases
+
+
+def _content_cases(content: Any, where: str) -> list[tuple[str, dict, Any]]:
+    """Examples on a media-type object, validated against that media type's schema."""
+    cases: list[tuple[str, dict, Any]] = []
+    if not isinstance(content, dict):
+        return cases
+    for media_type, media in content.items():
+        schema = (media or {}).get("schema")
+        if not isinstance(schema, dict) or not isinstance(media, dict):
+            continue
+        for label, value in _declared_examples(media):
+            cases.append((f"{where} {media_type} {label}", schema, value))
+    return cases
+
+
+def _keyed_example_cases(entry: Any, where: str) -> list[tuple[str, dict, Any]]:
+    """Examples on a header or parameter, validated against its own `schema`."""
+    if not isinstance(entry, dict):
+        return []
+    schema = entry.get("schema")
+    if not isinstance(schema, dict):
+        return []
+    return [
+        (f"{where} {label}", schema, value) for label, value in _declared_examples(entry)
+    ]
 
 
 EXAMPLE_CASES = _example_cases()
@@ -246,6 +349,33 @@ def test_at_least_one_operation_can_be_driven() -> None:
     )
 
 
+def test_the_undeclared_field_check_is_not_skipping_everything(client: TestClient) -> None:
+    """The third anti-vacuity guard, and the one that was missing.
+
+    `test_the_gateway_returns_no_field_the_contract_omits` ends in
+    `pytest.skip` when it cannot find the declared property names. A skip is
+    green, and a parametrized suite that skips every case looks exactly like one
+    that passed — which is how, in council round 1, the check turned out to be
+    stepping over every `$ref` and `allOf` response in the contract while
+    reporting no skips at all (pytest counts a skip inside a passed run quietly).
+    This asserts that at least one case really compared something.
+    """
+    compared = 0
+    for path, method, operation in DRIVABLE:
+        response = client.request(method.upper(), path)
+        declared = _resolve_response(
+            (operation.get("responses") or {}).get(str(response.status_code))
+        )
+        schema = ((declared or {}).get("content") or {}).get("application/json", {}).get("schema", {})
+        if isinstance(response.json(), dict) and _declared_properties(schema) is not None:
+            compared += 1
+    assert compared, (
+        "every drivable operation skipped the undeclared-field check, so it "
+        "compared nothing. Either no response is a described JSON object, or "
+        "`_declared_properties` stopped resolving the contract's schemas."
+    )
+
+
 @pytest.mark.parametrize(
     ("path", "method", "operation"), DRIVABLE, ids=[f"{p}" for p, _, _ in DRIVABLE]
 )
@@ -303,10 +433,11 @@ def test_the_gateway_returns_no_field_the_contract_omits(
     declared = _resolve_response((operation.get("responses") or {}).get(str(response.status_code)))
     schema = ((declared or {}).get("content") or {}).get("application/json", {}).get("schema", {})
     body = response.json()
-    if not isinstance(body, dict) or not isinstance(schema.get("properties"), dict):
+    properties = _declared_properties(schema)
+    if not isinstance(body, dict) or properties is None:
         pytest.skip(f"{path} {response.status_code} is not a described JSON object")
 
-    undeclared = sorted(set(body) - set(schema["properties"]))
+    undeclared = sorted(set(body) - properties)
     assert not undeclared, (
         f"{method.upper()} {path} returns top-level field(s) {undeclared} that "
         f"{SPEC_PATH.name} does not describe. Add them to the schema or stop "

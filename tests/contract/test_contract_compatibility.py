@@ -95,8 +95,20 @@ def baseline(spec: dict) -> dict:
 
     Read from `contract/`, never re-derived from the working document: the
     point of a baseline is that it is the bytes a client already holds.
+
+    Guarded, because an unguarded module fixture is how one missing file
+    becomes twenty-three identical `FileNotFoundError` tracebacks with the one
+    actionable sentence buried under them. Council round 1 walked the merge of
+    a sibling branch and counted exactly that.
     """
     path = checker.baseline_path(spec, CONTRACT_DIR)
+    if not path.is_file():
+        pytest.fail(
+            f"the contract's `{checker.MINIMUM_VERSION_KEY}` names "
+            f"{checker.minimum_supported_version(spec)}, and {path} does not "
+            "exist. Run `python3 scripts/publish_contract.py` and commit "
+            "contract/, or point the floor at a version that is published."
+        )
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
@@ -147,6 +159,51 @@ def test_the_minimum_supported_version_is_not_ahead_of_the_document(spec: dict) 
         f"`x-minimum-supported-version` is {floor} while `info.version` is "
         f"{current}: the floor is above the version this build implements."
     )
+
+
+def test_raising_the_floor_past_a_published_version_is_written_down(spec: dict) -> None:
+    """The one edit that silently disarms this whole file.
+
+    Council round 1: faced with a red compatibility gate, the cheapest green is
+    not to fix the break — it is to move `x-minimum-supported-version` up to
+    `info.version`. The gate then compares the document against a published copy
+    of itself and can never fire again, and the promise to every client still on
+    the old pin is dropped with no test, no warning, and a one-line diff nobody
+    reads as a policy change.
+
+    So the floor must be the **oldest** published version. Raising it is
+    legitimate — but it is a deprecation, and this contract's own rule for a
+    deliberate exception is that it is written down where the machine can see
+    it: the same shape as `x-contract-excluded-paths`, which
+    `test_every_exclusion_is_well_formed` refuses without a `reason`.
+    """
+    floor = checker.minimum_supported_version(spec)
+    published = sorted(
+        (path.name for path in CONTRACT_DIR.iterdir() if path.is_dir()),
+        key=_version_key,
+    )
+    assert published, "nothing is published, so there is no floor to check"
+    oldest = published[0]
+    if floor == oldest:
+        return
+
+    waiver = spec.get(checker.RAISED_FLOOR_KEY)
+    assert isinstance(waiver, str) and waiver.strip(), (
+        f"`x-minimum-supported-version` is {floor} while contract/{oldest}/ is "
+        "still published, so this build has stopped promising to serve a "
+        "version a client may have pinned. That is a deprecation, not "
+        f"housekeeping: record why in `{checker.RAISED_FLOOR_KEY}`, naming the "
+        "mobile release that stopped using it. If the floor was raised to get "
+        "past a red compatibility gate, fix the break instead — that is the "
+        "one thing this gate exists to prevent."
+    )
+
+
+def _version_key(version: str) -> tuple:
+    parts = version.split(".")
+    if len(parts) == 3 and all(part.isdigit() for part in parts):
+        return (0, tuple(int(part) for part in parts), "")
+    return (1, (), version)
 
 
 def test_the_error_code_exemption_still_has_a_schema(spec: dict) -> None:
@@ -359,6 +416,89 @@ def require_authentication_on_an_open_endpoint(document: dict) -> str:
     pytest.skip("the contract declares no unauthenticated operation to close")
 
 
+def stop_requiring_a_response_field(document: dict) -> str:
+    """A response field that becomes optional is a break, not a relaxation.
+
+    Council round 1: the first cut treated every `required` removal as a
+    relaxation, and the "compatible" fixture that was supposed to prove the
+    request-side case safe actually mutated `Actor` — a response-only schema —
+    so the matrix *certified* this break as compatible. A generated client
+    makes a required field non-nullable and reads it unconditionally.
+    """
+    schema = _error_schema(document)
+    schema["required"] = [name for name in schema["required"] if name != "retryable"]
+    return "components.schemas[Error].required"
+
+
+def swap_the_credential_an_operation_accepts(document: dict) -> str:
+    """Collapsing `security` to "is it empty" hid every scheme and scope change."""
+    for path, item in document["paths"].items():
+        for method, operation in item.items():
+            if method in checker.OPERATIONS and operation.get("security"):
+                operation["security"] = [{"someOtherScheme": ["admin"]}]
+                return f"paths[{path}].{method}.security.requirements"
+    pytest.skip("the contract declares no authenticated operation")
+
+
+def add_a_branch_to_an_all_of(document: dict) -> str:
+    """`allOf` is an AND: a new branch narrows every value that validated before.
+
+    Only removals were compared, so appending `maxLength: 4` to `ProjectId`
+    truncated every project identifier in the contract with the gate green.
+    """
+    for name, schema in document["components"]["schemas"].items():
+        if isinstance(schema, dict) and isinstance(schema.get("allOf"), list):
+            schema["allOf"] = [*schema["allOf"], {"maxLength": 4}]
+            return f"components.schemas[{name}].allOf"
+    pytest.skip("the contract uses no `allOf`")
+
+
+def change_a_default(document: dict) -> str:
+    """A client that omits the field gets different behaviour and no error."""
+    for name, parameter in document["components"]["parameters"].items():
+        schema = parameter.get("schema")
+        if isinstance(schema, dict) and "default" in schema:
+            schema["default"] = "a-value-nobody-was-written-against"
+            return f"components.parameters[{name}].schema.default"
+    pytest.skip("no component parameter declares a `default`")
+
+
+def rename_a_server_variable(document: dict) -> str:
+    """`servers` was not walked at all; every generated client embeds it."""
+    for server in document.get("servers") or []:
+        variables = server.get("variables") or {}
+        for name in list(variables):
+            variables[f"{name}Renamed"] = variables.pop(name)
+            return f"servers[{server.get('url', '')}].variables[{name}]"
+    pytest.skip("the contract declares no server variable")
+
+
+def add_a_required_parameter_to_a_path_item(document: dict) -> str:
+    """Path-item parameters apply to every operation under the path.
+
+    The walker looked only at operation keys, so this landed invisibly — and
+    hoisting existing parameters up here, a pure refactor, reported them all as
+    removed.
+    """
+    path = _first_path(document)
+    document["paths"][path]["parameters"] = [
+        {"name": "tenantId", "in": "query", "required": True, "schema": {"type": "string"}}
+    ]
+    method = next(k for k in document["paths"][path] if k in checker.OPERATIONS)
+    return f"paths[{path}].{method}.parameters[tenantId:query]"
+
+
+def use_a_restriction_keyword_the_gate_does_not_model(document: dict) -> str:
+    """The tripwire: abstaining loudly beats abstaining silently.
+
+    `dependentRequired` rejects requests a conforming client sends today. The
+    gate does not model it — so it says so and fails, rather than printing "no
+    breaking change" over a keyword it never read.
+    """
+    _error_schema(document)["dependentRequired"] = {"code": ["message"]}
+    return "components.schemas[Error].<unmodelled>"
+
+
 BREAKING: list[Callable[[dict], str]] = [
     remove_an_endpoint,
     remove_an_operation,
@@ -374,6 +514,14 @@ BREAKING: list[Callable[[dict], str]] = [
     make_a_field_required,
     change_a_reference,
     require_authentication_on_an_open_endpoint,
+    # Added in council round 1; every one of these was green before.
+    stop_requiring_a_response_field,
+    swap_the_credential_an_operation_accepts,
+    add_a_branch_to_an_all_of,
+    change_a_default,
+    rename_a_server_variable,
+    add_a_required_parameter_to_a_path_item,
+    use_a_restriction_keyword_the_gate_does_not_model,
 ]
 
 
@@ -404,6 +552,97 @@ def add_an_endpoint(document: dict) -> None:
             "responses": {"200": {"description": "New."}},
         }
     }
+
+
+def add_a_realistic_endpoint(document: dict) -> None:
+    """An endpoint shaped like one someone would actually add.
+
+    Council round 1, and the single worst defect this delivery had. The fixture
+    above adds an operation with no parameters, no request body and no response
+    schema — the one shape that dodges `_additions`. Against the *real*
+    `feature/gh-11` and `feature/gh-13` branches, both purely additive, the gate
+    reported **31** and **21** breaking changes; not one touched a pointer a
+    1.6.0 client can address.
+
+    A path parameter is `required: true` by OpenAPI rule, so the defect fired on
+    every endpoint with one, forever. This fixture carries a path parameter, a
+    constrained optional query parameter, a required request body and a response
+    schema with its own `required` — every trigger at once.
+    """
+    document["paths"]["/api/v1/widgets/{widgetId}"] = {
+        "get": {
+            "operationId": "getWidget",
+            "security": [{"bearerAuth": []}],
+            "parameters": [
+                {
+                    "name": "widgetId",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string", "maxLength": 64, "pattern": "^[a-z-]+$"},
+                },
+                {
+                    "name": "fields",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string", "enum": ["short", "full"]},
+                },
+            ],
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "required": ["name"],
+                            "properties": {"name": {"type": "string", "maxLength": 40}},
+                        }
+                    }
+                },
+            },
+            "responses": {
+                "200": {
+                    "description": "A widget.",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["id", "createdAt"],
+                                "properties": {
+                                    "id": {"$ref": "#/components/schemas/Id"},
+                                    "createdAt": {"$ref": "#/components/schemas/Timestamp"},
+                                },
+                            }
+                        }
+                    },
+                }
+            },
+        }
+    }
+
+
+def add_a_component_schema(document: dict) -> None:
+    """A new schema arrives with its own `required` and constraints, and is referenced."""
+    document["components"]["schemas"]["WidgetSummary"] = {
+        "type": "object",
+        "required": ["id", "label"],
+        "properties": {
+            "id": {"$ref": "#/components/schemas/Id"},
+            "label": {"type": "string", "maxLength": 80, "pattern": "^[A-Za-z ]+$"},
+        },
+    }
+
+
+def hoist_parameters_to_the_path_item(document: dict) -> None:
+    """A pure refactor: path-item parameters apply to every operation under it.
+
+    Reported five phantom removals before the walker learned to inherit them.
+    """
+    for path, item in document["paths"].items():
+        for method, operation in item.items():
+            if method in checker.OPERATIONS and operation.get("parameters"):
+                item["parameters"] = operation.pop("parameters")
+                return
+    pytest.skip("no operation in the contract declares parameters to hoist")
 
 
 def add_an_optional_response_field(document: dict) -> None:
@@ -440,23 +679,17 @@ def rewrite_prose(document: dict) -> None:
                 operation["description"] = "Reworded, at length."
 
 
-def drop_a_required_request_field(document: dict) -> None:
-    for schema in document["components"]["schemas"].values():
-        if isinstance(schema, dict) and schema.get("required"):
-            schema["required"] = schema["required"][:-1]
-            return
-    pytest.skip("no schema in the contract declares `required`")
-
-
 COMPATIBLE: list[Callable[[dict], None]] = [
     add_an_endpoint,
+    add_a_realistic_endpoint,
+    add_a_component_schema,
+    hoist_parameters_to_the_path_item,
     add_an_optional_response_field,
     add_a_value_to_error_code,
     relax_a_ceiling,
     drop_a_pattern,
     widen_a_type,
     rewrite_prose,
-    drop_a_required_request_field,
 ]
 
 

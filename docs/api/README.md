@@ -1220,10 +1220,17 @@ python3 scripts/apply_migrations.py
 ## Getting the contract to the mobile repository
 
 `scripts/publish_contract.py` writes the document to `contract/<version>/` with
-a `manifest.json` carrying its SHA-256, and refreshes `contract/index.json`.
-`EDortta/CodexBridgeMobile` fetches that directory and verifies the digest, so a
-pin is a pin: the mechanics, the consumer-side commands and the immutability
-rule are in **[`testing.md`](./testing.md)**.
+a `manifest.json` carrying its SHA-256, and refreshes `contract/index.json`. The
+mechanics, the consumer-side fetch-and-verify commands and the immutability rule
+are in **[`testing.md`](./testing.md)**.
+
+**The producing half is done; the consuming half is not.** This repository now
+publishes a pinnable, checksummed artifact and refuses to let it drift.
+`EDortta/CodexBridgeMobile` does **not** consume it yet: it has no `contract/`
+directory, fetches nothing, verifies no digest, and still cites this document by
+hand. The artifact also has not reached `main`, which carries no `docs/api/` at
+all — `development` is where it lives today. Nothing here is a pin until the
+mobile build does the verifying, and that is a change in the other repository.
 
 `tests/contract/test_published_contract_artifact.py` fails when the published
 copy falls behind the document, and separately when a version that was already
@@ -1266,10 +1273,10 @@ only when a human remembered to — which is the same reliability as no gate at
 all, and it went unnoticed until adversarial review pointed at the empty
 `.github/` directory.
 
-`tests/contract` now holds five gates, each guarding one pair, and a green run
-on one says nothing about the others. The table naming them, and what each one
-cannot see, is in [`testing.md`](./testing.md) — read it before concluding from
-a green build that the implementation matches the contract.
+`tests/contract` holds six gates — one per file in it — each guarding one pair,
+and a green run on one says nothing about the others. The table naming them, and
+what each one cannot see, is in [`testing.md`](./testing.md) — read it before
+concluding from a green build that the implementation matches the contract.
 
 Changing an endpoint means changing this document **first**. The drift test
 exists so that "the implementation and the contract disagree" is a red test and

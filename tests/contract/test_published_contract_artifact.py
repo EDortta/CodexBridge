@@ -105,6 +105,13 @@ def test_a_published_version_is_byte_identical_to_the_document(spec: dict) -> No
     """
     version = spec["info"]["version"]
     published = CONTRACT_DIR / version / "codex-bridge.openapi.yaml"
+    # Guarded rather than read straight: on a release commit that moved
+    # `info.version` before running the publisher, reading it raised a bare
+    # `FileNotFoundError` with no remedy in it.
+    assert published.is_file(), (
+        f"contract/{version}/ does not exist. Run "
+        "`python3 scripts/publish_contract.py` and commit the result."
+    )
     assert published.read_bytes() == SPEC_PATH.read_bytes()
 
 
@@ -137,9 +144,24 @@ def test_every_published_version_hashes_to_its_manifest() -> None:
 
 
 def _isolated_tree(tmp_path: Path) -> tuple[Path, Path]:
-    """A copy of the document and the published artifact, safe to corrupt."""
+    """A copy of the document and the published artifact, safe to corrupt.
+
+    Fails with the remedy when the current version is not published yet.
+    Without this, a release commit that moved `info.version` before running the
+    publisher made three tests here die with a bare `FileNotFoundError` naming a
+    path under `/tmp` — two of them tests of the *publisher's own* behaviour,
+    failing for a reason that has nothing to do with what they assert. Council
+    round 1 walked a sibling merge and read exactly that output.
+    """
     source = tmp_path / "codex-bridge.openapi.yaml"
     shutil.copyfile(SPEC_PATH, source)
+    version = yaml.safe_load(SPEC_PATH.read_text(encoding="utf-8"))["info"]["version"]
+    if not (CONTRACT_DIR / version / "codex-bridge.openapi.yaml").is_file():
+        pytest.fail(
+            f"the contract is at {version} and contract/{version}/ does not "
+            "exist, so this test has nothing to work from. Run "
+            "`python3 scripts/publish_contract.py` and commit the result."
+        )
     output = tmp_path / "contract"
     shutil.copytree(CONTRACT_DIR, output)
     return source, output

@@ -5,7 +5,7 @@
 
 ## Summary
 
-- 100 file(s) · 944 symbol(s) indexed
+- 100 file(s) · 955 symbol(s) indexed
 - Languages: config (2), python (96), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -689,6 +689,7 @@ tests/
 - `test_the_document_declares_a_minimum_supported_version(spec)` — "Without it there is no floor, and this whole file has nothing to compare against."
 - `test_the_minimum_supported_version_is_published(spec)` — "A floor naming an unpublished version is a floor over nothing."
 - `test_the_minimum_supported_version_is_not_ahead_of_the_document(spec)` — "A floor above the ceiling means the build serves nothing it promises."
+- `test_raising_the_floor_past_a_published_version_is_written_down(spec)` — "The one edit that silently disarms this whole file."
 - `test_the_error_code_exemption_still_has_a_schema(spec)` — "The one enum allowed to grow must still be the one the reason applies to."
 - `test_the_document_is_compatible_with_the_minimum_supported_version()` — "The acceptance criterion: a breaking change is caught before merge."
 - `test_the_gate_names_the_incompatible_endpoint_in_its_output(tmp_path)` — ""CI output identifies the incompatible endpoint/schema" — asserted, not assumed."
@@ -709,15 +710,24 @@ tests/
 - `make_a_field_required(document)`
 - `change_a_reference(document)`
 - `require_authentication_on_an_open_endpoint(document)`
+- `stop_requiring_a_response_field(document)` — "A response field that becomes optional is a break, not a relaxation."
+- `swap_the_credential_an_operation_accepts(document)` — "Collapsing `security` to "is it empty" hid every scheme and scope change."
+- `add_a_branch_to_an_all_of(document)` — "`allOf` is an AND: a new branch narrows every value that validated before."
+- `change_a_default(document)` — "A client that omits the field gets different behaviour and no error."
+- `rename_a_server_variable(document)` — "`servers` was not walked at all; every generated client embeds it."
+- `add_a_required_parameter_to_a_path_item(document)` — "Path-item parameters apply to every operation under the path."
+- `use_a_restriction_keyword_the_gate_does_not_model(document)` — "The tripwire: abstaining loudly beats abstaining silently."
 - `test_a_breaking_change_is_caught_and_named(baseline, mutate)` — "Every rule in §"What is a breaking change" that a schema diff can see."
 - `add_an_endpoint(document)`
+- `add_a_realistic_endpoint(document)` — "An endpoint shaped like one someone would actually add."
+- `add_a_component_schema(document)` — "A new schema arrives with its own `required` and constraints, and is referenced."
+- `hoist_parameters_to_the_path_item(document)` — "A pure refactor: path-item parameters apply to every operation under it."
 - `add_an_optional_response_field(document)`
 - `add_a_value_to_error_code(document)`
 - `relax_a_ceiling(document)`
 - `drop_a_pattern(document)`
 - `widen_a_type(document)`
 - `rewrite_prose(document)`
-- `drop_a_required_request_field(document)`
 - `test_a_compatible_change_is_left_alone(baseline, mutate)` — "§"What is not breaking", asserted as loudly as its opposite."
 
 ### `tests/contract/test_declared_examples_are_real.py`
@@ -729,6 +739,7 @@ tests/
 - `test_the_validator_rejects_what_the_schema_forbids(body, why)` — "Everything below is worthless if `_validator` accepts anything."
 - `test_a_declared_example_satisfies_its_own_schema(label, schema, example)` — "An example that contradicts its schema misleads the reader who trusts it most."
 - `test_at_least_one_operation_can_be_driven()` — "Anti-vacuity, again: `security: []` disappearing must not read as green."
+- `test_the_undeclared_field_check_is_not_skipping_everything(client)` — "The third anti-vacuity guard, and the one that was missing."
 - `test_the_gateway_returns_the_declared_shape(client, path, method, operation)` — "The success half of "representative examples are tested"."
 - `test_the_gateway_returns_no_field_the_contract_omits(client, path, method, operation)` — "The body-level mirror of the undocumented-route check."
 - `test_a_failure_response_is_the_declared_error_envelope(client, label, trigger)` — "`Error` is a promise about *every* non-2xx, so it is checked against the schema."
