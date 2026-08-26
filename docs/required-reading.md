@@ -57,6 +57,11 @@ Leitura escopada: só quem for mexer na área precisa.
 - `docs/api/codex-bridge.openapi.yaml` — o contrato canônico da API móvel. Mudar
   endpoint significa mudar este arquivo **primeiro**; `tests/contract/` reprova a
   divergência.
+- `docs/api/testing.md` — **obrigatório** ao mexer no contrato: qual gate guarda
+  qual par, como publicar uma versão (`scripts/publish_contract.py`), como o repo
+  móvel fixa uma versão pelo digest, e o que o gate de breaking change
+  (`scripts/check_contract_compatibility.py`) **não** consegue ver. Mudou o YAML
+  e não republicou? A suíte reprova, e a mensagem diz o arquivo.
 - `migrations/` + `scripts/apply_migrations.py` — **obrigatório** ao alterar
   `gateway/app/models/entities.py`. Uma mudança de schema não está pronta quando o
   modelo muda: o `create_all` do startup só cria tabela nova, nunca adiciona coluna

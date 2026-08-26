@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 97 file(s) · 894 symbol(s) indexed
-- Languages: config (2), python (93), shell (2)
+- 100 file(s) · 944 symbol(s) indexed
+- Languages: config (2), python (96), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -100,6 +100,7 @@ gateway/
 pyproject.toml
 scripts/
   apply_migrations.py  — "Apply the SQL files in `migrations/`, once each, in filename order."
+  check_contract_compatibility.py  — "Refuse a contract change that breaks the minimum API version mobile still supports."
   diagnose.sh
   install.sh
   publish_contract.py  — "Publish the OpenAPI contract as a pinned, checksummed artifact."
@@ -111,6 +112,8 @@ shared/
 tests/
   conftest.py
   contract/
+    test_contract_compatibility.py  — "The gate that fails a pull request before it breaks the pinned mobile client."
+    test_declared_examples_are_real.py  — "Response **bodies**, checked against the contract — the half the route gate skips."
     test_docs_match_the_runtime.py  — "Prose that states a runtime fact, checked against the runtime."
     test_openapi_document.py  — "Contract tests for the canonical OpenAPI document."
     test_proxy_routes.py  — "Every contracted path must be routed by the proxies in front of the gateway."
@@ -627,6 +630,16 @@ tests/
 
 - `main()`
 
+### `scripts/check_contract_compatibility.py`
+
+> Refuse a contract change that breaks the minimum API version mobile still supports.
+
+- `facts(document)` — "Comparable facts for one OpenAPI document."
+- `incompatibilities(baseline, candidate)` — "Every breaking change in `candidate` relative to `baseline`."
+- `minimum_supported_version(document)`
+- `baseline_path(document, published)`
+- `main(argv)`
+
 ### `scripts/publish_contract.py`
 
 > Publish the OpenAPI contract as a pinned, checksummed artifact.
@@ -666,12 +679,67 @@ tests/
 - `ensure_within_root(root, target)`
 - `filtered_environment(allowed_keys)`
 
+### `tests/contract/test_contract_compatibility.py`
+
+> The gate that fails a pull request before it breaks the pinned mobile client.
+
+- `run(*args)`
+- `spec()`
+- `baseline(spec)` — "The published copy of the minimum supported version."
+- `test_the_document_declares_a_minimum_supported_version(spec)` — "Without it there is no floor, and this whole file has nothing to compare against."
+- `test_the_minimum_supported_version_is_published(spec)` — "A floor naming an unpublished version is a floor over nothing."
+- `test_the_minimum_supported_version_is_not_ahead_of_the_document(spec)` — "A floor above the ceiling means the build serves nothing it promises."
+- `test_the_error_code_exemption_still_has_a_schema(spec)` — "The one enum allowed to grow must still be the one the reason applies to."
+- `test_the_document_is_compatible_with_the_minimum_supported_version()` — "The acceptance criterion: a breaking change is caught before merge."
+- `test_the_gate_names_the_incompatible_endpoint_in_its_output(tmp_path)` — ""CI output identifies the incompatible endpoint/schema" — asserted, not assumed."
+- `test_the_gate_refuses_a_floor_that_is_not_published(tmp_path)` — "Pointing the floor at a version nobody can download is not a green run."
+- `test_a_document_with_no_declared_floor_is_an_error(tmp_path)`
+- `test_a_document_compared_with_itself_reports_nothing(baseline)` — "The precondition every other case rests on."
+- `remove_an_endpoint(document)`
+- `remove_an_operation(document)`
+- `remove_a_response_status(document)`
+- `remove_a_response_field(document)`
+- `rename_a_response_field(document)`
+- `remove_an_enum_value(document)`
+- `add_a_value_to_another_enum(document)`
+- `close_an_open_field_with_an_enum(document)` — "`type: string` -> `enum: [...]`: yesterday's valid value may be rejected today."
+- `narrow_a_type(document)`
+- `tighten_a_ceiling(document)`
+- `add_a_pattern(document)`
+- `make_a_field_required(document)`
+- `change_a_reference(document)`
+- `require_authentication_on_an_open_endpoint(document)`
+- `test_a_breaking_change_is_caught_and_named(baseline, mutate)` — "Every rule in §"What is a breaking change" that a schema diff can see."
+- `add_an_endpoint(document)`
+- `add_an_optional_response_field(document)`
+- `add_a_value_to_error_code(document)`
+- `relax_a_ceiling(document)`
+- `drop_a_pattern(document)`
+- `widen_a_type(document)`
+- `rewrite_prose(document)`
+- `drop_a_required_request_field(document)`
+- `test_a_compatible_change_is_left_alone(baseline, mutate)` — "§"What is not breaking", asserted as loudly as its opposite."
+
+### `tests/contract/test_declared_examples_are_real.py`
+
+> Response **bodies**, checked against the contract — the half the route gate skips.
+
+- `client()`
+- `test_the_document_declares_response_examples_at_all()` — "Anti-vacuity: the parametrized test below is empty if discovery breaks."
+- `test_the_validator_rejects_what_the_schema_forbids(body, why)` — "Everything below is worthless if `_validator` accepts anything."
+- `test_a_declared_example_satisfies_its_own_schema(label, schema, example)` — "An example that contradicts its schema misleads the reader who trusts it most."
+- `test_at_least_one_operation_can_be_driven()` — "Anti-vacuity, again: `security: []` disappearing must not read as green."
+- `test_the_gateway_returns_the_declared_shape(client, path, method, operation)` — "The success half of "representative examples are tested"."
+- `test_the_gateway_returns_no_field_the_contract_omits(client, path, method, operation)` — "The body-level mirror of the undocumented-route check."
+- `test_a_failure_response_is_the_declared_error_envelope(client, label, trigger)` — "`Error` is a promise about *every* non-2xx, so it is checked against the schema."
+
 ### `tests/contract/test_docs_match_the_runtime.py`
 
 > Prose that states a runtime fact, checked against the runtime.
 
 - `test_the_codemap_names_every_module_it_claims_to_index()` — "`.docs/agents/programmer.md` tells the next agent to read this instead of scanning."
 - `test_the_api_readme_does_not_deny_the_limiter_that_ships(denial)` — "§"Rate limiting — vocabulary only, so far" outlived the wiring."
+- `test_the_api_readme_does_not_deny_the_publication_machinery_that_ships(denial)` — "§"Getting the contract to the mobile repository" described its own absence."
 
 ### `tests/contract/test_openapi_document.py`
 

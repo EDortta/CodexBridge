@@ -32,6 +32,12 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
+  # tests/contract/test_declared_examples_are_real.py validates live response
+  # bodies against the schemas in the contract. It arrives transitively with
+  # openapi-spec-validator, and is declared anyway: a direct import resting on
+  # someone else's dependency breaks the day that dependency drops it, in a
+  # gate whose whole job is to not be silently absent.
+  "jsonschema>=4.20.0",
   "openapi-spec-validator>=0.9.0",
   "pytest>=9.0.0",
   "pytest-asyncio>=1.1.0",

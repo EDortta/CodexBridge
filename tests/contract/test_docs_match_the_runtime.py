@@ -165,3 +165,43 @@ def test_the_api_readme_does_not_deny_the_limiter_that_ships(denial: str) -> Non
         f"docs/api/README.md still says {denial!r}, while {len(limited)} served "
         "/api routes carry RateLimitDependency"
     )
+
+
+@pytest.mark.parametrize(
+    "denial",
+    [
+        # §"Getting the contract to the mobile repository", before issue #14.
+        "Today there is none",
+        "Nothing publishes it, nothing checksums it",
+        # §Versioning.
+        "Nothing enforces this today",
+        # §"What the gate does not cover".
+        "Body-level conformance is issue #14's scope. Until it lands",
+        "nobody reads the `info.version` field as a working pin before #14 lands",
+    ],
+)
+def test_the_api_readme_does_not_deny_the_publication_machinery_that_ships(denial: str) -> None:
+    """§"Getting the contract to the mobile repository" described its own absence.
+
+    It was written when "a consumer copies it by hand" was true, and it is the
+    section a mobile developer reads *first* when asking how to get the
+    contract. Left alone after issue #14, it would send that reader to copy the
+    file by hand while a published, checksummed, pinnable artifact sat in
+    `contract/` — the exact failure §"Rate limiting" already had once, in the
+    document a client author reaches for.
+
+    The precondition is asserted, not assumed: these sentences are only stale if
+    the machinery that makes them false is really there.
+    """
+    published = sorted(
+        path.name for path in (REPO_ROOT / "contract").glob("*") if path.is_dir()
+    )
+    assert published, "nothing is published under contract/; the denials are not stale yet"
+    for script in ("publish_contract.py", "check_contract_compatibility.py"):
+        assert (REPO_ROOT / "scripts" / script).is_file(), f"scripts/{script} is missing"
+
+    prose = " ".join(API_README.read_text(encoding="utf-8").split())
+    assert denial not in prose, (
+        f"docs/api/README.md still says {denial!r}, while contract/ publishes "
+        f"{published} and both contract scripts exist"
+    )
