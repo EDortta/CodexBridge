@@ -827,6 +827,166 @@ async def test_signing_out_twice_with_only_an_access_token_is_still_a_sign_out(a
     assert second.json()["accessTokensRevoked"] == 0
 
 
+async def _artifact_in_p1(factory):
+    """One artifact row, no bytes on disk.
+
+    The download endpoint checks the credential before it looks for the file,
+    so a row with nothing behind it separates the two answers this test needs:
+    `404` means "the token was accepted and the content is missing", `401`
+    means "the token is gone". No file is written, and nothing outside the
+    database is touched.
+    """
+    async with factory() as session:
+        return await store.create_artifact(
+            session,
+            project_id="p1",
+            artifact_type="report",
+            name="build-report.txt",
+            size_bytes=3,
+            sha256="ab" * 32,
+            origin="ci",
+            storage_path="p1/build-report.txt",
+            content_type="text/plain",
+        )
+
+
+async def test_signing_out_kills_a_download_token_minted_before_it(api) -> None:
+    """Sign-out has to close every credential, not the two it was written for.
+
+    An artifact download token (issue #11) is a third credential this actor
+    holds, and the first cut of #11 left it alive through a sign-out: the
+    session died and the minted token went on streaming an APK for the rest of
+    its TTL — up to an hour at the configured ceiling. Two council lenses
+    reproduced it independently (`200`, full body, after a `200` from
+    `/auth/revoke`), and it is verbatim the failure this endpoint's own
+    docstring says it exists to prevent.
+
+    Revoked by actor rather than by grant: `artifact_download_tokens` carries
+    no `grant_id`, and revoking too little is the failure above while revoking
+    too much costs the holder one extra tap on Download.
+    """
+    artifact = await _artifact_in_p1(api.factory)
+    body = sign_in(api).json()
+    headers = auth(body["accessToken"])
+
+    minted = api.post(f"/api/v1/artifacts/{artifact.id}/download-token", headers=headers)
+    assert minted.status_code == 201
+    download_headers = {"Authorization": f"Bearer {minted.json()['token']}"}
+
+    accepted = api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers)
+    assert accepted.status_code == 404, "precondition: the credential is live and the bytes are not"
+
+    revoked = api.post("/api/v1/auth/revoke", headers=headers)
+    assert revoked.status_code == 200
+
+    assert api.get("/api/v1/artifacts", headers=headers).status_code == 401
+    after = api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers)
+    assert after.status_code == 401, "the download token outlived the session that minted it"
+
+
+async def test_revoking_by_refresh_token_also_kills_the_download_tokens(api) -> None:
+    """The other revocation door closes the same set.
+
+    `/auth/revoke` reaches `revoke_auth_grant` when a refresh token is
+    presented and `revoke_access_token` when only a bearer is. Which door the
+    caller used must not decide what stays alive (`design-standards.md` §3) —
+    the guard lives in one helper both call for exactly that reason.
+    """
+    artifact = await _artifact_in_p1(api.factory)
+    body = sign_in(api).json()
+    headers = auth(body["accessToken"])
+
+    minted = api.post(f"/api/v1/artifacts/{artifact.id}/download-token", headers=headers)
+    download_headers = {"Authorization": f"Bearer {minted.json()['token']}"}
+    assert api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers).status_code == 404
+
+    assert api.post("/api/v1/auth/revoke", json={"refreshToken": body["refreshToken"]}).status_code == 200
+
+    after = api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers)
+    assert after.status_code == 401
+
+
+async def test_a_replayed_dead_refresh_token_cannot_kill_a_live_grants_download(api) -> None:
+    """Revocation stops at the grant it names — the round-1 fix reached past it.
+
+    `/auth/revoke` deliberately acts on a refresh token it has already
+    classified as consumed, revoked or expired (see the endpoint's docstring:
+    fail-closed, and the abuse is "one forced re-authentication of one grant").
+    That bound held because both `UPDATE`s are scoped to `grant_id` and are
+    no-ops on a dead token.
+
+    The first cut of the download-token revocation was scoped to `user_id`
+    alone, which made it the one statement a replay still hit: an attacker
+    holding a long-dead refresh token — from a phone backup, an old client log
+    — could destroy the download credential of a *live* grant, unauthenticated
+    and repeatably, while the response reported that nothing was revoked. Found
+    by a second council round; the fix records `grant_id` on the download token
+    and revokes inside it.
+    """
+    artifact = await _artifact_in_p1(api.factory)
+
+    dead = sign_in(api).json()
+    api.post("/api/v1/auth/revoke", headers=auth(dead["accessToken"]))
+
+    live = sign_in(api).json()
+    live_headers = auth(live["accessToken"])
+    minted = api.post(f"/api/v1/artifacts/{artifact.id}/download-token", headers=live_headers)
+    download_headers = {"Authorization": f"Bearer {minted.json()['token']}"}
+    assert api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers).status_code == 404
+
+    for _ in range(3):
+        replay = api.post("/api/v1/auth/revoke", json={"refreshToken": dead["refreshToken"]})
+        assert replay.status_code == 200
+        assert replay.json()["accessTokensRevoked"] == 0
+
+    assert api.get("/api/v1/artifacts", headers=live_headers).status_code == 200
+    survived = api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers)
+    assert survived.status_code == 404, (
+        "an unauthenticated replay of a dead refresh token destroyed a live grant's "
+        "download credential"
+    )
+
+
+async def test_a_grantless_sign_out_does_not_abort_the_phones_download(api) -> None:
+    """Signing out of ChatGPT must not kill an APK transfer on the phone.
+
+    The browser OAuth flow issues access tokens that belong to no grant;
+    revoking one lands in `store.revoke_access_token`. Scoped by actor alone,
+    that deleted the phone's download tokens too — the operator's 40 MB
+    transfer aborting at 90% because they closed a browser tab, with the phone
+    session still perfectly alive. `grant_id=None` is a value here, addressing
+    exactly the grantless session's own download tokens.
+    """
+    from datetime import timedelta
+
+    artifact = await _artifact_in_p1(api.factory)
+
+    phone = sign_in(api).json()
+    phone_headers = auth(phone["accessToken"])
+    minted = api.post(f"/api/v1/artifacts/{artifact.id}/download-token", headers=phone_headers)
+    download_headers = {"Authorization": f"Bearer {minted.json()['token']}"}
+
+    async with api.factory() as session:
+        await store.create_oauth_access_token(
+            session,
+            token="chatgpt-browser-token",
+            client_id="chatgpt",
+            user_id="alice",
+            scopes=["codexbridge.read"],
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+
+    signed_out = api.post("/api/v1/auth/revoke", headers=auth("chatgpt-browser-token"))
+    assert signed_out.status_code == 200
+    assert signed_out.json()["accessTokensRevoked"] == 1
+
+    survived = api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers)
+    assert survived.status_code == 404, (
+        "a grantless (browser OAuth) sign-out destroyed a download token minted by "
+        "the phone's own grant"
+    )
+
+
 async def test_an_access_token_that_was_never_issued_signs_out_quietly(api) -> None:
     """Same rule, reached from the other side: incurious about the credential."""
     response = api.post("/api/v1/auth/revoke", headers=auth("never-issued"))

@@ -670,3 +670,153 @@ def test_every_served_api_route_carries_the_rate_limiter() -> None:
         if not any(isinstance(call, RateLimitDependency) for call in calls):
             unlimited.append(path)
     assert not unlimited, f"/api routes served without the rate limiter: {unlimited}"
+
+
+# Served `/api/v1` routes that deliberately carry no `require_action` guard,
+# each with the reason and what authenticates them instead. Named one at a time
+# rather than by prefix: a blanket exemption is how the *next* unguarded route
+# ships unnoticed, which is the same mistake `test_auth.py`'s catalogue parity
+# guard already had to be rescued from once.
+UNGUARDED_API_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/api/v1/auth/sign-in"): (
+        "Issues the credential. Guarding it with a permission would require the "
+        "credential it exists to mint."
+    ),
+    ("POST", "/api/v1/auth/refresh"): (
+        "Authenticated by the refresh token in its own body, which is a "
+        "credential and not a permission."
+    ),
+    ("POST", "/api/v1/auth/revoke"): (
+        "Deliberately incurious about the credential presented — an unknown or "
+        "already-revoked one is answered 200 like any other."
+    ),
+    ("GET", "/api/v1/auth/me"): (
+        "Reports what the actor may do. It authenticates (`current_principal`) "
+        "and has no action of its own to check; guarding it with one would make "
+        "the report unreadable to whoever most needs it. This entry is "
+        "load-bearing — under the first cut of the detector below it was not, "
+        "because bare authentication counted as a guard."
+    ),
+    ("GET", "/api/v1/artifacts/{artifact_id}/download"): (
+        "Issue #11. Authenticates the artifact download token and nothing else: "
+        "that credential names the one artifact it authorizes, satisfies no "
+        "catalogue action, and is what the system downloader carries instead of "
+        "the session bearer. See gateway/app/api/routes/artifacts.py."
+    ),
+}
+
+
+def test_every_served_api_route_is_guarded_or_listed_with_a_reason() -> None:
+    """A route with no authorization guard ships only on purpose, in writing.
+
+    `security-standards.md` §4 says a missing guard "fails review, it is not
+    default-allow" — which, until this test, was a human promise. The limiter
+    had an inventory gate and authorization did not, and issue #11 added the
+    first `/api/v1` route that authenticates itself with a credential of its own
+    rather than through `require_action`. A council round asked what stops the
+    *second* one from being an accident; this does.
+
+    **It detects authorization, not authentication.** The first cut accepted a
+    dependency that was `current_principal` or that happened to be *named*
+    `guard`, and a second council round walked two routes past it: one with
+    only `Depends(current_principal)` — readable by any signed-in account of
+    any scope, which is precisely what `security-standards.md` §4 means by "not
+    just authentication of the caller" — and one with no authentication at all
+    whose sole dependency was named `guard`. The name match also matched
+    nothing real: `require_action` returns a closure called `_dependency`.
+
+    So the marker is explicit. `require_action` tags its closure with
+    `guarded_action`, and this walks the resolved dependant looking for that —
+    a guard reached through a shared dependency still counts, because the
+    alternative is a gate that pushes people to inline their guards to satisfy
+    it.
+    """
+    from fastapi.routing import iter_route_contexts
+
+    from gateway.app.main import app
+
+    def guards(dependant) -> bool:
+        for sub in dependant.dependencies:
+            if getattr(sub.call, "guarded_action", None) is not None:
+                return True
+            if guards(sub):
+                return True
+        return False
+
+    unguarded = []
+    for route_context in iter_route_contexts(app.routes):
+        path = route_context.path or ""
+        if not path.startswith("/api/v1/"):
+            continue
+        dependant = getattr(route_context, "dependant", None)
+        if dependant is None or guards(dependant):
+            continue
+        for method in (getattr(route_context, "methods", None) or set()) - {"HEAD", "OPTIONS"}:
+            if (method, path) not in UNGUARDED_API_ROUTES:
+                unguarded.append(f"{method} {path}")
+
+    assert not unguarded, (
+        f"/api/v1 routes served with no authorization guard: {sorted(unguarded)}. "
+        "Add `Depends(require_action(...))`, or list it in UNGUARDED_API_ROUTES "
+        "with the reason and what authenticates it instead."
+    )
+
+
+def test_no_exemption_outlives_its_route() -> None:
+    """A stale entry pre-authorizes whatever later claims that path.
+
+    Same rule the OpenAPI gate applies to `x-contract-excluded-paths`: an
+    exemption whose route was renamed or deleted stays valid forever and
+    silently covers the next route that reuses the path.
+    """
+    from fastapi.routing import iter_route_contexts
+
+    from gateway.app.main import app
+
+    served = set()
+    for route_context in iter_route_contexts(app.routes):
+        path = route_context.path or ""
+        for method in (getattr(route_context, "methods", None) or set()) - {"HEAD", "OPTIONS"}:
+            served.add((method, path))
+
+    orphaned = sorted(entry for entry in UNGUARDED_API_ROUTES if entry not in served)
+    assert not orphaned, f"UNGUARDED_API_ROUTES exempts routes no longer served: {orphaned}"
+
+    for entry, reason in UNGUARDED_API_ROUTES.items():
+        assert reason.strip(), f"{entry} is exempted with no reason"
+
+
+def test_every_exemption_is_load_bearing() -> None:
+    """An entry the gate would pass without is an exemption that documents nothing.
+
+    `("GET", "/api/v1/auth/me")` was exactly that under the first cut of the
+    detector: the route depends on `current_principal` directly, bare
+    authentication counted as a guard, and the entry silently pre-authorized
+    that path forever while `test_no_exemption_outlives_its_route` — which only
+    checks the path is still served — could never notice. Found by two council
+    lenses independently.
+
+    Removing an entry must therefore make the gate fail. Checked one at a time,
+    which is the only way to attribute the failure.
+    """
+    original = dict(UNGUARDED_API_ROUTES)
+    inert = []
+    try:
+        for entry in original:
+            UNGUARDED_API_ROUTES.pop(entry)
+            try:
+                test_every_served_api_route_is_guarded_or_listed_with_a_reason()
+            except AssertionError:
+                pass  # the gate noticed, which is what makes the entry real
+            else:
+                inert.append(entry)
+            UNGUARDED_API_ROUTES[entry] = original[entry]
+    finally:
+        UNGUARDED_API_ROUTES.clear()
+        UNGUARDED_API_ROUTES.update(original)
+
+    assert not inert, (
+        f"the gate passes without these exemptions, so they exempt nothing: {inert}. "
+        "Either the route is genuinely guarded — delete the entry — or the detector "
+        "in `guards()` is reporting it guarded when it is not."
+    )

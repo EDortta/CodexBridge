@@ -47,11 +47,33 @@ REQUIRED_TABLES: dict[str, str] = {
     "conversation_read_states": "0007_conversations.sql",
     "artifacts": "0008_artifacts.sql",
     "android_builds": "0008_artifacts.sql",
-    # Without this one the gateway starts and every download-token mint fails at
-    # request time — the same "reads like a code bug" failure this module exists
-    # to turn into a startup failure that names the migration.
     "artifact_download_tokens": "0008_artifacts.sql",
 }
+
+# READ THIS BEFORE TRUSTING THE TABLE ABOVE.
+#
+# `REQUIRED_TABLES` does not currently fail a boot. `gateway/app/main.py:startup`
+# runs `Base.metadata.create_all` one statement before `check_schema`, and every
+# table named above is also declared on `Base` — so a gateway started against a
+# database missing any of them creates them itself and the guard sees them
+# present. A council round reproduced it against a database at 0007.
+#
+# It is still worth maintaining: it names which migration owns which object, it
+# is what a reader consults, and it becomes a real gate the moment the ordering
+# changes. But an entry here is **not** the "the failure appears at startup"
+# guarantee that `REQUIRED_COLUMNS` and `FORBIDDEN_COLUMNS` genuinely provide —
+# `CREATE TABLE IF NOT EXISTS` never adds a column, which is why those two fire
+# and this one does not.
+#
+# What a skipped table-only migration actually costs: the `create_all` schema
+# instead of the shipped one — no indexes, no column defaults from the `.sql` —
+# and no `schema_migrations` row, so the next migration's bookkeeping starts
+# from a wrong premise. Nothing warns.
+#
+# Pinned by `tests/unit/test_schema_guard.py::test_required_tables_cannot_fire_at_boot_today`,
+# which fails if someone makes the gate real — at which point this comment,
+# `docs/api/README.md`, `scripts/install.sh`, `deploy/README.md` and
+# `scripts/apply_migrations.py` all get their promise back.
 
 REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     "tasks": {

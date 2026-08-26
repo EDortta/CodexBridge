@@ -517,6 +517,131 @@ async def test_minting_for_an_unknown_artifact_is_a_typed_404(api) -> None:
     assert response.json()["code"] == "not_found"
 
 
+async def test_the_download_token_is_never_stored_in_the_clear(api) -> None:
+    """The fourth narrowing, which the module docstring claimed was tested.
+
+    It was not: a council round's claim auditor found that changing
+    `hash_token(token)` to `token` in `store.create_artifact_download_token`
+    kept the whole suite green, while `routes/artifacts.py` and
+    `docs/api/README.md` both asserted "each one is tested". The behaviour was
+    already right; the coverage claim was the false part.
+
+    Asserted against the table, not against the function: what matters is that
+    a reader of the database cannot download anything with what they find.
+    """
+    from sqlalchemy import select
+
+    from gateway.app.models.entities import ArtifactDownloadTokenModel
+    from shared.security import hash_token
+
+    artifact = await make_artifact(api)
+    token = mint(api, artifact.id).json()["token"]
+
+    async with api.factory() as session:
+        rows = list((await session.execute(select(ArtifactDownloadTokenModel))).scalars())
+
+    assert len(rows) == 1
+    assert rows[0].token_hash != token
+    assert rows[0].token_hash == hash_token(token)
+    assert token not in rows[0].token_hash
+
+
+async def test_a_token_stops_at_the_projects_the_account_still_has(api) -> None:
+    """"...or narrows" — the half of the re-read claim that had no test.
+
+    Disabling was pinned; narrowing `allowed_projects` was asserted in prose
+    only. An operator who moves an account off a project expects that account's
+    outstanding download tokens for that project to stop, not to run out their
+    TTL.
+    """
+    import json as _json
+
+    from gateway.app.core.config import settings
+
+    artifact = await make_artifact(api)
+    token = mint(api, artifact.id).json()["token"]
+    assert download(api, artifact.id, token).status_code == 200
+
+    registry = _json.loads(open(settings.user_registry_file, encoding="utf-8").read())
+    for user in registry["users"]:
+        if user["user_id"] == "alice":
+            user["allowed_projects"] = []
+    with open(settings.user_registry_file, "w", encoding="utf-8") as handle:
+        _json.dump(registry, handle)
+
+    assert download(api, artifact.id, token).status_code == 401
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["bytes=" + "9" * 5000 + "-", "bytes=-" + "9" * 5000, "bytes=0-" + "9" * 5000],
+)
+async def test_an_absurdly_long_range_is_not_a_five_hundred(api, header: str) -> None:
+    """A `Range` of 4301+ digits was an unhandled `ValueError`.
+
+    `int()` refuses a decimal string past CPython's 4300-digit conversion limit
+    (the CVE-2020-10735 mitigation), so `_RANGE_RE`'s unbounded `\\d*` turned one
+    header into `500 internal_error` with `retryable: true` — inviting the
+    client to send it again — plus a stack trace per request, reachable by
+    anyone holding a five-minute download token. Found by a council round's
+    adversarial-user lens; the fix bounds the digit run in the pattern, so an
+    over-long range is simply a malformed one.
+    """
+    artifact = await make_artifact(api, content=b"0123456789")
+    token = mint(api, artifact.id).json()["token"]
+
+    response = download(api, artifact.id, token, headers={"Range": header})
+    assert response.status_code < 500, header
+    assert response.status_code in (200, 416)
+
+
+async def test_a_zero_padded_range_is_still_a_range(api) -> None:
+    """Leading zeros are legal and carry no meaning — RFC 9110 §14.1.1 is `1*DIGIT`.
+
+    The first fix for the 500 above bounded the digit run at 19, on the
+    reasoning that no file needs more. But the bound counts *digits*, not
+    magnitude: a twenty-digit spelling of `1` stopped matching, the header was
+    dropped, and the endpoint re-sent the whole file with `200` where a `206`
+    was asked for — the exact failure `Range` support exists to prevent, and
+    silent, because an ignored range is by design indistinguishable from an
+    unsupported one. Caught by the second round of the same council.
+    """
+    artifact = await make_artifact(api, content=b"0123456789")
+    token = mint(api, artifact.id).json()["token"]
+
+    padded = download(api, artifact.id, token, headers={"Range": "bytes=" + "0" * 19 + "1-2"})
+    assert padded.status_code == 206
+    assert padded.content == b"12"
+    assert padded.headers["Content-Range"] == "bytes 1-2/10"
+
+
+async def test_the_missing_content_404_writes_a_log_line_the_request_id_finds(api, caplog) -> None:
+    """The `requestId` has to resolve to something, or the refusal is a dead end.
+
+    `_content_missing` told the operator to find the artifact "from the
+    `requestId` in the log" while no log line existed: `ApiError` is rendered by
+    the error handlers, which log nothing, and this gateway has no access log.
+    A council round reproduced the silence with `caplog` at DEBUG over a whole
+    request — every record was harness noise.
+    """
+    import logging
+
+    artifact = await make_artifact(api, write_bytes=False)
+    token = mint(api, artifact.id).json()["token"]
+
+    with caplog.at_level(logging.WARNING, logger="gateway.app.api.routes.artifacts"):
+        response = download(api, artifact.id, token)
+
+    assert response.status_code == 404
+    records = [r for r in caplog.records if r.message == "artifact_content_unavailable"]
+    assert len(records) == 1
+    assert records[0].artifact_id == artifact.id
+    assert records[0].correlation_id == response.headers["X-Request-Id"]
+    # The operator gets the identifier; the log must not become the place the
+    # filesystem leaks instead of the response body.
+    assert str(api.artifacts_root) not in caplog.text
+
+
 async def test_a_token_survives_reuse_inside_its_lifetime(api) -> None:
     """Deliberately **not** single-use — the lifetime is the control.
 
@@ -821,8 +946,15 @@ async def test_a_row_whose_bytes_are_gone_is_a_typed_404_naming_no_path(api) -> 
     assert str(api.artifacts_root) not in response.text
 
 
-def test_resolve_refuses_before_it_reports_missing() -> None:
-    """A missing file and a rejected path are different exceptions, not one."""
+def test_resolve_refuses_before_it_reports_missing(artifacts_root) -> None:
+    """A missing file and a rejected path are different exceptions, not one.
+
+    Takes `artifacts_root` even though it writes nothing: without it this test
+    resolved against the real default root (`<cwd>/data/artifacts`) and passed
+    only because that directory happens to be absent on a developer's machine —
+    a pass coupled to the working directory rather than to the behaviour. A
+    council round flagged it.
+    """
     with pytest.raises(ArtifactError):
         validate_storage_path("../x")
     with pytest.raises(ArtifactContentMissing):

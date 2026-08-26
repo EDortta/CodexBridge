@@ -169,7 +169,14 @@ by the contract itself, not by a filter applied late:
   the contents of `users.json` or `registry.json`;
 - **server filesystem paths.** `ProjectModel.path` is the canonical trap: it is
   the project's real path on the executor and it is an internal field. Projects
-  are addressed by `ProjectId` and nothing else;
+  are addressed by `ProjectId` and nothing else. `ArtifactModel.storage_path`
+  (issue #11) is the second one: a path relative to `CODEX_BRIDGE_ARTIFACTS_ROOT`,
+  never serialized, never composable by a client — the bytes are reached through
+  a minted download token, and `gateway/app/services/artifact_storage.py` is the
+  only code that turns the stored value into a real file. The migration, the
+  model, the artifacts router and the tests all cite *this* section as the rule
+  that forbids it, and a council round found the citation pointing at a list
+  that did not contain it;
 - executor hostnames, internal IPs, ports, or anything that would let a client
   reach an executor without going through the gateway;
 - raw stack traces and raw driver errors. These map to `internal_error` plus a
@@ -1055,23 +1062,45 @@ a query string reaches access logs, proxies, browser history and `Referer`. So
 the mint response carries a *path* with no credential in it, and the token
 separately.
 
-Four things narrow the credential, and each has a test in
-`tests/integration/test_artifacts.py`:
+Five things narrow the credential, each named with the test that pins it —
+`gateway/app/api/routes/artifacts.py` carries the same list, and the two must
+not drift:
 
 - **bound to the artifact** — presenting it on another artifact is refused, so
-  a token for a public report cannot fetch a signed APK;
+  a token for a public report cannot fetch a signed APK
+  (`test_artifacts.py::test_a_token_minted_for_one_artifact_is_refused_on_another`);
 - **bound to the minting account, re-read at download time** — an account the
-  operator disables after minting cannot still pull the bytes. Same rule
-  refresh rotation already applies to a grant;
+  operator disables (`::test_a_token_whose_account_was_disabled_stops_working`)
+  or narrows (`::test_a_token_stops_at_the_projects_the_account_still_has`)
+  after minting cannot still pull the bytes. Same rule refresh rotation already
+  applies to a grant;
 - **expires in minutes** — `CODEX_BRIDGE_ARTIFACT_DOWNLOAD_TOKEN_TTL_SECONDS`,
-  default 300, clamped to `[30, 3600]`;
+  default 300, clamped to `[30, 3600]`
+  (`::test_an_expired_token_is_refused_with_the_typed_error`);
+- **dies with the sign-in that minted it** — `POST /api/v1/auth/revoke` deletes
+  the download tokens of that grant, because a sign-out that leaves an APK
+  streaming is the failure that endpoint exists to prevent
+  (`test_auth.py::test_signing_out_kills_a_download_token_minted_before_it`).
+  Scoped to the **grant**, not the actor: signing out of ChatGPT must not abort
+  a transfer the phone started, and an unauthenticated replay of a dead refresh
+  token must not reach a live grant's credentials;
 - **stored hashed** — through the same `shared.security.hash_token` the OAuth
-  access tokens use, so a reader of the database cannot download anything.
+  access tokens use, so a reader of the database cannot download anything
+  (`::test_the_download_token_is_never_stored_in_the_clear`).
 
 Every refusal on the download endpoint is the same `401` with the same message
-— absent, unknown, expired, minted for another artifact, or belonging to a
-disabled account. Distinguishing them tells a holder of a token they were never
-given whether it was ever real, and which artifact it was for.
+— absent, unknown, expired, minted for another artifact, belonging to an
+account since disabled or narrowed, or killed by a sign-out. Distinguishing
+them tells a holder of a token they were never given whether it was ever real,
+and which artifact it was for. A revoked token's row is *deleted*, so it
+reaches the endpoint as "unknown" and needs no branch of its own.
+
+**A `401` here means "mint a new download token", not "refresh the session".**
+Everywhere else on this API it means the second thing, so a client running its
+usual refresh-and-retry interceptor on this response will loop. The contract
+says so in two machine-readable places: the operation declares its own
+`artifactDownloadToken` security scheme rather than `bearerAuth`, and its `401`
+is `DownloadTokenRejected` rather than the shared `Unauthenticated`.
 
 ### The token is deliberately not single-use
 
@@ -1106,7 +1135,13 @@ server that actually refuses the download.
 ### Checksums and signing metadata come before the download
 
 `sha256` is on every artifact in the list, on the detail, and on the mint
-response; `android.signingFingerprint` is on every APK in all three. That is
+response. `android.signingFingerprint` is on every APK in the list and the
+detail — **not** on the mint response, which carries only what a downloader
+needs to fetch and verify bytes (`sizeBytes`, `sha256`, `contentType`). An
+earlier cut of this paragraph said "all three"; a council round checked the
+response and it has no `android` block, so a client reading the signer from it
+would have got nothing. Read the fingerprint from the catalogue, which is where
+the decision to download is made anyway. That is
 issue #11's acceptance criterion read literally: *before* download or install
 means in the catalogue, not only in the transfer, because a client decides
 whether to start a 60 MB download from what the list already told it. The
@@ -1159,9 +1194,26 @@ not exist.
 ### Deploy needs migration 0008
 
 `migrations/0008_artifacts.sql` creates `artifacts`, `android_builds` and
-`artifact_download_tokens`. `schema_guard` demands all three by name, so a
-build started against a database without them fails at boot naming the file,
-rather than failing at the first request in a way that reads like a code bug.
+`artifact_download_tokens`, plus the three indexes the catalogue's ordering and
+the token sweep read. Apply it with `python3 scripts/apply_migrations.py`.
+
+`schema_guard.REQUIRED_TABLES` names all three, and **that is documentation, not
+a boot gate** — a council round checked. `gateway/app/main.py` runs
+`Base.metadata.create_all` one statement before `check_schema`, and all three
+tables are declared on `Base`, so a gateway started against a database missing
+them creates them itself and the guard sees them present. This is true of every
+one of `REQUIRED_TABLES`' entries, not just #11's, and
+`tests/unit/test_schema_guard.py::test_required_tables_cannot_fire_at_boot_today`
+pins it so this paragraph cannot quietly become false again.
+
+What that costs, concretely: a deployment that skips the migration runs on the
+`create_all` schema instead of the shipped one — **no indexes**, a `content_type`
+column without its default, and no `schema_migrations` row for 0008, so a later
+migration's bookkeeping starts from a wrong premise. Nothing warns. Whether
+`check_schema` should move ahead of `create_all` (or `create_all` stop covering
+migration-owned tables) is a change to how every migration in this project is
+gated, not something issue #11 decides on the way past — it is flagged for the
+operator in `docs/issues/011-artifacts-downloads-apk/RESUME.md`.
 
 ---
 

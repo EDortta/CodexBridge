@@ -62,4 +62,11 @@ Leitura escopada: só quem for mexer na área precisa.
   modelo muda: o `create_all` do startup só cria tabela nova, nunca adiciona coluna
   a tabela existente, então sem a migration a instalação limpa funciona e toda
   instalação existente quebra na primeira leitura. Registre o objeto novo em
-  `gateway/app/db/schema_guard.py` para que a falha apareça no startup.
+  `gateway/app/db/schema_guard.py`.
+  **Cuidado com o que esse registro garante:** coluna nova (`REQUIRED_COLUMNS`,
+  `FORBIDDEN_COLUMNS`) reprova o startup de fato; tabela nova
+  (`REQUIRED_TABLES`) **não** — o `create_all` roda antes do `check_schema` e
+  cria a tabela, então o gateway sobe sem os índices e defaults do `.sql` e sem
+  linha em `schema_migrations`, em silêncio. Ver o comentário em
+  `gateway/app/db/schema_guard.py` e
+  `tests/unit/test_schema_guard.py::test_required_tables_cannot_fire_at_boot_today`.

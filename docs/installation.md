@@ -18,6 +18,16 @@
    de modo que o header chega com uma entrada só. Se a topologia mudar, meça de
    novo em vez de deduzir: com o valor errado, ou todo mundo cai num bucket só,
    ou o cliente escolhe o próprio.
+   Defina **`CODEX_BRIDGE_ARTIFACTS_ROOT`** (issue #11) com o diretório de onde
+   os bytes de artefato podem ser lidos — por exemplo
+   `/var/lib/codex-bridge/artifacts`, legível pelo usuário do gateway e escrito
+   por mais ninguém. `.env.example` traz a linha comentada, então criar o arquivo
+   a partir dele deixa a variável **não definida**, e o padrão resolve contra o
+   diretório de trabalho do processo (`WorkingDirectory=/opt/codex-bridge` na
+   unit), não contra o checkout. Com raiz errada todo download responde `404` sem
+   citar caminho nenhum — o sintoma é silencioso por projeto. Ver
+   `docs/security.md` e `docs/api/README.md` §"Artifacts, downloads and Android
+   builds (issue #11)".
 5. Ajustar `/etc/codex-bridge/registry.json`.
 6. Criar `/etc/codex-bridge/users.json` a partir de `examples/users.json` e
    **trocar a senha inicial** — o hash que o exemplo traz tem o texto claro

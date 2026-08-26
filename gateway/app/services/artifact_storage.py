@@ -156,7 +156,28 @@ def resolve_artifact_file(storage_path: str) -> Path:
     return candidate
 
 
-_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
+# Bounded, because `int()` on a decimal string of more than
+# `sys.int_info.str_digits_check_threshold` digits (4300, CPython's
+# CVE-2020-10735 mitigation) raises `ValueError`: an unbounded `\d*` turned
+# `Range: bytes=<4301 nines>-` into an unhandled exception and a
+# `500 internal_error` with `retryable: true` — inviting the client to send it
+# again — plus a stack trace per request. Found by a council round's
+# adversarial-user lens. An over-long digit run is a malformed range, and this
+# function already answers that with `None`: the guard belongs in the pattern,
+# not in a `try/except` at the call site.
+#
+# 255, not 19. The first cut bounded it at 19 on the reasoning that 2**63-1 is
+# 19 digits and no file is that large — but the bound is on **digit count**,
+# and RFC 9110 §14.1.1 is `1*DIGIT`, so leading zeros are legal and carry no
+# meaning. `bytes=00000000000000000001-2` is a twenty-digit spelling of a
+# perfectly ordinary range, and dropping it re-sent the whole file with `200`
+# where a `206` was asked for — silently, because an ignored `Range` is by
+# design indistinguishable from an unsupported one. The second round of the
+# same council caught it. 255 is comfortably under the threshold that causes
+# the crash and comfortably over any padding a client could sanely emit; the
+# magnitude is then checked against the real file size below, which is where a
+# magnitude check belongs.
+_RANGE_RE = re.compile(r"^bytes=(\d{0,255})-(\d{0,255})$")
 
 
 def parse_range_header(value: str | None, size: int) -> ByteRange | None:

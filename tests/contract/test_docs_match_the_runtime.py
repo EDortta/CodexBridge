@@ -165,3 +165,105 @@ def test_the_api_readme_does_not_deny_the_limiter_that_ships(denial: str) -> Non
         f"docs/api/README.md still says {denial!r}, while {len(limited)} served "
         "/api routes carry RateLimitDependency"
     )
+
+
+def test_every_field_cited_as_never_shipping_is_actually_listed_there() -> None:
+    """A pointer whose target does not contain the rule is worse than no pointer.
+
+    `docs/api/README.md` §"Fields that must never ship" is cited as the
+    authority by `migrations/0008_artifacts.sql`, `models/entities.py`, the
+    tests, `routes/missions.py` and `docs/required-reading.md`. Issue #11 added `ArtifactModel.storage_path` and
+    five such citations while the section itself still named only
+    `ProjectModel.path` — so the next author, concretely whoever writes the
+    ingestion path, would follow the pointer and not find the rule. A council
+    round's second-caller lens found it.
+
+    Checked by name rather than by prose: what a reader needs from that section
+    is the identifier they are about to expose.
+    """
+    prose = " ".join(API_README.read_text(encoding="utf-8").split())
+    start = prose.index("## Fields that must never ship")
+    section = prose[start : prose.index("## Probes:", start)]
+
+    for field in ("ProjectModel.path", "ArtifactModel.storage_path"):
+        assert field in section, (
+            f"{field} is treated across the codebase as a field that must never "
+            'ship, and §"Fields that must never ship" does not name it'
+        )
+
+
+def test_no_shipped_file_still_promises_a_boot_gate_for_a_table_only_migration() -> None:
+    """`REQUIRED_TABLES` does not fail a boot, and five files used to say it does.
+
+    `gateway/app/main.py:startup` runs `Base.metadata.create_all` before
+    `check_schema`, so a missing *table* is created rather than reported —
+    pinned by
+    `tests/unit/test_schema_guard.py::test_required_tables_cannot_fire_at_boot_today`.
+    A council round found the correction reaching one document while
+    `scripts/install.sh`, `deploy/README.md`, `scripts/apply_migrations.py`,
+    `gateway/app/db/schema_guard.py` and `docs/required-reading.md` all still
+    told an operator the service would crash-loop until they ran the migration.
+    An operator who believes that skips the step and gets a schema with no
+    indexes, no column defaults and no `schema_migrations` row, silently.
+
+    Checked by requiring each of those files to carry the qualification, not by
+    forbidding a phrase: the promise is *true* for `REQUIRED_COLUMNS` and
+    `FORBIDDEN_COLUMNS`, so a blanket ban would delete a correct statement.
+    `docs/installation.md` and `docs/security.md` are deliberately absent from
+    this list — their claims are about `FORBIDDEN_COLUMNS` (migration 0004),
+    which does fire.
+    """
+    must_qualify = {
+        "scripts/install.sh": ("only adds TABLES", "REQUIRED_COLUMNS"),
+        "deploy/README.md": ("only\n  adds *tables*", "silently"),
+        "scripts/apply_migrations.py": ("missing *table* is not caught", "create_all"),
+        "gateway/app/db/schema_guard.py": ("does not currently fail a boot", "create_all"),
+        "docs/required-reading.md": ("REQUIRED_TABLES", "não"),
+    }
+    missing = []
+    for name, needles in must_qualify.items():
+        text = (REPO_ROOT / name).read_text(encoding="utf-8")
+        for needle in needles:
+            if needle not in text:
+                missing.append(f"{name}: {needle!r}")
+    assert not missing, (
+        "these files promise a startup failure for a missing table and no longer "
+        f"carry the qualification that it does not happen: {missing}"
+    )
+
+
+def test_the_env_example_does_not_claim_the_artifacts_root_is_the_checkout() -> None:
+    """The one file an operator copies must not describe a default it does not have.
+
+    `settings.artifacts_root` defaults to `data/artifacts` resolved against the
+    process working directory at import — `/opt/codex-bridge/data/artifacts`
+    under the systemd unit, and somewhere else for anything started elsewhere.
+    `.env.example` said `<checkout>/data/artifacts`, which reads as a fixed,
+    knowable location and invites leaving the variable unset. Two council
+    lenses found it; `gateway/app/core/config.py` and `docs/security.md` had
+    already been corrected around it.
+    """
+    text = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert "CODEX_BRIDGE_ARTIFACTS_ROOT" in text
+    assert "<checkout>/data/artifacts" not in text, (
+        ".env.example still describes the unset artifacts root as living under the "
+        "checkout; it resolves against the process working directory"
+    )
+    assert "working directory" in text, (
+        ".env.example must say what the unset default actually resolves against"
+    )
+
+
+def test_the_installation_guide_names_every_setting_security_md_calls_mandatory() -> None:
+    """`docs/security.md` says this one must be set at deploy; step 4 never named it.
+
+    `.env.example` ships the line commented out, so building
+    `/etc/codex-bridge/env` from it leaves the root unset — and a wrong root
+    makes every download answer a typed `404` that names no path, which is a
+    silent failure by design. Found by a council round's second-caller lens.
+    """
+    installation = (REPO_ROOT / "docs" / "installation.md").read_text(encoding="utf-8")
+    assert "CODEX_BRIDGE_ARTIFACTS_ROOT" in installation, (
+        "docs/security.md calls CODEX_BRIDGE_ARTIFACTS_ROOT mandatory for a deployment "
+        "and docs/installation.md never names it"
+    )

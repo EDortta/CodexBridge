@@ -426,6 +426,51 @@ def test_reported_contract_version_matches_the_document(spec: dict) -> None:
     )
 
 
+def test_every_declared_security_scheme_is_used(spec: dict) -> None:
+    """A scheme nothing references describes a credential nothing accepts."""
+    declared = set((spec.get("components") or {}).get("securitySchemes") or {})
+    used = set()
+    for operations in (spec.get("paths") or {}).values():
+        for key, operation in operations.items():
+            if key.lower() not in OPENAPI_OPERATIONS or not isinstance(operation, dict):
+                continue
+            for requirement in operation.get("security") or []:
+                used |= set(requirement)
+    assert declared, "the document declares no security scheme"
+    assert not (declared - used), f"declared and referenced by no operation: {sorted(declared - used)}"
+    assert not (used - declared), f"referenced but never declared: {sorted(used - declared)}"
+
+
+def test_the_artifact_download_does_not_claim_the_session_credential(spec: dict) -> None:
+    """The one operation that refuses the session token must not declare it.
+
+    A council round found `downloadArtifact` declaring `bearerAuth`, whose own
+    description promises that `POST /api/v1/auth/revoke` "takes effect on both
+    surfaces" and that the token is accepted "everywhere". The runtime refuses
+    exactly that credential here
+    (`tests/integration/test_artifacts.py::test_a_session_bearer_token_does_not_download`),
+    and every refusal on the route is deliberately the same `401` — so a
+    generated client would attach the session token, get an indistinguishable
+    `401`, and its usual refresh-and-retry interceptor would loop forever.
+
+    The prose half of the document was right and the machine-readable half —
+    the half a generator reads — was not. This is the gate for the difference.
+    """
+    download = (spec["paths"]["/api/v1/artifacts/{artifactId}/download"])["get"]
+    schemes = {name for requirement in download.get("security") or [] for name in requirement}
+    assert schemes == {"artifactDownloadToken"}, (
+        f"downloadArtifact declares {sorted(schemes)}; it accepts only the credential "
+        "minted by POST .../download-token, and declaring the session scheme here sends "
+        "a generated client into a refresh loop"
+    )
+
+    mint = (spec["paths"]["/api/v1/artifacts/{artifactId}/download-token"])["post"]
+    minting_schemes = {name for requirement in mint.get("security") or [] for name in requirement}
+    assert minting_schemes == {"bearerAuth"}, (
+        "minting is authorized by the session credential; only the download is not"
+    )
+
+
 def _without_pending(spec: dict) -> dict:
     """The document minus its own pending-components ledger.
 

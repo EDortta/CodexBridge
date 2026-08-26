@@ -2400,8 +2400,13 @@ paths:
         one artifact it authorizes.
 
         Every refusal is the same `401`: absent, unknown, expired, minted for a
-        different artifact, or belonging to an account since disabled. They are
-        indistinguishable on purpose.
+        different artifact, belonging to an account since disabled or narrowed,
+        or killed by a sign-out (`POST /api/v1/auth/revoke` deletes that
+        grant's download tokens, so a revoked one arrives here as "unknown").
+        They are indistinguishable on purpose — and **a `401` here means "mint
+        a new download token", never "refresh the session"**, which is why this
+        operation declares its own security scheme and its own `401` component
+        rather than the shared ones.
 
         Supports a single `Range` in `bytes`. A satisfiable range answers `206`
         with `Content-Range`; a well-formed range starting past the end answers
@@ -2412,7 +2417,7 @@ paths:
         `404` when the row exists and its stored content does not. The response
         never names a filesystem path in either case.
       security:
-        - bearerAuth: []
+        - artifactDownloadToken: []
       parameters:
         - name: artifactId
           in: path
@@ -2442,15 +2447,25 @@ paths:
             X-Artifact-Sha256:
               $ref: '#/components/headers/XArtifactSha256'
           content:
-            application/octet-stream:
+            '*/*':
               schema:
                 type: string
                 format: binary
+              # Not `application/octet-stream`: the response carries the
+              # artifact's own `contentType` (an APK is served as
+              # `application/vnd.android.package-archive`), which is a value
+              # from the database and cannot be enumerated here. Declaring one
+              # concrete type made this document state two different media
+              # types for the same response — `Artifact.contentType` says it is
+              # "the media type the download is served with" — and no contract
+              # test compares response content types, so nothing caught it.
         '206':
           description: The requested byte range.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
             Accept-Ranges:
               $ref: '#/components/headers/AcceptRanges'
             Content-Range:
@@ -2460,11 +2475,11 @@ paths:
             X-Artifact-Sha256:
               $ref: '#/components/headers/XArtifactSha256'
           content:
-            application/octet-stream:
+            '*/*':
               schema:
                 type: string
                 format: binary
-        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '401': {$ref: '#/components/responses/DownloadTokenRejected'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '416':
@@ -2950,6 +2965,27 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
 
+    DownloadTokenRejected:
+      description: |
+        No usable **download token** was presented. Absent, unknown, expired,
+        minted for a different artifact, belonging to an account that has since
+        been disabled or narrowed, or killed by a sign-out — one status, one
+        code, one message for all of them, for the reason `Unauthenticated`
+        gives.
+
+        Its own component rather than a `$ref` to `Unauthenticated` because the
+        client's recovery differs: everywhere else a `401` means "refresh the
+        session token", and here it means "mint a new download token". A client
+        that runs its usual refresh-and-retry interceptor on this response will
+        loop.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
     NotFound:
       description: |
         No such resource — or the actor may not know whether it exists. Hidden
@@ -3029,12 +3065,48 @@ components:
 
   securitySchemes:
 
+    artifactDownloadToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        The credential from `POST /api/v1/artifacts/{artifactId}/download-token`,
+        presented as `Authorization: Bearer <token>`. It is **not** the session
+        access token `bearerAuth` describes, and the one operation that accepts
+        it refuses that one — declared as its own scheme for exactly that
+        reason: a generated client configured with a single `bearerAuth`
+        credential would attach the session token here, meet the same
+        deliberately-uniform `401` every other refusal on this route produces,
+        and a standard 401 interceptor would refresh the session and retry
+        forever.
+
+        **A `401` here means "mint a new download token", never "refresh the
+        session".** Refreshing the session will never help.
+
+        Differences from `bearerAuth` a client must not assume away:
+
+        - it authorizes **one artifact's bytes** and nothing else. It satisfies
+          no permission in the catalogue and authenticates at no other endpoint;
+        - it lives for minutes, not hours
+          (`CODEX_BRIDGE_ARTIFACT_DOWNLOAD_TOKEN_TTL_SECONDS`);
+        - it is not single-use, so an interrupted transfer can be resumed with
+          `Range` on the same credential;
+        - `POST /api/v1/auth/revoke` **does** kill it, along with every other
+          download token the actor holds — a sign-out that left an APK
+          streaming would be the failure that endpoint exists to prevent. It
+          has no revocation endpoint of its own.
+
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: opaque
       description: |
         Opaque access token, presented as `Authorization: Bearer <token>`.
+
+        It is not the credential that downloads an artifact's bytes — that one
+        is `artifactDownloadToken`, and `GET /api/v1/artifacts/{artifactId}/download`
+        is the only operation in this document that does not accept the token
+        described here.
 
         Two issuers, one credential store. `POST /api/v1/auth/sign-in` mints
         tokens for CodexBridgeMobile, and the OAuth 2.1 + PKCE authorization
@@ -4067,16 +4139,22 @@ components:
         is — `docs/api/README.md` §"Fields that must never ship". The bytes are
         reached only through `POST .../download-token` followed by
         `GET .../download`, never by composing a path.
+      # `version` and `retainedUntil` are required and nullable rather than
+      # optional: `_artifact_dto` always emits both keys, so a generated client
+      # that typed them as possibly-absent would be describing a response this
+      # server never sends.
       required:
         - id
         - projectId
         - type
         - name
+        - version
         - sizeBytes
         - sha256
         - origin
         - contentType
         - createdAt
+        - retainedUntil
         - retained
       properties:
         id:

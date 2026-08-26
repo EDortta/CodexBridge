@@ -5,7 +5,7 @@
 
 ## Summary
 
-- 99 file(s) · 960 symbol(s) indexed
+- 99 file(s) · 981 symbol(s) indexed
 - Languages: config (2), python (95), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -276,9 +276,9 @@ tests/
 
 > The artifact catalogue, Android build metadata, and the download flow — issue #11.
 
-- `list_artifacts(response, project, type, origin, cursor, limit, principal, session)` *(async function)* — "Artifacts the caller may see, newest first."
+- `list_artifacts(project, type, origin, cursor, limit, principal, session)` *(async function)* — "Artifacts the caller may see, newest first."
 - `get_artifact(artifact_id, principal, session)` *(async function)*
-- `mint_download_token(artifact_id, response, principal, session)` *(async function)* — "Mint a short-lived bearer credential for this artifact's bytes."
+- `mint_download_token(artifact_id, request, response, principal, session)` *(async function)* — "Mint a short-lived bearer credential for this artifact's bytes."
 - `download_artifact(artifact_id, request, session)` *(async function)* — "Stream an artifact's bytes to the holder of a live download token."
 - `list_android_builds(project, environment, package_name, cursor, limit, principal, session)` *(async function)* — "APK artifacts with their build metadata, newest first."
 - `get_android_build(build_id, principal, session)` *(async function)* — "One Android build, addressed by the id of the artifact it is."
@@ -711,6 +711,10 @@ tests/
 
 - `test_the_codemap_names_every_module_it_claims_to_index()` — "`.docs/agents/programmer.md` tells the next agent to read this instead of scanning."
 - `test_the_api_readme_does_not_deny_the_limiter_that_ships(denial)` — "§"Rate limiting — vocabulary only, so far" outlived the wiring."
+- `test_every_field_cited_as_never_shipping_is_actually_listed_there()` — "A pointer whose target does not contain the rule is worse than no pointer."
+- `test_no_shipped_file_still_promises_a_boot_gate_for_a_table_only_migration()` — "`REQUIRED_TABLES` does not fail a boot, and five files used to say it does."
+- `test_the_env_example_does_not_claim_the_artifacts_root_is_the_checkout()` — "The one file an operator copies must not describe a default it does not have."
+- `test_the_installation_guide_names_every_setting_security_md_calls_mandatory()` — "`docs/security.md` says this one must be set at deploy; step 4 never named it."
 
 ### `tests/contract/test_openapi_document.py`
 
@@ -730,6 +734,8 @@ tests/
 - `test_route_paths_are_well_formed(spec)` — "An unbalanced brace is a typo the router accepts and serves literally."
 - `test_normalize_matches_names_but_not_converters(served, documented, equivalent)` — "snake_case vs camelCase is not drift; a converter difference is."
 - `test_reported_contract_version_matches_the_document(spec)` — "`GET /api/version` must not claim a contract version the file disagrees with."
+- `test_every_declared_security_scheme_is_used(spec)` — "A scheme nothing references describes a credential nothing accepts."
+- `test_the_artifact_download_does_not_claim_the_session_credential(spec)` — "The one operation that refuses the session token must not declare it."
 - `test_every_declared_component_is_referenced_or_owned(spec)` — "A component nothing points at is a claim the API behaves that way."
 - `test_no_pending_component_is_stale(spec)` — "An entry whose component is now wired must be removed."
 
@@ -874,7 +880,14 @@ tests/
 - `test_an_unknown_token_is_refused(api)` *(async function)*
 - `test_every_download_refusal_is_the_same_refusal(api)` *(async function)* — "Absent, unknown, expired and wrong-artifact must be indistinguishable."
 - `test_minting_for_an_unknown_artifact_is_a_typed_404(api)` *(async function)*
+- `test_the_download_token_is_never_stored_in_the_clear(api)` *(async function)* — "The fourth narrowing, which the module docstring claimed was tested."
+- `test_a_token_stops_at_the_projects_the_account_still_has(api)` *(async function)* — ""...or narrows" — the half of the re-read claim that had no test."
+- `test_an_absurdly_long_range_is_not_a_five_hundred(api, header)` *(async function)* — "A `Range` of 4301+ digits was an unhandled `ValueError`."
+- `test_a_zero_padded_range_is_still_a_range(api)` *(async function)* — "Leading zeros are legal and carry no meaning — RFC 9110 §14.1.1 is `1*DIGIT`."
+- `test_the_missing_content_404_writes_a_log_line_the_request_id_finds(api, caplog)` *(async function)* — "The `requestId` has to resolve to something, or the refusal is a dead end."
 - `test_a_token_survives_reuse_inside_its_lifetime(api)` *(async function)* — "Deliberately **not** single-use — the lifetime is the control."
+- `test_issuing_a_download_authorization_is_audited(api)` *(async function)* — "A credential for bytes leaves a trail, like every other credential here."
+- `test_the_default_artifacts_root_follows_the_working_directory()` — "The default is a development convenience, not a stable location."
 - `test_a_token_whose_account_was_disabled_stops_working(api)` *(async function)* — "The account is re-read at download time, not trusted from minting time."
 - `test_a_satisfiable_range_is_a_206_with_content_range(api)` *(async function)*
 - `test_a_suffix_range_returns_the_tail(api)` *(async function)*
@@ -887,7 +900,7 @@ tests/
 - `test_a_traversing_storage_path_cannot_be_stored_at_all(api)` *(async function)* — "The lexical half of the confinement rule, at the write."
 - `test_a_symlink_inside_the_root_does_not_escape_it(api)` *(async function)* — "The half the string check cannot see."
 - `test_a_row_whose_bytes_are_gone_is_a_typed_404_naming_no_path(api)` *(async function)*
-- `test_resolve_refuses_before_it_reports_missing()` — "A missing file and a rejected path are different exceptions, not one."
+- `test_resolve_refuses_before_it_reports_missing(artifacts_root)` — "A missing file and a rejected path are different exceptions, not one."
 - `test_the_android_list_shows_only_apks(api)` *(async function)*
 - `test_the_android_list_filters_on_metadata_the_catalogue_cannot(api)` *(async function)*
 - `test_a_build_is_addressed_by_the_artifacts_own_id(api)` *(async function)*
@@ -939,6 +952,10 @@ tests/
 - `test_a_refresh_token_alone_can_sign_out(api)` *(async function)* — "The usual moment to sign out is after the access token has expired."
 - `test_revocation_is_idempotent_and_says_nothing_about_the_token(api)` *(async function)*
 - `test_signing_out_twice_with_only_an_access_token_is_still_a_sign_out(api)` *(async function)* — "The second call is the one a flaky mobile connection actually makes."
+- `test_signing_out_kills_a_download_token_minted_before_it(api)` *(async function)* — "Sign-out has to close every credential, not the two it was written for."
+- `test_revoking_by_refresh_token_also_kills_the_download_tokens(api)` *(async function)* — "The other revocation door closes the same set."
+- `test_a_replayed_dead_refresh_token_cannot_kill_a_live_grants_download(api)` *(async function)* — "Revocation stops at the grant it names — the round-1 fix reached past it."
+- `test_a_grantless_sign_out_does_not_abort_the_phones_download(api)` *(async function)* — "Signing out of ChatGPT must not kill an APK transfer on the phone."
 - `test_an_access_token_that_was_never_issued_signs_out_quietly(api)` *(async function)* — "Same rule, reached from the other side: incurious about the credential."
 - `test_a_consumed_refresh_token_still_ends_its_own_grant(api)` *(async function)* — "Pinned on purpose — this behaviour is a decision, not an accident."
 - `test_revoking_nothing_is_refused(api)` *(async function)*
@@ -1197,6 +1214,9 @@ tests/
 - `test_a_concurrent_burst_issues_one_probe(monkeypatch)` *(async function)* — "The cache alone does not help while the first probe is still running."
 - `test_zero_cache_seconds_is_floored(monkeypatch)` — "A TTL of 0 would restore the uncached DoS, so it is not honoured."
 - `test_every_served_api_route_carries_the_rate_limiter()` — "`main.py` claimed every future /api route inherits the limiter. It does not."
+- `test_every_served_api_route_is_guarded_or_listed_with_a_reason()` — "A route with no authorization guard ships only on purpose, in writing."
+- `test_no_exemption_outlives_its_route()` — "A stale entry pre-authorizes whatever later claims that path."
+- `test_every_exemption_is_load_bearing()` — "An entry the gate would pass without is an exemption that documents nothing."
 
 ### `tests/integration/test_projects.py`
 
@@ -1443,6 +1463,7 @@ tests/
 - `test_missing_column_is_named_with_its_migration(tmp_path)` — "The message has to be actionable: what is missing, and what adds it."
 - `test_a_database_that_cannot_express_revocation_refuses_to_serve(tmp_path)` — "`revoked_at` is what makes a revoked token stop working."
 - `test_create_all_does_not_repair_an_existing_table(tmp_path)` — "The premise of the guard, asserted rather than assumed."
+- `test_required_tables_cannot_fire_at_boot_today()` — "`REQUIRED_TABLES` is documentation, not a boot gate — pinned, not fixed."
 
 ### `tests/unit/test_security.py`
 

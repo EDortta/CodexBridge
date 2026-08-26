@@ -17,6 +17,10 @@
 -- `artifact_download_tokens` stores a SHA-256 of the token, never the token —
 -- the same treatment oauth_access_tokens gets, for the same reason: whoever
 -- reads this table must not be able to download anything with what they find.
+-- Its `grant_id` records which sign-in minted the credential, so
+-- POST /api/v1/auth/revoke can delete exactly that grant's download tokens.
+-- Null means the grantless browser-OAuth session, which is a value and not
+-- "unknown".
 --
 -- Apply with `python3 scripts/apply_migrations.py`. Each file runs exactly
 -- once, tracked in `schema_migrations`.
@@ -65,9 +69,15 @@ create table if not exists artifact_download_tokens (
   token_hash varchar(128) primary key,
   artifact_id varchar(128) not null references artifacts(id),
   user_id varchar(255) not null,
+  grant_id varchar(128) null,
   created_at timestamptz not null,
   expires_at timestamptz not null
 );
+
+-- Revocation deletes by (user_id, grant_id); without this index a sign-out
+-- scans the table.
+create index if not exists artifact_download_tokens_user_grant_idx
+  on artifact_download_tokens (user_id, grant_id);
 
 -- Expired rows are swept opportunistically when a token is minted; the index is
 -- what keeps that sweep from scanning the table.

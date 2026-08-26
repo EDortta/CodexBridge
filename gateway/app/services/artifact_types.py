@@ -87,9 +87,23 @@ BARE_FINGERPRINT_RE = re.compile(r"^[0-9A-Fa-f]{64}$")
 class ArtifactError(ValueError):
     """A rejected artifact field, carrying what the API must report.
 
-    Same shape as `IssuePlanningError` and `ConversationPlanningError`: the
-    store raises it and the route turns it into `400 validation_failed` with a
-    JSON Pointer, so the pointer is decided once, next to the rule.
+    Same *shape* as `IssuePlanningError` and `ConversationPlanningError` — and
+    deliberately not the same wiring, which is worth stating because the
+    obvious assumption is wrong and a council round caught this docstring
+    making it. Those two are converted to `400 validation_failed` by a
+    `_planning_error` helper on their router, because those routers accept
+    request bodies. **This one has no such conversion, because no endpoint
+    accepts an artifact**: `store.create_artifact` is called by a test fixture
+    or an operator script, and the single `except ArtifactError` on a route
+    (`routes/artifacts.py`, the download path) answers `404` for a stored path
+    that stopped resolving inside the root — the caller has no business
+    learning that a path exists at all.
+
+    `field` and `code` are populated anyway, and that is the point of putting
+    them here: the ingestion endpoint a future issue adds inherits the pointer
+    already decided next to the rule, instead of re-deciding it at the route.
+    Whoever writes that endpoint owes it the `_planning_error`-shaped handler —
+    it does not exist yet, and this docstring used to say it did.
     """
 
     def __init__(self, field: str, code: str, message: str) -> None:

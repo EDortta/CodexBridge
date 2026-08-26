@@ -858,6 +858,29 @@ async def revoke_auth_grant(
     Both tables, one commit: leaving the access tokens behind would mean a
     sign-out that keeps working for the rest of the access-token TTL, which is
     the failure the endpoint exists to prevent.
+
+    **Three tables, since issue #11.** An artifact download token is a third
+    credential this actor holds, and the first version of #11 left it alive
+    through a sign-out: the session died and the minted token kept streaming an
+    APK for the rest of its TTL — the exact failure this docstring's second
+    paragraph says the endpoint exists to prevent, and a contradiction of
+    `docs/security.md`'s "revogação vale para os dois transportes". A council
+    round reproduced it (`200`, full body, after a `200` from `/auth/revoke`).
+
+    Revoked **by grant**, which the first cut of this fix got wrong and a second
+    council round caught. Deleting by actor alone made a *dead* refresh token
+    dangerous: `POST /api/v1/auth/revoke` deliberately acts on a token it has
+    already classified as consumed or revoked (see `routes/auth.py`), the two
+    `UPDATE`s above are no-ops in that case, and the by-actor `DELETE` was the
+    one statement that still hit something — so an unauthenticated replay of a
+    long-dead token killed the download tokens of a *live* grant, repeatably.
+    The same widening let a ChatGPT sign-out abort an APK transfer on the
+    operator's phone.
+
+    So `artifact_download_tokens.grant_id` records which grant minted the token,
+    and revocation stays inside it. A grantless access token (the browser OAuth
+    flow issues those) revokes the grantless download tokens of that actor and
+    nothing else, which is the same rule read through a null.
     """
     now = datetime.now(timezone.utc)
     access = await session.execute(
@@ -872,13 +895,14 @@ async def revoke_auth_grant(
         .where(OAuthRefreshTokenModel.revoked_at.is_(None))
         .values(revoked_at=now)
     )
+    downloads = await _revoke_artifact_download_tokens(session, user_id, grant_id=grant_id)
     revoked = {"access_tokens": max(access.rowcount, 0), "refresh_tokens": max(refresh.rowcount, 0)}
     await record_event(
         session,
         AUTH_ENTITY_TYPE,
         user_id,
         "auth.credentials_revoked",
-        {"grant_id": grant_id, "reason": reason, **revoked},
+        {"grant_id": grant_id, "reason": reason, "artifact_download_tokens": downloads, **revoked},
     )
     await session.commit()
     return revoked
@@ -890,22 +914,63 @@ async def revoke_access_token(
     """Revoke one access token that belongs to no grant.
 
     The browser OAuth flow issues those: there is no refresh chain to revoke,
-    so revocation stops at the token presented.
+    so revocation stops at the token presented — and, since issue #11, at the
+    download tokens minted *under that same grantless credential*, for the
+    reason `revoke_auth_grant` gives above. Both revocation doors have to close
+    the same set of credentials, or which door the caller used decides what
+    stays alive (`design-standards.md` §3).
+
+    `grant_id=None` here is a value, not an omission: it addresses exactly the
+    download tokens minted by a grantless session. Signing out of ChatGPT must
+    not abort a download the phone started under its own grant.
     """
     item = await session.get(OAuthAccessTokenModel, hash_token(token))
     revoked = {"access_tokens": 0, "refresh_tokens": 0}
     if item is not None and item.revoked_at is None:
         item.revoked_at = datetime.now(timezone.utc)
         revoked["access_tokens"] = 1
+    downloads = await _revoke_artifact_download_tokens(session, user_id, grant_id=None)
     await record_event(
         session,
         AUTH_ENTITY_TYPE,
         user_id,
         "auth.credentials_revoked",
-        {"grant_id": None, "reason": reason, **revoked},
+        {"grant_id": None, "reason": reason, "artifact_download_tokens": downloads, **revoked},
     )
     await session.commit()
     return revoked
+
+
+async def _revoke_artifact_download_tokens(
+    session: AsyncSession, user_id: str, *, grant_id: str | None
+) -> int:
+    """Drop the download tokens one grant minted for one actor. Returns how many.
+
+    Both keys, always. `user_id` alone was the first cut and it reached across
+    grants (see `revoke_auth_grant`); `grant_id` alone would let a stolen grant
+    id address another account's rows. `grant_id=None` is a real value that
+    addresses the grantless browser-OAuth session's own tokens.
+
+    Deleted rather than flagged `revoked_at`: the row's whole purpose is to
+    authorize, it is already swept on expiry, and a deleted row cannot be
+    resurrected by a bug that forgets to read a flag — the fail-closed
+    direction (`design-standards.md` §6).
+
+    Defined here, next to both revocation paths, rather than in the artifacts
+    section below: it is part of what revocation *means* in this store, and a
+    guard the next revocation path has to remember is a guard it will forget
+    (`design-standards.md` §3).
+    """
+    result = await session.execute(
+        delete(ArtifactDownloadTokenModel)
+        .where(ArtifactDownloadTokenModel.user_id == user_id)
+        .where(
+            ArtifactDownloadTokenModel.grant_id.is_(None)
+            if grant_id is None
+            else ArtifactDownloadTokenModel.grant_id == grant_id
+        )
+    )
+    return max(result.rowcount, 0)
 
 
 async def record_auth_event(
@@ -939,9 +1004,15 @@ async def purge_expired_audit_events(
     `task.stopped_by_actor`, `task.state_changed` and `task.result`, on a table
     that had kept everything forever. Whether an approval record may be aged out
     at 90 days is an operator's decision about their own compliance, and it is
-    not one to make by inheritance from a spam control. Eleven `record_event`
-    call sites write here; two of them are auth, and those two are the ones an
-    unauthenticated caller can drive.
+    not one to make by inheritance from a spam control. Of the `record_event`
+    call sites in this module, the `auth` ones are the subset an unauthenticated
+    caller can drive, which is what this window is sized for — the rest write
+    task, issue, epic, conversation and artifact rows and are reachable only by
+    an authenticated actor. No proportion and no count is quoted here: the
+    previous wording named one ("eleven"), it was already wrong before issue #11
+    added writers, a second council round then caught the replacement claiming
+    "most" for a plurality, and a number nothing checks is a claim that rots
+    (`council.md` §2, the claim auditor, twice on the same sentence).
 
     A non-positive window means "keep everything", for a deployment that exports
     the table elsewhere. It is an explicit opt-in to unbounded growth.
@@ -2228,9 +2299,11 @@ async def create_artifact(
         "artifact",
         artifact.id,
         "artifact.recorded",
-        # No `storage_path`: the audit trail is read back by
-        # `GET /api/v1/missions/{id}/timeline`-shaped endpoints and by an
-        # operator, and an internal path is internal in both places.
+        # No `storage_path`. No endpoint reads `entity_type == "artifact"`
+        # today — the mission timeline filters `entity_type == "task"` — so the
+        # reader this protects is an operator with a database prompt, not a
+        # response body. That is still a reader, and an internal path is
+        # internal in front of both.
         {"project_id": project_id, "type": artifact_type, "origin": origin, "sha256": checksum},
     )
     await session.commit()
@@ -2376,6 +2449,7 @@ async def create_artifact_download_token(
     user_id: str,
     token: str,
     expires_at: datetime,
+    grant_id: str | None = None,
 ) -> ArtifactDownloadTokenModel:
     """Store the hash of a freshly minted download token.
 
@@ -2398,6 +2472,11 @@ async def create_artifact_download_token(
     exists to avoid. The payload names the artifact and the expiry and never
     the token: writing a credential into the audit table would undo the hashing
     two lines below it.
+
+    `grant_id` is which sign-in minted it, copied from the access token that
+    authorized the mint, so `revoke_auth_grant` revokes exactly this grant's
+    download credentials and no others. Null for the grantless browser-OAuth
+    session, which is a value and not "unknown".
     """
     now = datetime.now(timezone.utc)
     await session.execute(
@@ -2407,6 +2486,7 @@ async def create_artifact_download_token(
         token_hash=hash_token(token),
         artifact_id=artifact_id,
         user_id=user_id,
+        grant_id=grant_id,
         created_at=now,
         expires_at=expires_at,
     )

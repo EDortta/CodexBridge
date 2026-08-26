@@ -43,10 +43,15 @@ anonymous caller collapses into one rate-limit bucket.
   404 at the front door however well it works in the application. That is how
   `/health`, `/ready` and the whole `/api` surface shipped fully tested and
   entirely unreachable. `tests/contract/test_proxy_routes.py` now fails on it.
-- **Migrations are not automatic.** The gateway refuses to start when the schema
-  is behind (`gateway/app/db/schema_guard.py`), and the unit restarts every 5s,
-  so skipping the step turns an upgrade into a crash loop. Applying it stays an
-  operator decision: `docs/installation.md`, step 9.
+- **Migrations are not automatic, and a clean start does not mean they ran.**
+  The gateway refuses to start when a migration adds a *column* it has not seen
+  (`gateway/app/db/schema_guard.py`), and the unit restarts every 5s, so
+  skipping the step can turn an upgrade into a crash loop. A migration that only
+  adds *tables* — 0006, 0007 and 0008 — fails **silently**: `startup` runs
+  `Base.metadata.create_all` before `check_schema`, so the gateway creates them
+  itself and serves on a schema without the `.sql`'s indexes and defaults, with
+  no `schema_migrations` row. Applying it stays an operator decision:
+  `docs/installation.md`, step 9.
 - **`EnvironmentFile` is not a shell script.** `. /etc/codex-bridge/env` fails in
   bash, because the format allows unquoted values with spaces. Read the one
   variable you need with `sed -n 's/^VAR=//p'`.

@@ -272,13 +272,23 @@ class ArtifactDownloadTokenModel(Base):
     to download anything. The plaintext exists once, in the response to
     `POST /api/v1/artifacts/{artifactId}/download-token`.
 
-    Three bindings make it narrow. `artifact_id` — presenting it on another
+    Four columns make it narrow. `artifact_id` — presenting it on another
     artifact is refused, so a token minted for a public report cannot fetch a
     signed APK. `user_id` — the download re-reads that account at request time
-    and re-checks project visibility, so an account disabled a minute after
-    minting cannot still pull the bytes, the same rule refresh-token rotation
-    already applies. `expires_at` — minutes, not hours
-    (`settings.artifact_download_token_ttl_seconds`).
+    and re-checks project visibility, so an account disabled or narrowed a
+    minute after minting cannot still pull the bytes, the same rule
+    refresh-token rotation already applies. `expires_at` — minutes, not hours
+    (`settings.artifact_download_token_ttl_seconds`). `grant_id` — which
+    sign-in minted it, so `POST /api/v1/auth/revoke` can delete exactly this
+    grant's download credentials: a sign-out that left an APK streaming is the
+    failure that endpoint exists to prevent, and revoking *by actor* instead
+    let a replayed dead token kill a live grant's downloads (found by a council
+    round). Null for the grantless browser-OAuth session, which is a value.
+
+    The count in this paragraph is the columns, not the narrowings — the router
+    module counts five, because a re-read of the account covers two of them.
+    They are consistent; they are counting different things, and saying so here
+    is cheaper than the next reader reconciling them.
 
     It is deliberately **not** single-use. Issue #11 asks for range and
     resumable downloads in the same breath as short-lived authorization, and a
@@ -293,6 +303,10 @@ class ArtifactDownloadTokenModel(Base):
     token_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
     artifact_id: Mapped[str] = mapped_column(String(128), ForeignKey("artifacts.id"))
     user_id: Mapped[str] = mapped_column(String(255))
+    # Nullable on purpose: the browser OAuth flow issues access tokens that
+    # belong to no grant, and null here means "minted by a grantless session",
+    # not "unknown".
+    grant_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

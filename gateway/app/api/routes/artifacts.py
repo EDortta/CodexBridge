@@ -41,14 +41,31 @@ outright — a query string reaches access logs, proxies, browser history and
 set a request header. So the response of the mint endpoint carries a *path*
 with no credential in it, and the token separately.
 
-Four things narrow the credential, and each one is tested:
+Five things narrow the credential. Each one names the test that pins it, because
+"each one is tested" was written here once while one of them was not
+(`council.md` §2, the claim auditor) — a list of properties is not evidence that
+they hold. Four live in `tests/integration/test_artifacts.py` and the fifth is
+named with its file:
 
-- it is bound to the artifact — presenting it on another artifact is refused;
-- it is bound to the minting account, which is **re-read at download time**, so
-  an account the operator disables (or narrows) after minting cannot still pull
-  the bytes. Same rule refresh rotation already applies to a grant;
-- it expires in minutes (`settings.artifact_download_token_ttl_seconds`);
-- it is stored hashed, so the database never holds anything downloadable.
+- bound to the artifact — presenting it on another one is refused
+  (`test_a_token_minted_for_one_artifact_is_refused_on_another`);
+- bound to the minting account, **re-read at download time**, so an account the
+  operator disables (`test_a_token_whose_account_was_disabled_stops_working`) or
+  narrows (`test_a_token_stops_at_the_projects_the_account_still_has`) after
+  minting cannot still pull the bytes. Same rule refresh rotation already
+  applies to a grant;
+- it expires in minutes (`settings.artifact_download_token_ttl_seconds`,
+  `test_an_expired_token_is_refused_with_the_typed_error`);
+- it dies with the sign-in that minted it. `POST /api/v1/auth/revoke` deletes
+  the download tokens of **that grant**, because a sign-out that leaves an APK
+  streaming is the failure that endpoint exists to prevent
+  (`test_auth.py::test_signing_out_kills_a_download_token_minted_before_it` —
+  the only one of the five that lives in `test_auth.py`, because what it tests
+  is what sign-out does). Scoped to the grant and not to the actor: a second
+  council round found the by-actor version letting an unauthenticated replay of
+  a dead refresh token kill a live grant's downloads;
+- it is stored hashed, so the database never holds anything downloadable
+  (`test_the_download_token_is_never_stored_in_the_clear`).
 
 It is deliberately **not** single-use. Issue #11 asks for range and resumable
 downloads in the same breath as short-lived authorization, and a token consumed
@@ -74,6 +91,7 @@ that resolves it, and it refuses anything that leaves the artifacts root.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -83,6 +101,7 @@ from starlette.responses import StreamingResponse
 from gateway.app.api import pagination, permissions, timestamps
 from gateway.app.api.auth import bearer_token, require_action, unauthenticated, visible_projects
 from gateway.app.api.errors import CONFLICT, NOT_FOUND, VALIDATION_FAILED, ApiError
+from gateway.app.api.request_context import current_request_id
 from gateway.app.core.config import settings
 from gateway.app.core.oauth import expires_in, generate_artifact_download_token
 from gateway.app.core.users import AuthenticatedPrincipal, lookup_user
@@ -92,14 +111,17 @@ from gateway.app.services.artifact_storage import ArtifactContentMissing, Unsati
 from gateway.app.services.artifact_types import ArtifactError
 
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1")
 
 ARTIFACTS_ENDPOINT = "/api/v1/artifacts"
 ANDROID_BUILDS_ENDPOINT = "/api/v1/builds/android"
 
 # One message for every way a download can be refused authorization — absent
-# token, unknown, expired, minted for another artifact, or belonging to an
-# account the operator has since disabled or narrowed. See
+# token, unknown, expired, minted for another artifact, belonging to an account
+# the operator has since disabled or narrowed, or revoked by a sign-out (whose
+# row is deleted, so it arrives here as "unknown"). See
 # `_artifact_for_download_token` and `gateway/app/api/auth.py:unauthenticated`.
 _DOWNLOAD_TOKEN_REJECTED = (
     "This download requires a current download token for this artifact, "
@@ -130,14 +152,37 @@ def _past_retention() -> ApiError:
     )
 
 
-def _content_missing() -> ApiError:
+def _content_missing(artifact_id: str, reason: str) -> ApiError:
     """The row is there and the bytes are not.
 
     Reported without naming anything about the filesystem: the client learns the
     content is unavailable, and the operator learns which artifact from the
-    `requestId` in the log. Reachable only by a caller already authorized to see
-    this artifact, so it discloses nothing a probe could use.
+    `requestId`. Reachable only by a caller already authorized to see this
+    artifact, so it discloses nothing a probe could use.
+
+    **The log line is what makes the second half of that true.** An earlier cut
+    of this function said the operator "learns which artifact from the
+    `requestId` in the log" while nothing wrote a log line at all: `ApiError` is
+    rendered by `errors.install_error_handlers`, which logs nothing, and this
+    gateway has no access-log middleware — so the `requestId` on the client's
+    screenshot mapped to nothing. A council round reproduced the silence. The
+    log line below is the artifact that claim needed, and it carries the same
+    `correlation_id` the response's `requestId` carries.
+
+    `reason` separates the two ways to get here — no file, or a stored path
+    that stopped resolving inside the root — because they need different
+    operator responses and the client is deliberately told neither.
     """
+    logger.warning(
+        "artifact_content_unavailable",
+        extra={
+            "correlation_id": current_request_id(),
+            "task_id": None,
+            "executor_id": None,
+            "artifact_id": artifact_id,
+            "reason": reason,
+        },
+    )
     return ApiError(
         status_code=404,
         code=NOT_FOUND,
@@ -265,6 +310,7 @@ async def get_artifact(
 @router.post("/artifacts/{artifact_id}/download-token", tags=["artifacts"], status_code=201)
 async def mint_download_token(
     artifact_id: str,
+    request: Request,
     response: Response,
     principal: AuthenticatedPrincipal = Depends(require_action(permissions.ARTIFACTS_DOWNLOAD)),
     session: AsyncSession = Depends(get_session),
@@ -293,6 +339,13 @@ async def mint_download_token(
         user_id=principal.user_id,
         token=token,
         expires_at=expires_in(ttl),
+        # Which sign-in is minting this, so `POST /api/v1/auth/revoke` can
+        # delete exactly this grant's download credentials. Re-read from the
+        # presented access token rather than carried on `AuthenticatedPrincipal`:
+        # widening that model would put a field on every route in the gateway to
+        # serve one, and this is a primary-key lookup on a rare endpoint. Null
+        # for the grantless browser-OAuth session, which is a value.
+        grant_id=await _minting_grant_id(request, session),
     )
     response.headers["Cache-Control"] = "no-store"
     return {
@@ -311,15 +364,30 @@ async def mint_download_token(
     }
 
 
+async def _minting_grant_id(request: Request, session: AsyncSession) -> str | None:
+    """The grant behind the access token authorizing this mint, or None.
+
+    `require_action` has already accepted the credential by the time this runs,
+    so a miss here means a grantless token (the browser OAuth flow issues
+    those), not an unauthenticated caller.
+    """
+    token = bearer_token(request)
+    if token is None:
+        return None
+    item = await store.get_oauth_access_token(session, token)
+    return item.grant_id if item is not None else None
+
+
 async def _artifact_for_download_token(request: Request, artifact_id: str, session: AsyncSession):
     """Resolve the presented download token to the artifact it authorizes.
 
     Every refusal here is the same `401` with the same message, for the reason
     `gateway/app/api/auth.py:unauthenticated` gives: absent, unknown, expired,
-    minted for a different artifact, or belonging to an account the operator has
-    since disabled or narrowed — distinguishing them tells a holder of a token
-    they were never given whether it was ever real, and which artifact it was
-    for.
+    minted for a different artifact, belonging to an account the operator has
+    since disabled or narrowed, or killed by a sign-out — distinguishing them
+    tells a holder of a token they were never given whether it was ever real,
+    and which artifact it was for. A revoked token's row is *deleted*, so it
+    reaches this function as "unknown" and needs no branch of its own.
 
     The account is re-read from the registry on every download rather than
     trusted from minting time. A five-minute window is small, and it is not
@@ -381,13 +449,14 @@ async def download_artifact(
     try:
         path = artifact_storage.resolve_artifact_file(artifact.storage_path)
     except ArtifactContentMissing:
-        raise _content_missing() from None
+        raise _content_missing(artifact.id, "no_regular_file") from None
     except ArtifactError:
         # A stored path that no longer resolves inside the artifacts root — a
         # symlink, or a root that moved. Reported as missing content rather than
         # as a path problem: the caller has no business learning that a path
-        # exists at all, and the operator has the `requestId`.
-        raise _content_missing() from None
+        # exists at all, and the operator has the `requestId` — which now
+        # actually resolves to a log line, see `_content_missing`.
+        raise _content_missing(artifact.id, "escapes_root") from None
 
     size = path.stat().st_size
     try:
