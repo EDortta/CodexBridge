@@ -34,9 +34,12 @@ info:
 
     ## Conventions
 
-    These are review rules for every endpoint added to this document. No test
-    enforces them yet — response-body conformance is issue #14's scope — so they
-    are checked by the reviewer, not by CI.
+    These are review rules for every endpoint added to this document. Issue #14
+    made the *third* one machine-checked, and only as far as it reaches: the
+    error envelope is validated against `components/schemas/Error` for the
+    failure responses `tests/contract/test_declared_examples_are_real.py` can
+    drive without a credential. The other three, and every authenticated
+    endpoint, are still checked by the reviewer and not by CI.
 
     - All timestamps are RFC 3339 with an explicit UTC offset (`Z`). Note that
       `format: date-time` alone does not require `Z`; the rule is stricter than
@@ -2294,6 +2297,20 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
+
+# The oldest *published* contract version this build still promises to serve —
+# the floor `EDortta/CodexBridgeMobile` may pin. It lives here rather than in a
+# repository-local constant so it travels with the artifact: a consumer that
+# fetched `contract/<v>/codex-bridge.openapi.yaml` reads the floor without
+# cloning this repository, the same reason `x-contract-excluded-paths` is here
+# and not in the test.
+#
+# `scripts/check_contract_compatibility.py` compares this document against the
+# published copy of this version and fails on any change §"What is a breaking
+# change" forbids. Raising it is a deliberate act: it drops the promise to
+# every client still on the older pin, and needs the same conversation with the
+# mobile team as a deprecation does.
+x-minimum-supported-version: '1.6.0'
 
 # Public HTTP routes the gateway serves that are deliberately NOT part of this
 # contract. Every entry needs a reason: `tests/contract/test_openapi_document.py`
