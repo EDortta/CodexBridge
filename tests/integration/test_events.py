@@ -1356,6 +1356,25 @@ def test_the_per_actor_ceiling_can_never_exceed_the_process_ceiling() -> None:
     assert events_routes.StreamSlots(4).per_actor == 4
 
 
+def test_the_module_level_slots_carry_the_configured_per_actor_ceiling() -> None:
+    """The ceiling the deployment actually uses is wired from settings.
+
+    Council round 2, the claim auditor: `StreamSlots` is tested in isolation and
+    the `api` fixture replaces the module-level object with one built from
+    `limit` alone, so no route test observes the real ceiling. Dropping
+    `settings.event_stream_max_per_actor` from the construction at
+    `events.py` would leave `per_actor` defaulting to `limit` (8) and every route
+    test green. This pins the wiring: the object the request handler holds carries
+    the configured per-actor value (2), not the process ceiling.
+    """
+    from gateway.app.core.config import settings
+
+    assert events_routes.stream_slots.per_actor == settings.event_stream_max_per_actor
+    assert settings.event_stream_max_per_actor < settings.event_stream_max_concurrent, (
+        "if these were equal the wiring test could not distinguish a dropped argument"
+    )
+
+
 def test_the_stream_ceiling_fits_inside_the_connection_pool() -> None:
     """32 streams against a 15-connection pool is the incident `probes.py` records.
 
