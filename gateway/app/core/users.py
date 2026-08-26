@@ -437,11 +437,14 @@ def _decoy_hash(iterations: int) -> str:
 _FALLBACK_ITERATIONS = 600000
 
 # The most PBKDF2 rounds any single registry entry may impose on every
-# unauthenticated sign-in attempt. Roughly three times the production cost:
-# high enough that no honestly-generated registry meets it, low enough that a
-# typo'd or migrated round count cannot turn one line of `users.json` into an
-# authentication DoS. See `_registry_iterations`.
-_MAX_ITERATIONS = 2_000_000
+# unauthenticated sign-in attempt. Well above any honestly-generated cost —
+# ~16x the production 600 000 in `docs/installation.md`, so an operator who
+# hardens has ample headroom and does not lock themselves out — while still
+# refusing an absurd typo or a mis-unit migrated count (`…$99000000$…`) that
+# would turn one line of `users.json` into an authentication DoS. A hash above
+# this is unusable (`verify_password` refuses it, `_iterations_of` is 0); see the
+# accepted risk in `docs/security.md`. See `_registry_iterations`.
+_MAX_ITERATIONS = 10_000_000
 
 
 def verify_password(password: str, encoded_hash: str) -> bool:

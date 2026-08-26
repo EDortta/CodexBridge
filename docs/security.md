@@ -238,6 +238,42 @@ ler não deve conceder nada, e a falha de deployment continua nomeada no startup
 (`main.py`) e em `/mcp` (`user_registry_unavailable`). Se a distinção I/O vs
 parse valer um `503` em `/api/v1`, é ajuste do operador.
 
+### Achados da rodada 2 do concílio (introduzidos pelos próprios fixes)
+
+A rodada 2 checou os fixes acima. Fechados na mesma entrega: o teste do cap de
+SC#1 ganhou limite inferior (`0 < expiresIn`); `_MAX_ITERATIONS` subiu para
+10.000.000 (16x o custo de produção) para não travar um operador que endurece; a
+docstring do teste de retenção foi corrigida. Ficam registrados, com risco
+aceito ou como decisão do operador:
+
+* **[risco aceito] Conta com hash acima de `_MAX_ITERATIONS` fica inutilizável e
+  o sign-in com a senha *correta* audita `bad_password`.** Acima de 10.000.000 de
+  rounds `verify_password` recusa (a conta não entra), `_iterations_of` conta 0,
+  e `unusable_registry_reason` não sinaliza a entrada específica. Aceito porque o
+  teto agora está muito acima de qualquer custo honesto; uma entrada acima dele é
+  configuração absurda. Se o operador quiser sinal explícito,
+  `unusable_registry_reason` pode passar a nomear a entrada fora do teto.
+* **[decisão do operador] Sign-out de rotina agora é retido para sempre.** A
+  varredura de retenção poupa todo `auth.credentials_revoked` para preservar a
+  prova de roubo (`refresh_token_reuse`) e a revogação forçada
+  (`account_unavailable`); como consequência, o `signed_out` de rotina — antes
+  varrido sob `entity_type == "auth"` — também deixa de envelhecer. Volume baixo
+  (um por fim de sessão, autenticado) e a varredura só roda no startup de todo
+  jeito. O fix limpo distingue por `reason`, o que hoje exigiria SQL específico
+  de banco (`json_extract`) ou um `event_type` distinto para o sign-out de
+  rotina — mudança no contrato de auditoria, direção do operador.
+* **[pré-existente, não introduzido] Replay repetido de um refresh token roubado
+  é auditado uma vez e depois nunca mais.** A primeira reapresentação grava
+  `refresh_token_reuse`; da segunda em diante `inspect_refresh_token` retorna
+  `revoked` e o handler responde 401 sem gravar evento (não existe
+  `auth.refresh_failed`). O operador não distingue um replay de dez mil. Anterior
+  a esta entrega; um tipo de evento para falha de refresh o fecharia.
+* **[nota] Sinal-de-lado de S4:** o sign-in por `user_id` ficou
+  case-insensitive (as chaves do índice são `.lower()`). Seguro — a guarda de
+  colisão proíbe a ambiguidade — mas nem `docs/installation.md` nem o OpenAPI
+  mencionam. **[nota] S2 loga por request** enquanto o registro está quebrado
+  (sem cache), até 120 linhas WARNING/min/bucket com o caminho do arquivo.
+
 ## Recomendações de produção
 
 * usar PostgreSQL real com backup e retenção;

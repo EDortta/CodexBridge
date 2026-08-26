@@ -934,8 +934,10 @@ async def test_a_last_minute_rotation_does_not_outlive_the_grant_deadline(api) -
         f"the rotated access token expires at {access_exp}, past the grant deadline {refresh_exp}"
     )
     # expiresIn is capped too, not left at the full TTL — it is the field the
-    # contract tells the client to schedule its refresh from.
-    assert body["expiresIn"] <= 30, f"expiresIn stayed at the full TTL: {body['expiresIn']}"
+    # contract tells the client to schedule its refresh from. Lower bound as well
+    # as upper: an over-truncation that returned an already-expired access token
+    # (the tz-misread the normalization guards against) would satisfy `<= 30` too.
+    assert 0 < body["expiresIn"] <= 30, f"expiresIn out of range: {body['expiresIn']}"
 
 
 async def test_a_rotation_far_from_the_deadline_still_gets_the_full_access_ttl(api) -> None:
@@ -980,9 +982,10 @@ async def test_the_retention_sweep_keeps_a_refresh_reuse_record(api) -> None:
     `auth.credentials_revoked{reason:"refresh_token_reuse"}` is the one durable
     artefact saying a stolen refresh token was replayed on a grant. Scoping the
     retention window to `entity_type == "auth"` deleted it along with rejected
-    sign-ins; it is scoped to `event_type == "auth.sign_in_failed"` so only the
-    unauthenticated spam ages out, while a rejected sign-in of the same age is
-    still swept.
+    sign-ins; it is scoped to `AUTH_SWEEPABLE_EVENT_TYPES` (the high-volume
+    `auth.sign_in_failed`, `auth.token_refreshed`, `auth.signed_in`), which
+    excludes `auth.credentials_revoked`, so the theft record survives while a
+    rejected sign-in of the same age is still swept.
     """
     async with api.factory() as s:
         old = datetime.now(timezone.utc) - timedelta(days=120)
