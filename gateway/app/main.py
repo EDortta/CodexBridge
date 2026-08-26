@@ -15,7 +15,9 @@ from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import decisions, missions, probes, projects, sessions
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import epics as epics_routes
+from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import issues as issues_routes
+from gateway.app.api.routes import notifications as notifications_routes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.core.agent_auth import TokenSource, resolve_executor_token
 from gateway.app.core.config import settings
@@ -135,6 +137,17 @@ app.include_router(issues_routes.router, dependencies=[Depends(RateLimitDependen
 # projects, sessions/decisions/missions and issues. Same limiter, same
 # authorization plumbing as epics and issues above.
 app.include_router(conversations_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# The mobile event stream and its polling fallback (issue #13). Same limiter as
+# every other /api router — and note what the limiter does *not* bound here: it
+# counts requests per window, while one accepted request to `/events/stream`
+# becomes a connection held open for minutes. `routes/events.py:StreamSlots` is
+# what bounds that; the limiter still guards the rate of opening attempts.
+app.include_router(events_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# Notification-subscription preferences (issue #13): recorded intent for a push
+# transport this build does not have. See `routes/notifications.py`.
+app.include_router(notifications_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:

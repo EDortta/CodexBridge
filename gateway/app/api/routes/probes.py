@@ -67,7 +67,23 @@ version_router = APIRouter()
 # an optional `reason` field on its request body, recorded on the mission's
 # timeline. Additive only (new optional field; an existing client sending no
 # body is unaffected), so another minor bump.
-API_CONTRACT_VERSION = "1.6.0"
+#
+# 1.6.0 -> 1.8.0: the mobile event stream (issue #13) — `GET /api/v1/events`,
+# `GET /api/v1/events/stream` and `GET`/`PUT
+# /api/v1/notifications/preferences`, plus the `MobileEvent` family of schemas.
+# Additive only, so a minor bump.
+#
+# **1.7.0 is skipped on purpose.** It is reserved for the artifacts and Android
+# build work (issue #11), developed in parallel on its own branch, which bumps
+# this same line for its own endpoints. Two branches that both claimed "the next
+# minor" would produce two different 1.7.0 contracts, and whichever merged
+# second would either silently overwrite the other's number or ship a version a
+# client already pinned against different endpoints. Taking the number issue #11
+# is not taking costs nothing — semver does not require contiguity — and it
+# makes the merge a text conflict in one line rather than a version collision
+# nothing detects. `MobileEventType` already declares `artifact.*` and
+# `androidBuild.*` for the same reason: to make #11 additive when it lands.
+API_CONTRACT_VERSION = "1.8.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a
@@ -94,7 +110,11 @@ CAPABILITIES = {
     "tokenRevocation": True,     # POST /api/v1/auth/revoke
     "effectivePermissions": True,  # GET /api/v1/auth/me
     "deviceAuthorization": False,  # RFC 8628; sign-in is what #4 delivered
-    "eventStream": False,        # issue #13
+    # GET /api/v1/events/stream (SSE) and GET /api/v1/events (the polling
+    # fallback). True because both routes are served — the flag is about the
+    # transport existing, not about push notifications, which are a different
+    # thing and still absent (see `routes/notifications.py`).
+    "eventStream": True,         # issue #13
     "artifactDownloads": False,  # issue #11
 }
 

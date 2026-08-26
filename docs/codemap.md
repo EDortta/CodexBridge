@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-22 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
+> Generated: 2026-08-26 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--gh-13`
+> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--gh-13 map`
 
 ## Summary
 
-- 95 file(s) · 876 symbol(s) indexed
-- Languages: config (2), python (91), shell (2)
+- 99 file(s) · 968 symbol(s) indexed
+- Languages: config (2), python (95), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -20,7 +20,7 @@
 ## Ignored Paths
 
 - Built-in: `.docs-migration-bak`, `.git`, `.idea`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`, `.venv`, `.vscode`, `__pycache__`, `build`, `dist`, `env`, `node_modules`, `venv`
-- `.gitignore`: `__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.coverage`, `codex_bridge.db`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `venv/`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md`, `.windsurfrules`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/ai-agents.md`, `.credentials`, `handoff.md`, `new-tag.sh`, `scripts/install-agents-kit.sh`, `scripts/agent-worktree.sh`, `.docs-migration-bak/`, `.gk/operator.json`, `.gk/secrets.json`, `.gk/context-telemetry.jsonl`, `.gk/overwritten/`, `.env`, `.env.*`, `.envrc`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, `.credentials/*`, `!.env.example`, `!.env.sample`, `!.env.template`, `!.env.dist`, `!.env-example`, `!.env.missing`, `!.credentials/.gitignore`, `!.credentials/.keep`, `!.credentials/README*`, `!.credentials/*.example`, `!.credentials/*.sample`, `!.credentials/*.template`, `!.credentials/*.dist`
+- `.gitignore`: `__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.coverage`, `codex_bridge.db`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `venv/`, `.governancekit-identity.json`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md`, `.windsurfrules`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/ai-agents.md`, `handoff.md`, `new-tag.sh`, `scripts/install-agents-kit.sh`, `scripts/agent-worktree.sh`, `.docs-migration-bak/`, `.gk/operator.json`, `.gk/secrets.json`, `.gk/context-telemetry.jsonl`, `.gk/overwritten/`, `.gk/pre-upgrade/`, `.gk/pre-migrate/`, `.gk/remove-agents-backup/`, `.gk/remove-agents-plan.json`, `.gk/context-proposal/`, `*.kit-new`, `*.pre-draft`, `.env`, `.env.*`, `.envrc`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, `.credentials/*`, `!.env.example`, `!.env.sample`, `!.env.template`, `!.env.dist`, `!.env-example`, `!.env.missing`, `!.credentials/.gitignore`, `!.credentials/.keep`, `!.credentials/README*`, `!.credentials/*.example`, `!.credentials/*.sample`, `!.credentials/*.template`, `!.credentials/*.dist`
 
 ## Entry Points
 
@@ -62,8 +62,10 @@ gateway/
         conversations.py  — "Conversations and contextual messaging — issue #10."
         decisions.py  — "Operational decisions: sensitive tasks held for a human to resolve — issue #6."
         epics.py  — "Epics — issue #8."
+        events.py  — "Near-real-time delivery of what changed, and the backlog behind it — issue #13."
         issues.py  — "Issues — issue #8."
         missions.py  — "Missions: the mission-control view of the same run Sessions exposes — issue #7."
+        notifications.py  — "What this actor wants to be notified about — issue #13."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
         projects.py  — "Projects and the project operational dashboard — issue #5."
         sessions.py  — "Agent sessions, their logs, and lifecycle control."
@@ -93,6 +95,7 @@ gateway/
       agent_hub.py
       audit.py
       conversation_types.py  — "Closed vocabulary for conversation context references, and their error."
+      event_types.py  — "Which audit rows become mobile events, and what those events may say — issue #13."
       issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
       metrics.py
       store.py
@@ -123,6 +126,7 @@ tests/
     test_conversations.py  — "Conversations and contextual messaging — issue #10."
     test_decisions.py  — "Operational decisions — issue #6."
     test_epics_issues.py  — "Epics and issues — issue #8."
+    test_events.py  — "The mobile event stream, its polling fallback, and notification preferences — issue #13."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
@@ -189,6 +193,7 @@ tests/
 > Authentication and authorization for the contract surface.
 
 - `unauthenticated(message)` — "The one shape of a 401 on this surface."
+- `principal_for_token(session, token)` *(async function)* — "The principal a bearer token resolves to right now, or None."
 - `current_principal(request, session)` *(async function)* — "Resolve the bearer token to a principal, or refuse the request."
 - `bearer_token(request)` — "The presented bearer token, or None when the header is absent or not one."
 - `require_action(action)` — "Dependency factory refusing a principal that may not perform `action`."
@@ -315,6 +320,22 @@ tests/
 - `create_epic(payload, response, idempotency_key, principal, session)` *(async function)*
 - `link_issue(epic_id, issue_id, response, if_match, idempotency_key, principal, session)` *(async function)* — "Attach an issue to an epic. Both must be in a project the caller may see."
 
+### `gateway/app/api/routes/events.py`
+
+> Near-real-time delivery of what changed, and the backlog behind it — issue #13.
+
+- **`StreamSlot`** *(class)* — "One acquired slot, releasable exactly once."
+  - `__init__(self, slots)` *(method)*
+  - `release(self)` *(method)*
+- **`StreamSlots`** *(class)* — "How many event streams this process will hold open at once."
+  - `__init__(self, limit)` *(method)*
+  - `active` *(property)*
+  - `acquire(self)` *(method)*
+  - `release(self)` *(method)*
+- `list_events(response, after, project, type, limit, principal, session)` *(async function)* — "Events the caller may see, oldest first, after `after`."
+- `event_stream()` *(async function)* — "The SSE body: an async generator of frames."
+- `stream_events(request, after, project, type, last_event_id, principal)` *(async function)* — "Open a live event stream for the caller's projects."
+
 ### `gateway/app/api/routes/issues.py`
 
 > Issues — issue #8.
@@ -336,6 +357,14 @@ tests/
 - `get_mission_timeline(mission_id, response, cursor, limit, principal, session)` *(async function)* — "The mission's recorded events, oldest first — the order a narrative reads in."
 - `cancel_mission(mission_id, response, if_match, idempotency_key, body, principal, session)` *(async function)* — "Cancel a mission that is queued, waiting, running or awaiting approval."
 - `explain_mission(mission_id, principal, session)` *(async function)* — "A structured account of a mission's current state, assembled server-side."
+
+### `gateway/app/api/routes/notifications.py`
+
+> What this actor wants to be notified about — issue #13.
+
+- **`NotificationPreferencesRequest`** *(class)*
+- `get_preferences(response, principal, session)` *(async function)* — "This actor's preferences, or the defaults when nothing was ever saved."
+- `put_preferences(payload, response, principal, session)` *(async function)* — "Replace this actor's preferences."
 
 ### `gateway/app/api/routes/probes.py`
 
@@ -399,6 +428,8 @@ tests/
 ### `gateway/app/core/config.py`
 
 - **`Settings`** *(class)*
+  - `effective_event_stream_poll_interval(self)` *(method)*
+  - `effective_event_stream_batch_limit(self)` *(method)*
   - `effective_ready_cache_seconds(self)` *(method)*
   - `accepted_mcp_tokens(self)` *(method)*
   - `oauth_client_ids(self)` *(method)*
@@ -468,6 +499,7 @@ tests/
 ### `gateway/app/db/session.py`
 
 - `get_session()` *(async function)*
+- `session_factory()` — "The sessionmaker, for code that outlives a request's dependencies."
 
 ### `gateway/app/main.py`
 
@@ -509,6 +541,7 @@ tests/
 - **`ConversationReadStateModel`** *(class)* — "How far one actor has read into one conversation."
 - **`TaskLogModel`** *(class)*
 - **`AuditEventModel`** *(class)*
+- **`NotificationPreferenceModel`** *(class)* — "Which events one actor wants to be notified about — issue #13."
 - **`MessageReceiptModel`** *(class)*
 - **`IdempotencyRecordModel`** *(class)* — "A completed write, keyed so an offline retry replays instead of repeating."
 - **`OAuthAuthorizationCodeModel`** *(class)*
@@ -539,6 +572,18 @@ tests/
 
 - **`ConversationPlanningError`** *(class)* — "A create input that fails validation inside the store itself."
   - `__init__(self, field, code, message)` *(method)*
+
+### `gateway/app/services/event_types.py`
+
+> Which audit rows become mobile events, and what those events may say — issue #13.
+
+- **`MobileEvent`** *(class)* — "One translated event, in the shape the contract publishes."
+  - `action` *(property)*
+  - `as_dict(self)` *(method)*
+- `classify(audit_event_type, payload)` — "`(mobile type, entity kind)` for one audit row, or None when it is internal."
+- `summarize(mobile_type, payload, redact)` — "A short, human-readable line for one event. Never the raw payload."
+- `actor_of(payload)`
+- `state_of(payload)`
 
 ### `gateway/app/services/issue_types.py`
 
@@ -599,6 +644,11 @@ tests/
 - `mission_stage(task)`
 - `list_missions_page(session)` *(async function)* — "Missions (tasks, in mission-control framing) the caller may see, newest"
 - `list_task_events_page(session, task_id)` *(async function)* — "A mission's timeline, oldest first — the order a narrative reads in (issue #7)."
+- `list_mobile_events_page(session)` *(async function)* — "Deliverable audit rows after `after`, oldest first, with their project."
+- `audit_cursor_status(session, after)` *(async function)* — "Whether resuming from `after` can be done without a silent gap."
+- `oldest_audit_event_id(session)` *(async function)* — "Lowest surviving audit id, reported alongside a `beyond_retention` gap."
+- `get_notification_preference(session, user_id)` *(async function)*
+- `set_notification_preference(session)` *(async function)* — "Replace one actor's preferences wholesale, creating the row if absent."
 - `create_epic(session)` *(async function)*
 - `get_epic(session, epic_id)` *(async function)*
 - `get_epic_for_projects(session, epic_id, project_ids)` *(async function)* — "An epic the caller may see, or None. Mirrors `get_task_for_projects`."
@@ -988,6 +1038,72 @@ tests/
 - `test_a_failed_link_does_not_keep_the_key_claimed(api)` *(async function)*
 - `test_the_epic_list_cursor_walks_every_epic_once(api)` *(async function)*
 - `test_list_epics_filters_by_status(api)` *(async function)*
+
+### `tests/integration/test_events.py`
+
+> The mobile event stream, its polling fallback, and notification preferences — issue #13.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)*
+- `auth(token)`
+- `make_task(factory, project_id)` *(async function)*
+- `emit(factory, entity_type, entity_id, event_type, payload)` *(async function)* — "Write one audit row directly and return its id."
+- `newest_audit_id(factory)` *(async function)*
+- **`FakeClock`** *(class)* — "A monotonic clock the test moves on purpose."
+  - `__init__(self)` *(method)*
+  - `__call__(self)` *(method)*
+- `stepping_sleep(clock, step, on_poll)` — "An `asyncio.sleep` replacement that advances the fake clock instead."
+- `parse_frames(chunks)` — "SSE text as a list of `{id?, event?, data?, comment?}` dicts."
+- `run_stream(factory)` *(async function)* — "Drive `event_stream` for exactly `polls` iterations and return its frames."
+- `entity_frames(frames)` — "Only the frames that carry an event — control frames and heartbeats out."
+- `test_the_backlog_returns_translated_events_oldest_first(api)` *(async function)*
+- `test_the_page_reports_more_and_a_position_to_continue_from(api)` *(async function)*
+- `test_a_type_filter_narrows_without_making_the_position_stall(api)` *(async function)* — "`nextAfter` is the last id *loaded*, not the last id returned."
+- `test_an_unknown_type_filter_is_a_validation_error(api)` *(async function)*
+- `test_a_declared_but_unemitted_type_filters_to_nothing_rather_than_failing(api)` *(async function)* — "`artifact.*` is in the vocabulary and produced by nothing in this build."
+- `test_the_project_filter_only_ever_narrows(api)` *(async function)*
+- `test_a_restricted_principal_sees_only_its_own_projects_events(api)` *(async function)*
+- `test_authentication_events_never_appear_on_any_principals_feed(api)` *(async function)* — "Sign-in activity is not a product event, and streaming it is a disclosure."
+- `test_a_preference_change_is_not_a_project_event(api)` *(async function)* — "`notification` rows are excluded the same way `auth` rows are."
+- `test_an_event_whose_project_cannot_be_derived_reaches_nobody(api)` *(async function)* — "Fail closed, administrators included."
+- `test_reading_events_requires_the_read_scope(api)` *(async function)*
+- `test_no_stored_payload_key_is_passed_through_to_a_client(api)` *(async function)* — "The audit payload is written by eleven call sites and is not a response."
+- `test_free_text_in_a_summary_is_redacted_and_bounded(api)` *(async function)* — "`redact` is applied to executor free text, and the line has a ceiling."
+- `test_every_emitted_event_type_has_a_summary_builder()` — "A type with no builder falls back to a bland sentence — silently."
+- `test_every_audited_domain_event_type_is_translated()` — "A new audit event under a deliverable entity must be classified on purpose."
+- `test_the_non_deliverable_entity_constants_stay_non_deliverable()` — "The exclusion of auth and preference rows is by construction; pin it."
+- `test_the_declared_but_unemitted_types_are_not_produced_by_this_build()` — "`artifact.*` and `androidBuild.*` are contract, not behaviour, until #11."
+- `test_the_stream_opens_with_an_acknowledgement_carrying_no_position(api)` *(async function)* — "`stream.open` must not carry `id:`."
+- `test_events_recorded_while_the_stream_runs_are_delivered(api)` *(async function)*
+- `test_reconnecting_from_the_last_id_loses_nothing_and_repeats_nothing(api)` *(async function)* — "The acceptance criterion, end to end."
+- `test_the_same_position_replayed_twice_delivers_the_same_events(api)` *(async function)* — "Resume is a pure function of the position, so a duplicated reconnect is safe."
+- `test_a_position_the_log_has_moved_past_is_announced_before_anything_is_delivered(api)` *(async function)* — "A gap is signalled, never papered over — and signalled *first*."
+- `test_a_position_ahead_of_the_log_is_a_gap_too(api)` *(async function)* — "The mirror case: a cursor from another deployment, or a restored backup."
+- `test_a_continuous_position_produces_no_gap_frame(api)` *(async function)* — "The signal is only worth having if it stays quiet when nothing was lost."
+- `test_the_polling_fallback_reports_the_same_gap(api)` *(async function)* — ""No silent loss" is a property of the events, not of one transport."
+- `test_a_revoked_token_stops_the_stream_it_had_already_opened(api)` *(async function)* — "Authorization is re-checked on every poll, not once at `GET`."
+- `test_an_expired_token_stops_the_stream(api)` *(async function)* — "Expiry is the same failure as revocation and must end the stream too."
+- `test_a_project_removed_from_the_actor_stops_reaching_them(api, users_file)` *(async function)* — "`allowed_projects` is re-read per poll, not captured when the stream opened."
+- `test_a_disconnected_client_ends_the_stream_without_a_closing_frame(api)` *(async function)* — "Nothing is listening, so there is nothing to tell."
+- `test_an_idle_stream_sends_a_comment_not_an_event(api)` *(async function)* — "A heartbeat keeps a proxy from timing out an idle connection."
+- `test_a_stream_type_filter_narrows_delivery_without_stalling_the_cursor(api)` *(async function)*
+- `test_the_slot_ceiling_refuses_rather_than_degrading_the_shared_pool(api)` *(async function)* — "The rate limiter bounds requests per window, not connections held open."
+- `test_a_finished_stream_gives_its_slot_back(api)` *(async function)* — "A slot that is not returned is gone for good, and the ceiling ratchets down."
+- `test_the_stream_is_served_as_an_event_stream_that_a_proxy_will_not_buffer(api, monkeypatch)` *(async function)*
+- `test_last_event_id_resumes_and_beats_the_query_parameter(api, monkeypatch)` *(async function)* — "The header is what a reconnecting `EventSource` sends by itself."
+- `test_a_malformed_last_event_id_is_ignored_rather_than_refused(api)` *(async function)* — "The user agent sets that header, not the application."
+- `test_a_bad_type_filter_fails_before_the_body_starts(api, monkeypatch)` *(async function)* — "Once an event-stream body has started there is no status code left to change."
+- `test_preferences_round_trip(api)` *(async function)*
+- `test_a_put_replaces_the_document_rather_than_merging_into_it(api)` *(async function)* — "`PUT`, not `PATCH`: an absent field takes its default."
+- `test_preferences_are_per_actor_and_never_another_accounts(api)` *(async function)*
+- `test_an_unknown_event_type_is_refused_with_the_field_named(api)` *(async function)*
+- `test_writing_preferences_needs_a_scope_reading_them_does_not(api)` *(async function)* — "Two actions, because an operator may grant one without the other."
+- `test_a_stored_type_that_no_longer_exists_is_dropped_on_the_way_out(api)` *(async function)* — "A stored preference can outlive the type it names."
+- `test_preferences_do_not_filter_the_stream(api)` *(async function)* — "A documented decision, not an omission — so it is pinned as behaviour."
+- `test_an_empty_project_list_matches_nothing_and_is_not_no_restriction(api)` *(async function)* — "The one-character mistake: `if project_ids:` instead of `is not None`."
+- `test_task_created_forks_on_the_state_it_was_created_in(api)` *(async function)* — "One audit row, two mobile meanings, resolved from the payload."
+- `test_epics_issues_and_conversations_all_resolve_to_their_project(api)` *(async function)* — "Every deliverable entity type must have a working project derivation."
+- `test_the_poll_interval_is_floored_rather_than_honoured()` — "A zero interval is a busy loop against the pool every endpoint shares."
 
 ### `tests/integration/test_missions.py`
 

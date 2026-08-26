@@ -46,7 +46,8 @@ class Settings(BaseSettings):
     oauth_allowed_redirect_uri_prefixes: str = "https://chatgpt.com,https://chat.openai.com,https://auth.openai.com"
     oauth_default_scopes: str = (
         "codexbridge.read codexbridge.task.submit codexbridge.task.cancel "
-        "codexbridge.issues.write codexbridge.conversations.write"
+        "codexbridge.issues.write codexbridge.conversations.write "
+        "codexbridge.notifications.manage"
     )
     oauth_access_token_ttl_seconds: int = 3600
     oauth_authorization_code_ttl_seconds: int = 600
@@ -161,6 +162,48 @@ class Settings(BaseSettings):
     # connection from the same pool that serves the API, and enough of them made
     # the gateway report itself database-down and ask to be pulled from rotation.
     ready_cache_seconds: float = 5.0
+
+    # --- GET /api/v1/events/stream (issue #13) ----------------------------
+    #
+    # The stream polls `audit_events` for `id > cursor` on a timer. That is the
+    # honest shape for this backend: there is one gateway process, the writes
+    # already land in a table, and a pub/sub bus would be a second delivery path
+    # to keep correct with no second consumer (docs/limits.md: no speculative
+    # architecture expansion).
+    event_stream_poll_interval_seconds: float = 1.0
+    # A comment (`: keep-alive`) on an otherwise idle stream. Must stay well
+    # under the front door's `proxy_read_timeout` (nginx default 60s), or an
+    # idle stream is killed by the proxy and every client reconnects on a timer
+    # it did not choose.
+    event_stream_heartbeat_seconds: float = 15.0
+    # How long one stream is allowed to live before the server closes it with a
+    # `stream.closed` frame. Bounded on purpose: an unbounded stream holds a
+    # worker slot and a connection through every deploy and every network
+    # change, and the client already knows how to resume exactly
+    # (`Last-Event-ID`). 0 or less means "one pass, then close", which is what
+    # tests use.
+    event_stream_max_duration_seconds: float = 900.0
+    # Concurrent streams this process will serve. The rate limiter bounds the
+    # request *rate*, not the number of connections held open — 120 accepted
+    # requests per minute per bucket is 120 live streams, each taking a database
+    # session every poll. This is the ceiling that actually bounds that, and
+    # exceeding it answers 503 with Retry-After rather than degrading the API
+    # everything else shares.
+    event_stream_max_concurrent: int = 32
+    # Rows one poll may deliver. Bounds the work a single iteration can do when
+    # a client resumes from far behind; the next iteration continues immediately
+    # because the cursor advanced.
+    event_stream_batch_limit: int = 200
+
+    def effective_event_stream_poll_interval(self) -> float:
+        # Floored, not honoured: a zero interval is a busy loop that queries the
+        # database as fast as the event loop allows, which is a self-inflicted
+        # denial of service on the pool every other endpoint shares. Same
+        # reasoning as `effective_ready_cache_seconds` below.
+        return max(0.05, float(self.event_stream_poll_interval_seconds))
+
+    def effective_event_stream_batch_limit(self) -> int:
+        return max(1, min(int(self.event_stream_batch_limit), 500))
 
     def effective_ready_cache_seconds(self) -> float:
         # A zero or negative TTL disables caching and restores the DoS the cache

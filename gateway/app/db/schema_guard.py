@@ -45,6 +45,10 @@ REQUIRED_TABLES: dict[str, str] = {
     "conversations": "0007_conversations.sql",
     "conversation_messages": "0007_conversations.sql",
     "conversation_read_states": "0007_conversations.sql",
+    # Issue #13's event stream adds no table of its own — it reads `audit_events`,
+    # which 0001 already created. This is the notification-preferences table, the
+    # one thing that issue does persist.
+    "notification_preferences": "0009_event_subscriptions.sql",
 }
 
 REQUIRED_COLUMNS: dict[str, dict[str, str]] = {

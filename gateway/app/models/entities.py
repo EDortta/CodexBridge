@@ -213,6 +213,39 @@ class AuditEventModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class NotificationPreferenceModel(Base):
+    """Which events one actor wants to be notified about — issue #13.
+
+    Recorded intent, not a delivery mechanism. This build has no push transport
+    (`GET /api/version` reports `pushNotifications: false`), and these rows do
+    **not** filter `GET /api/v1/events/stream`: a client that subscribed to the
+    stream asked for the stream, and silently withholding events from it because
+    of a preference set on another device is how a mobile client misses a
+    decision it was waiting for. See `gateway/app/api/routes/notifications.py`.
+
+    One row per actor, keyed by `user_id` — the id from `users.json`, never an
+    email. There is no `revision`/`ETag`: the only writer of a row is the actor
+    it belongs to, through a `PUT` that replaces the document wholesale, so
+    there is no concurrent third party for an optimistic check to protect
+    against (`ConversationModel` is this schema's other revision-less table, for
+    the same kind of reason).
+    """
+
+    __tablename__ = "notification_preferences"
+
+    user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    # JSON list of `event_types.ALL_EVENT_TYPES` members, validated at the route
+    # before it is written: an unvalidated list here would be a store of
+    # arbitrary caller text echoed back to that caller later.
+    event_types_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    # No `server_default`: `"0"` renders as a quoted literal that Postgres
+    # refuses for a boolean column, and every other boolean in this schema
+    # (`ExecutorModel.enabled`, `TaskModel.run_when_available`) sets its default
+    # in Python and in the migration rather than through SQLAlchemy's DDL.
+    push_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class MessageReceiptModel(Base):
     __tablename__ = "message_receipts"
 

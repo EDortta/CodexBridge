@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.6.0
+  version: 1.8.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -2079,6 +2079,330 @@ paths:
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
 
+  /api/v1/events:
+    get:
+      operationId: listEvents
+      tags: [events]
+      summary: Events the caller may see, oldest first, after a given id
+      description: |
+        The backlog behind `GET /api/v1/events/stream`, and the documented
+        **polling fallback** for it. Not a second-class path: the same events,
+        with the same ids, translated by the same code. A client on a network
+        that breaks long-lived connections, or one in a background state where
+        the platform will not keep a socket open, polls this and loses nothing.
+
+        **Addressed by `after`, not by a cursor.** Every other collection in
+        this contract pages with an opaque `cursor`; this one does not, because
+        its position is *public by necessity* — `id` is the SSE resume token
+        the stream puts in `id:` and the client sends back as
+        `Last-Event-ID`. Wrapping it in an opaque cursor as well would publish
+        two names for one position and make the two transports incompatible.
+        The same reasoning `GET /api/v1/sessions/{sessionId}/logs` already
+        applies to an append-only log.
+
+        Oldest first, like `GET /api/v1/missions/{missionId}/timeline`: a
+        client on this endpoint is catching up, and catching up reads forward.
+
+        `page.nextAfter` is the last id this page **loaded**, which is not
+        necessarily the last id it returned — with a `type` filter the two
+        differ. Pass it back as `after`; passing the last returned `id`
+        instead makes the next request re-scan rows the filter already
+        rejected.
+
+        `gap` is present only when `after` names a position the log can no
+        longer continue from — the polling form of the stream's `stream.gap`
+        frame. See `EventGap`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/EventsAfter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/EventProject'
+        - $ref: '#/components/parameters/EventType'
+      responses:
+        '200':
+          description: A page of events, oldest first.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MobileEvent'
+                  page:
+                    $ref: '#/components/schemas/EventPageInfo'
+                  gap:
+                    $ref: '#/components/schemas/EventGap'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/events/stream:
+    get:
+      operationId: streamEvents
+      tags: [events]
+      summary: Live event stream (Server-Sent Events)
+      description: |
+        A `text/event-stream` body that stays open and delivers events as they
+        are recorded. SSE rather than WebSocket for three reasons, stated so a
+        client author does not have to guess: it rides the `Authorization:
+        Bearer` scheme every other endpoint here uses (a browser or mobile
+        WebSocket cannot set that header on the handshake, and a token in the
+        URL is forbidden); `Last-Event-ID` puts exact resume in the transport
+        rather than in an application protocol on top; and nothing in this
+        feature needs a reverse channel.
+
+        ## Frames
+
+        Only entity events carry `id:`. A control frame deliberately does not,
+        because `Last-Event-ID` must never advance past an event the client
+        actually received.
+
+        ```
+        event: stream.open        (no id) the stream is open, from this position
+        event: stream.gap         (no id) resume is not continuous — re-read
+        event: <MobileEventType>  id: <n>  the events themselves, data is MobileEvent
+        : keep-alive              a comment, so a proxy does not time out an idle stream
+        event: stream.closed      (no id) why the server ended it
+        ```
+
+        `stream.closed` carries a `reason`: `max_duration` (the server bounds
+        how long one connection lives — reconnect), `unauthenticated` (the
+        credential stopped being usable) or `disconnected`. Every ending is a
+        reconnect with `Last-Event-ID`, which is exact.
+
+        ## Resume
+
+        Send `Last-Event-ID` (an `EventSource` does this by itself) or `after`.
+        The header wins when both are present: it is what a reconnecting client
+        sends automatically and it is the more recent of the two by
+        construction. A malformed `Last-Event-ID` is treated as absent rather
+        than rejected — the user agent sets it, not the application.
+
+        Resume is `id > position`, so an event cannot be delivered twice or
+        skipped. If the position can no longer be continued from, the stream
+        opens with `stream.gap` **before** delivering anything, so a client
+        never acts on a partial view believing it was continuous.
+
+        ## Authorization is re-checked while the stream runs
+
+        A stream opened this morning and still open this afternoon authorized
+        once. This one re-resolves the bearer token on every poll: a revoked
+        token, an expired token, a disabled account and a project removed from
+        the actor's `allowedProjects` all take effect within one poll interval,
+        and the stream ends with `stream.closed` and `reason:
+        unauthenticated`. A client must not treat an open connection as proof
+        it is still authorized.
+
+        ## What never appears here
+
+        Authentication and security events. Sign-in, sign-in failure and
+        credential revocation are recorded in the same audit log these events
+        are derived from, and they are excluded by construction — streaming
+        them would tell any token holder when an operator signs in. Neither do
+        events whose project cannot be determined: they are delivered to
+        nobody, administrators included.
+
+        Preferences set through `PUT /api/v1/notifications/preferences` do
+        **not** filter this stream. Narrow a connection with `?type=` instead.
+
+        ## Limits
+
+        The gateway bounds how many streams it holds open at once and answers
+        `503` with `Retry-After` when it is at that ceiling; reconnect with
+        `Last-Event-ID` and nothing is lost. `?type=` is validated before the
+        first byte, because once an event-stream body has started there is no
+        status code left to change.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/EventsAfter'
+        - $ref: '#/components/parameters/EventProject'
+        - $ref: '#/components/parameters/EventType'
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: |
+            The last event id this client received, sent automatically by an
+            `EventSource` on reconnect. Wins over `after` when both are given.
+            A value that is not a non-negative integer is ignored.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: |
+            An open event stream. The body is `text/event-stream` and does not
+            end until the server closes it; it is not JSON and must be read
+            frame by frame.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  A sequence of SSE frames. The `data:` field of an entity
+                  frame is a `MobileEvent`; the `data:` field of a control
+                  frame is a `StreamControlFrame`. Described as a string
+                  because OpenAPI has no way to type a frame sequence — the
+                  two schemas named in `x-frame-payloads` are what a client
+                  parses each `data:` into.
+              # OpenAPI's content model types a *body*, and this body is a
+              # sequence of framed payloads of two different shapes. There is no
+              # standard place to say that, so the mapping is a vendor
+              # extension rather than prose: a generator can read it, and the
+              # contract gate sees the two schemas as referenced instead of
+              # reporting them as declared-and-unused, which is what they would
+              # be if this said the same thing in a sentence.
+              x-frame-payloads:
+                entity:
+                  description: The `data:` of a frame whose `event:` is a `MobileEventType`.
+                  schema:
+                    $ref: '#/components/schemas/MobileEvent'
+                control:
+                  description: The `data:` of a `stream.open`, `stream.gap` or `stream.closed` frame.
+                  schema:
+                    $ref: '#/components/schemas/StreamControlFrame'
+              examples:
+                openThenOneEvent:
+                  summary: Opening, then one decision event
+                  value: |
+                    event: stream.open
+                    data: {"type":"stream.open","from":0,"at":"2026-08-26T14:32:07Z"}
+
+                    id: 41
+                    event: decision.requested
+                    data: {"id":41,"type":"decision.requested","projectId":"codexbridge-demo","entity":{"kind":"decision","id":"9f0d6b2c-2f5a-4c2b-9d5e-1a7c3f8e4b10"},"action":"requested","at":"2026-08-26T14:32:09Z","summary":"A sensitive session is waiting for a decision.","state":"awaiting_approval"}
+
+                    : keep-alive
+
+                    event: stream.closed
+                    data: {"type":"stream.closed","reason":"max_duration","at":"2026-08-26T14:47:07Z"}
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503':
+          description: |
+            The gateway is already holding as many event streams open as it
+            will. Retry after the interval in `Retry-After`, with
+            `Last-Event-ID`; nothing is lost by waiting.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: dependency_unavailable
+                message: Too many event streams are open on this gateway. Retry shortly.
+                requestId: '5a3f1c88-90b1-4e2a-8a6f-2f9c0d1e7b43'
+                retryable: true
+
+  /api/v1/notifications/preferences:
+    get:
+      operationId: getNotificationPreferences
+      tags: [notifications]
+      summary: This actor's notification-subscription preferences
+      description: |
+        Always the calling actor's own. There is no `userId` parameter and no
+        administrator override: a preference document is personal data and an
+        endpoint that could read another account's would be a disclosure with
+        no product behind it.
+
+        Returns the defaults — an empty `eventTypes` and `pushEnabled: false`,
+        with `updatedAt: null` — when the actor has never saved preferences, so
+        a client can tell "never touched" from "explicitly set to the
+        defaults".
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The actor's preferences.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPreferences'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    put:
+      operationId: putNotificationPreferences
+      tags: [notifications]
+      summary: Replace this actor's notification-subscription preferences
+      description: |
+        A whole-document replacement, idempotent by construction: the same body
+        sent twice produces the same document, which is why there is no
+        `Idempotency-Key` and no `If-Match` here. The only writer of a row is
+        the actor it belongs to, so there is no concurrent third party for an
+        optimistic check to protect against.
+
+        **These preferences are a hook for a push transport this build does not
+        have.** `pushDeliveryAvailable` is `false` and nothing reads these rows
+        to decide delivery. They are stored so the choice survives a reinstall
+        and so a later push integration has something to read.
+
+        **They do not filter `GET /api/v1/events/stream`.** A client that
+        opened the stream asked for the stream; withholding events from it
+        because of a preference set on another device is how a phone silently
+        misses the decision its operator was waiting for. Narrow a live
+        connection with that endpoint's `?type=` instead.
+
+        Requires the `notifications.manage` permission
+        (`codexbridge.notifications.manage`), which is separate from the read
+        scope on purpose: an operator may want a phone that watches the event
+        stream without being able to rewrite what the account is notified
+        about.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationPreferencesRequest'
+      responses:
+        '200':
+          description: The stored preferences.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPreferences'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
   /health:
     get:
       operationId: getHealth
@@ -2287,7 +2611,7 @@ paths:
                   tokenRevocation: true
                   effectivePermissions: true
                   deviceAuthorization: false
-                  eventStream: false
+                  eventStream: true
                   artifactDownloads: false
                 time: '2026-08-10T14:32:07Z'
         '429':
@@ -2489,6 +2813,52 @@ components:
         type: string
         minLength: 1
         maxLength: 255
+
+    EventsAfter:
+      name: after
+      in: query
+      required: false
+      description: |
+        Deliver only events with an `id` strictly greater than this. The
+        resume position for both event transports, and deliberately the same
+        integer the stream puts in `id:` — see `GET /api/v1/events`.
+
+        On the stream, `Last-Event-ID` wins over this when both are sent.
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+      examples:
+        resumeFromFortyOne:
+          value: 41
+
+    EventProject:
+      name: project
+      in: query
+      required: false
+      description: |
+        Repeatable. Restricts to these projects, **intersected** with what the
+        caller may see — naming a project outside the actor's
+        `allowedProjects` narrows to nothing rather than widening.
+      schema:
+        type: array
+        items:
+          $ref: '#/components/schemas/ProjectId'
+
+    EventType:
+      name: type
+      in: query
+      required: false
+      description: |
+        Repeatable. Restricts to these event types. A value outside
+        `MobileEventType` is a `400`; a value that is a declared type this
+        build never emits (`artifact.*`, `androidBuild.*`) is accepted and
+        matches nothing, which is what makes those values usable by a client
+        written ahead of the build that emits them.
+      schema:
+        type: array
+        items:
+          $ref: '#/components/schemas/MobileEventType'
 
   responses:
 
@@ -3731,3 +4101,304 @@ components:
           message: 'Unexpected server error. Report the requestId to the operator.'
           requestId: 'b4c5d6e7-f809-4a1b-8c2d-3e4f50617283'
           retryable: true
+
+
+    MobileEventType:
+      type: string
+      description: |
+        What kind of change an event reports. A closed vocabulary: a client may
+        switch over it exhaustively, and adding a value is a breaking change
+        under `docs/api/README.md` §"What is a breaking change" — which is why
+        the artifact and Android build values are already here.
+
+        **Declared and never emitted by this build:** `artifact.created`,
+        `artifact.updated` and `androidBuild.status_changed`. There is no
+        artifact or Android build record in this build (issue #11), so no event
+        of these types can arrive. They are declared now so that the build
+        which produces them is additive rather than a new major version.
+
+        A session, a mission and a decision are three vocabularies over the same
+        underlying row — see `docs/api/README.md` §"Missions (issue #7)". One
+        change produces **one** event, not three: `entity.kind` names the
+        vocabulary that fits what happened (`decision` for the approval
+        lifecycle, `session` for the run's own lifecycle), and the id is the
+        same id, so `GET /api/v1/sessions/{id}` and `GET /api/v1/missions/{id}`
+        both accept it.
+      enum:
+        - androidBuild.status_changed
+        - artifact.created
+        - artifact.updated
+        - conversation.created
+        - conversation.message_created
+        - decision.requested
+        - decision.resolved
+        - decision.resolved_by_actor
+        - epic.created
+        - issue.created
+        - issue.linked_to_epic
+        - issue.updated
+        - session.completed
+        - session.control_acknowledged
+        - session.control_refused
+        - session.control_requested
+        - session.created
+        - session.recovered
+        - session.restarted
+        - session.state_changed
+        - session.stop_acknowledged
+        - session.stopped
+
+    MobileEventEntityKind:
+      type: string
+      description: |
+        Which resource a client fetches to see the whole thing behind an event.
+        `artifact` and `androidBuild` appear only on the declared-but-unemitted
+        types above.
+      enum:
+        - session
+        - decision
+        - epic
+        - issue
+        - conversation
+        - artifact
+        - androidBuild
+
+    MobileEventEntity:
+      type: object
+      description: The resource this event is about.
+      required: [kind, id]
+      properties:
+        kind:
+          $ref: '#/components/schemas/MobileEventEntityKind'
+        id:
+          $ref: '#/components/schemas/Id'
+
+    MobileEvent:
+      type: object
+      description: |
+        One change, in the shape both event transports deliver.
+
+        **The summary is a whitelist, never the stored record.** The gateway's
+        internal audit payload is not passed through: each event type names the
+        few values it may read, free text is redacted and truncated on the way
+        out, and anything nobody whitelisted does not leave the server. Treat
+        `summary` as a notification line, not as data — fetch the entity for
+        the authoritative state.
+      required: [id, type, projectId, entity, action, at, summary]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: |
+            Monotonically increasing position in the event log, and the resume
+            token: send it back as `Last-Event-ID` or `after`. Increasing but
+            **not contiguous** — the log also holds records that are never
+            delivered as events — so a client must not treat a skipped number
+            as a lost event. Loss is reported explicitly by `EventGap`.
+        type:
+          $ref: '#/components/schemas/MobileEventType'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        entity:
+          $ref: '#/components/schemas/MobileEventEntity'
+        action:
+          type: string
+          description: |
+            The part of `type` after the dot (`created`, `state_changed`, …),
+            so a client can branch coarsely without parsing the type string.
+            Derived, never stored, so the two cannot disagree.
+          examples:
+            - state_changed
+        at:
+          $ref: '#/components/schemas/Timestamp'
+        summary:
+          type: string
+          maxLength: 300
+          description: One short human-readable line. See the note above.
+          examples:
+            - 'State changed to running.'
+        state:
+          type: string
+          description: |
+            The entity's state at the moment of the event, when the event has
+            one. Omitted — not null — when it does not.
+          examples:
+            - running
+        actorId:
+          allOf:
+            - $ref: '#/components/schemas/Id'
+          description: |
+            Opaque id of the actor who caused the change, when the event
+            records one. Omitted when the change was not attributable to an
+            actor (an executor result, an expiry sweep). Never an email
+            address: the audit record holds one for several event kinds and it
+            is deliberately not read here.
+      examples:
+        - id: 41
+          type: session.state_changed
+          projectId: codexbridge-demo
+          entity:
+            kind: session
+            id: 9f0d6b2c-2f5a-4c2b-9d5e-1a7c3f8e4b10
+          action: state_changed
+          at: '2026-08-26T14:32:09Z'
+          summary: 'State changed to running.'
+          state: running
+
+    EventPageInfo:
+      type: object
+      description: |
+        Paging for the event backlog. Deliberately **not** `PageInfo`: this
+        collection is addressed by the same public integer id the stream
+        resumes from, so it has no opaque cursor. See `GET /api/v1/events`.
+      required: [hasMore]
+      properties:
+        hasMore:
+          type: boolean
+          description: |
+            Whether more events exist after this page. Authoritative: computed
+            from an over-fetch, so a page shortened by authorization or by a
+            `type` filter still reports the truth.
+        nextAfter:
+          type: [integer, 'null']
+          format: int64
+          description: |
+            Pass as `after` to fetch the next page. The last id this page
+            **loaded**, which is not necessarily the last id it returned when a
+            `type` filter dropped the tail. `null` when `hasMore` is `false`.
+
+    EventGap:
+      type: object
+      description: |
+        Sent when the requested resume position can no longer be continued from
+        — as this field on `GET /api/v1/events`, and as the `stream.gap` frame
+        on the stream, **before** any event is delivered.
+
+        Its whole purpose is that loss is never silent. Resume is
+        `id > position`, so the only way to miss an event is for its record to
+        be gone; a client that receives this must re-read the affected
+        resources rather than assume the events it now receives continue from
+        where it left off.
+      required: [reason, from]
+      properties:
+        reason:
+          type: string
+          description: |
+            `beyond_retention`: the position's record is gone and the log has
+            moved past it — events between the client's position and
+            `oldestAvailableId` were removed.
+
+            `cursor_ahead`: the position is beyond anything this log has ever
+            held. The position came from a different deployment, or this
+            database was restored from a backup older than the client. Left
+            unsignalled, the stream would simply never deliver again — the same
+            silence in the other direction.
+          enum:
+            - beyond_retention
+            - cursor_ahead
+        from:
+          type: integer
+          format: int64
+          description: The position the client asked to resume from.
+        oldestAvailableId:
+          type: [integer, 'null']
+          format: int64
+          description: |
+            The lowest position still held, so a client that fell behind knows
+            where to restart from instead of guessing. `null` when the log is
+            empty.
+
+    StreamControlFrame:
+      type: object
+      description: |
+        The `data:` payload of a `stream.open`, `stream.gap` or `stream.closed`
+        frame on `GET /api/v1/events/stream`.
+
+        These are **not** `MobileEventType` values and never will be: they carry
+        no entity, no project and no resume position, and a client that switches
+        exhaustively over the entity enum must not have to know them to compile.
+        Control frames also carry no SSE `id:`, so they cannot advance
+        `Last-Event-ID` past an event the client never received.
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum:
+            - stream.open
+            - stream.gap
+            - stream.closed
+        at:
+          $ref: '#/components/schemas/Timestamp'
+        from:
+          type: integer
+          format: int64
+          description: On `stream.open` and `stream.gap`, the position the stream resumed from.
+        reason:
+          type: string
+          description: |
+            On `stream.gap`, an `EventGap.reason`. On `stream.closed`, why the
+            server ended the stream: `max_duration` (the server bounds how long
+            one connection lives), `unauthenticated` (the credential stopped
+            being usable while the stream was open) or `disconnected`. Every
+            one of them is a reconnect with `Last-Event-ID`.
+        oldestAvailableId:
+          type: [integer, 'null']
+          format: int64
+          description: On `stream.gap`, as `EventGap.oldestAvailableId`.
+
+    NotificationPreferences:
+      type: object
+      description: |
+        What one actor asked to be notified about. Recorded intent, not
+        delivery — see `PUT /api/v1/notifications/preferences`.
+      required: [eventTypes, pushEnabled, pushDeliveryAvailable]
+      properties:
+        eventTypes:
+          type: array
+          description: |
+            The event types the actor subscribed to, sorted and de-duplicated.
+            Empty means "nothing chosen", not "everything".
+          items:
+            $ref: '#/components/schemas/MobileEventType'
+        pushEnabled:
+          type: boolean
+          description: Whether the actor wants push delivery, once there is any.
+        updatedAt:
+          oneOf:
+            - $ref: '#/components/schemas/Timestamp'
+            - type: 'null'
+          description: |
+            When these preferences were last saved, or `null` when the actor
+            has never saved any — which lets a client tell "defaults, never
+            touched" from "explicitly set to the defaults".
+        pushDeliveryAvailable:
+          type: boolean
+          description: |
+            Whether this build can actually deliver a push notification.
+            `false` in this build. Stated in the payload rather than only in
+            prose so a client rendering the switch can say so at the moment it
+            renders it.
+
+    NotificationPreferencesRequest:
+      type: object
+      description: |
+        A whole-document replacement. Absent fields take their defaults rather
+        than keeping the stored value — this is a `PUT`, not a `PATCH`.
+      properties:
+        eventTypes:
+          type: array
+          maxItems: 64
+          description: |
+            Event types to subscribe to. A value outside `MobileEventType` is
+            rejected with `validation_failed` naming `eventTypes`. Duplicates
+            are accepted and collapsed.
+          items:
+            $ref: '#/components/schemas/MobileEventType'
+        pushEnabled:
+          type: boolean
+          default: false
+      examples:
+        - eventTypes:
+            - decision.requested
+            - session.completed
+          pushEnabled: true
