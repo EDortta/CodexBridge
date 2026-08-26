@@ -54,7 +54,7 @@ allowlist exists to withhold. One token table, one ceiling.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -128,12 +128,20 @@ def _tokens_body(
     contract tells clients not to do elapsed-time arithmetic against the device
     clock, and a seconds-from-now value is the only form that survives a device
     whose clock is wrong.
+
+    It is **derived from `access_expires_at`**, not from the configured TTL. A
+    rotation near the grant deadline caps the access token below a full TTL
+    (see `refresh`), and `expiresIn` is the field the contract tells the client
+    to schedule its refresh from — reporting the uncapped TTL here would make a
+    conforming client schedule past the grant's end and meet the 401 the
+    contract promises it will not.
     """
+    remaining = int((access_expires_at - datetime.now(timezone.utc)).total_seconds())
     return {
         "tokenType": "Bearer",
         "accessToken": access_token,
         "accessTokenExpiresAt": timestamps.utc_z(access_expires_at),
-        "expiresIn": settings.oauth_access_token_ttl_seconds,
+        "expiresIn": max(0, remaining),
         "refreshToken": refresh_token,
         "refreshTokenExpiresAt": timestamps.utc_z(refresh_expires_at),
         "scopes": scopes,
@@ -265,10 +273,21 @@ async def refresh(
 
     access_token = generate_access_token()
     refresh_token = generate_refresh_token()
-    access_expires_at = expires_in(settings.oauth_access_token_ttl_seconds)
     # Carried forward, not extended: the grant has an absolute lifetime, so a
     # stolen refresh token cannot be rotated into a session that never ends.
     refresh_expires_at = item.expires_at
+    # Capped at the grant deadline, never beyond it. A rotation performed in the
+    # last minutes of a grant would otherwise mint an access token good for a
+    # full TTL *past* `refreshTokenExpiresAt` — the token's `accessTokenExpiresAt`
+    # landing after the grant's own absolute end, and `GET /auth/me` answering
+    # 200 with it after the deadline the grant is documented to enforce
+    # (`docs/api/README.md`, `docs/security.md`: "a concessão tem vida absoluta").
+    # `get_oauth_access_token` only checks the token's own `expires_at`, so the
+    # cap has to be applied here, at issue.
+    grant_deadline = item.expires_at
+    if grant_deadline.tzinfo is None:
+        grant_deadline = grant_deadline.replace(tzinfo=timezone.utc)
+    access_expires_at = min(expires_in(settings.oauth_access_token_ttl_seconds), grant_deadline)
 
     rotated = await store.issue_auth_grant(
         session,
