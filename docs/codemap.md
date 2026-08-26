@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-22 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-08-26 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 95 file(s) · 876 symbol(s) indexed
-- Languages: config (2), python (91), shell (2)
+- 97 file(s) · 894 symbol(s) indexed
+- Languages: config (2), python (93), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -20,7 +20,7 @@
 ## Ignored Paths
 
 - Built-in: `.docs-migration-bak`, `.git`, `.idea`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`, `.venv`, `.vscode`, `__pycache__`, `build`, `dist`, `env`, `node_modules`, `venv`
-- `.gitignore`: `__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.coverage`, `codex_bridge.db`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `venv/`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md`, `.windsurfrules`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/ai-agents.md`, `.credentials`, `handoff.md`, `new-tag.sh`, `scripts/install-agents-kit.sh`, `scripts/agent-worktree.sh`, `.docs-migration-bak/`, `.gk/operator.json`, `.gk/secrets.json`, `.gk/context-telemetry.jsonl`, `.gk/overwritten/`, `.env`, `.env.*`, `.envrc`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, `.credentials/*`, `!.env.example`, `!.env.sample`, `!.env.template`, `!.env.dist`, `!.env-example`, `!.env.missing`, `!.credentials/.gitignore`, `!.credentials/.keep`, `!.credentials/README*`, `!.credentials/*.example`, `!.credentials/*.sample`, `!.credentials/*.template`, `!.credentials/*.dist`
+- `.gitignore`: `__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.coverage`, `codex_bridge.db`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `venv/`, `.governancekit-identity.json`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md`, `.windsurfrules`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/ai-agents.md`, `handoff.md`, `new-tag.sh`, `scripts/install-agents-kit.sh`, `scripts/agent-worktree.sh`, `.docs-migration-bak/`, `.gk/operator.json`, `.gk/secrets.json`, `.gk/context-telemetry.jsonl`, `.gk/overwritten/`, `.gk/pre-upgrade/`, `.gk/pre-migrate/`, `.gk/remove-agents-backup/`, `.gk/remove-agents-plan.json`, `.gk/context-proposal/`, `*.kit-new`, `*.pre-draft`, `.env`, `.env.*`, `.envrc`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, `.credentials/*`, `!.env.example`, `!.env.sample`, `!.env.template`, `!.env.dist`, `!.env-example`, `!.env.missing`, `!.credentials/.gitignore`, `!.credentials/.keep`, `!.credentials/README*`, `!.credentials/*.example`, `!.credentials/*.sample`, `!.credentials/*.template`, `!.credentials/*.dist`
 
 ## Entry Points
 
@@ -102,6 +102,7 @@ scripts/
   apply_migrations.py  — "Apply the SQL files in `migrations/`, once each, in filename order."
   diagnose.sh
   install.sh
+  publish_contract.py  — "Publish the OpenAPI contract as a pinned, checksummed artifact."
 shared/
   __init__.py  — "Shared contracts for the gateway and the agent."
   policy.py
@@ -113,6 +114,7 @@ tests/
     test_docs_match_the_runtime.py  — "Prose that states a runtime fact, checked against the runtime."
     test_openapi_document.py  — "Contract tests for the canonical OpenAPI document."
     test_proxy_routes.py  — "Every contracted path must be routed by the proxies in front of the gateway."
+    test_published_contract_artifact.py  — "The pinned contract artifact `EDortta/CodexBridgeMobile` consumes."
   integration/
     test_agent_ack_handling.py  — "`task.ack` handling in the `/agent/ws` message loop — issue #16 council."
     test_agent_hub.py
@@ -625,6 +627,16 @@ tests/
 
 - `main()`
 
+### `scripts/publish_contract.py`
+
+> Publish the OpenAPI contract as a pinned, checksummed artifact.
+
+- `sha256_of(path)`
+- `contract_version(source)` — "`info.version` of the document at `source`."
+- `publish(source, output)` — "Write the version directory and refresh the index. Returns the version."
+- `check(source, output)` — "Everything wrong with the published artifact, in messages an operator can act on."
+- `main(argv)`
+
 ### `shared/policy.py`
 
 - **`PolicyDecision`** *(class)*
@@ -690,6 +702,24 @@ tests/
 - `test_nginx_configs_exist()` — "If the configs move, this gate must fail loudly rather than pass empty."
 - `test_every_contract_path_is_routed_by_every_terminating_vhost(contract_paths)`
 - `test_every_proxied_location_reaches_an_upstream()` — "A location block with no `proxy_pass` silently drops its path."
+
+### `tests/contract/test_published_contract_artifact.py`
+
+> The pinned contract artifact `EDortta/CodexBridgeMobile` consumes.
+
+- `run(*args)`
+- `spec()`
+- `test_the_publisher_exists_and_runs()` — "If the script moves, every other test here would pass vacuously."
+- `test_the_published_artifact_matches_the_current_document()` — "A merged contract change that never reached `contract/` is drift."
+- `test_the_current_version_is_published(spec)` — "`info.version` must name a directory a client can fetch."
+- `test_the_index_names_the_current_version_as_latest(spec)` — "The pointer a consumer follows when it has not pinned yet."
+- `test_a_published_version_is_byte_identical_to_the_document(spec)` — "Not "equivalent YAML" — identical bytes."
+- `test_every_published_version_hashes_to_its_manifest()` — "The property that makes a pin worth pinning."
+- `test_check_reports_a_document_that_moved_ahead_of_the_artifact(tmp_path)` — "Change the document, do not republish: the check must name the stale file."
+- `test_check_reports_a_published_version_edited_after_the_fact(tmp_path)` — "Rewriting a pinned version is the failure the digest exists to catch."
+- `test_check_reports_a_contract_that_was_never_published(tmp_path)`
+- `test_publishing_a_new_version_leaves_the_old_one_untouched(tmp_path)` — "A pin survives the next release, or it was never a pin."
+- `test_publishing_is_deterministic(tmp_path)` — "Two runs over one input produce identical bytes."
 
 ### `tests/integration/test_agent_ack_handling.py`
 

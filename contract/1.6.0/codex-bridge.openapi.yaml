@@ -1,0 +1,3733 @@
+openapi: 3.1.0
+
+info:
+  title: CodexBridge Mobile API
+  summary: Contract-first HTTP API consumed by CodexBridgeMobile.
+  version: 1.6.0
+  description: |
+    Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
+    consumes. For that API this document is the **source of truth**: an
+    endpoint under `/api` that is not here is not public, and a field that is
+    not here is not part of the contract.
+
+    This is the **only** OpenAPI description of this gateway. FastAPI's
+    auto-generated document and its UIs (`/openapi.json`, `/docs`, `/redoc`) are
+    switched off in `gateway/app/main.py`: they described the internal MCP and
+    OAuth surfaces and carried none of the rules below, and serving them put two
+    public descriptions of one gateway on the wire — with the reachable one not
+    being the canonical one. There is no second document to reconcile against.
+
+    ## What this document does not cover
+
+    The MCP transport (`POST /mcp`), the OAuth authorization endpoints, the
+    Prometheus scrape endpoint (`GET /metrics`) and the reverse executor
+    WebSocket are **internal or third-party-facing** surfaces with their own
+    contracts. Each one is listed in `x-contract-excluded-paths` below with the
+    reason it is out of scope — see `docs/api/README.md` §"Contract scope".
+
+    ## Versioning
+
+    The public namespace is `/api/v1`. Compatibility, deprecation and the rules
+    that force a new namespace are specified in `docs/api/README.md`. The
+    `info.version` above is the **contract** version (semver) and is independent
+    of the gateway application version.
+
+    ## Conventions
+
+    These are review rules for every endpoint added to this document. No test
+    enforces them yet — response-body conformance is issue #14's scope — so they
+    are checked by the reviewer, not by CI.
+
+    - All timestamps are RFC 3339 with an explicit UTC offset (`Z`). Note that
+      `format: date-time` alone does not require `Z`; the rule is stricter than
+      the schema can express.
+    - Collection endpoints use the cursor pagination described by `PageInfo`.
+      **Append-only log streams are not collections** and page differently: the
+      underlying store addresses log lines by a monotonic integer offset
+      (`store.get_logs`), which the MCP client already consumes that way. Issue
+      #9 defines that scheme; do not force a cursor over it retroactively.
+    - All errors use the `Error` envelope. No endpoint returns a bare string.
+    - No response exposes a server filesystem path, a credential, or an internal
+      executor address. See `docs/api/README.md` §"Fields that must never ship".
+
+servers:
+  - url: https://{host}
+    description: |
+      Public CodexBridge deployment, reached through an nginx edge proxy.
+
+      The default `host` matches `settings.public_base_url` in
+      `gateway/app/core/config.py`, so a generated client names the real
+      deployment rather than a placeholder. **It does not promise that every
+      contracted route is reachable there.** The contract test inventories
+      `gateway.app.main.app.routes` in-process; the edge proxy in
+      `deploy/incus/` decides separately what it forwards, and it already
+      answers 404 or 403 for surfaces the application serves. End-to-end
+      reachability is unverified by this repository's tests.
+    variables:
+      host:
+        default: codexbridge.inovacaosistemas.com.br:8443
+        description: |
+          Hostname and port of the deployment. Override it when developing
+          against a local gateway — the default is production.
+
+paths:
+
+  /api/v1/auth/sign-in:
+    post:
+      operationId: signIn
+      tags: [auth]
+      summary: Exchange a username and password for an access and refresh token
+      description: |
+        The mobile session starts here. The credential checked is the one in the
+        gateway's user registry — the same hash the browser OAuth flow verifies
+        — and the response is the pair every other endpoint uses.
+
+        **Device authorization (RFC 8628) is not implemented.** It exists for
+        clients that cannot show a keyboard, and this client can. `GET
+        /api/version` reports `deviceAuthorization: false` so the difference is
+        visible rather than assumed.
+
+        Every failure is `401 unauthenticated` with one message, whether the
+        account is unknown, the password is wrong, or the account is disabled.
+        Distinguishing them turns this endpoint into a user directory. The
+        server also spends the same password-derivation work on an unknown
+        username, because a response that is identical but faster says the same
+        thing.
+
+        `scopes` in the response is the account's scopes **intersected with the
+        server's configured allowlist**, so it can be narrower than what the
+        registry grants the account. Read the field; do not assume the request
+        got everything the account has. The same ceiling applies to the browser
+        OAuth flow, and both flows write to the same token store.
+
+        The response is `Cache-Control: no-store`. It carries credentials.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+                  description: User id or email, as registered in the gateway.
+                password:
+                  type: string
+                  minLength: 1
+                  maxLength: 1024
+                  format: password
+      responses:
+        '200':
+          description: A new grant.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokens'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/auth/refresh:
+    post:
+      operationId: refreshTokens
+      tags: [auth]
+      summary: Rotate a refresh token into a new pair
+      description: |
+        Returns a new access token **and a new refresh token**. The presented
+        refresh token is consumed by the exchange: it is single use.
+
+        Presenting a consumed refresh token revokes the entire grant — both
+        tokens, immediately. Replay and theft are indistinguishable from the
+        server side, and the safe reading of that ambiguity is theft: signing in
+        again is cheap, sharing a session with whoever holds the copy is not.
+
+        `refreshTokenExpiresAt` does **not** move. A grant has an absolute
+        lifetime, so rotation cannot extend a stolen credential into a session
+        that never ends. When it passes, sign in again.
+
+        Scopes are re-read from the registry on every rotation and intersected
+        with what the grant already carried — never widened. A disabled or
+        removed account ends the grant here rather than at the next expiry.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+                  minLength: 1
+                  maxLength: 1024
+      responses:
+        '200':
+          description: A rotated grant. The presented refresh token is now dead.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokens'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/auth/revoke:
+    post:
+      operationId: revokeTokens
+      tags: [auth]
+      summary: Sign out — end the grant now rather than at expiry
+      description: |
+        Accepts either credential: the access token in the `Authorization`
+        header, the refresh token in the body, or both. Both are accepted
+        because the usual moment to sign out on a phone is after the access
+        token has already expired, and requiring a live one would mean the only
+        way to end a session is to wait for it.
+
+        Revocation reaches **both** tokens of the grant, not only the one
+        presented. A revoked access token stops working immediately, on this API
+        and on the MCP transport alike — they read one credential store.
+
+        Idempotent and deliberately incurious: an unknown, expired or
+        already-revoked credential is answered `200` like any other (RFC 7009).
+        The counters report how many credentials this call actually revoked, so
+        `0` is a meaningful answer and not an error.
+
+        `401` here means nothing usable was presented — no body, and no access
+        token the server recognises. It is a statement about the request, not
+        about a credential. A client whose access token has already expired
+        signs out with the refresh token, which is the half that keeps the grant
+        alive.
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+                  maxLength: 1024
+                  description: |
+                    Required when no access token is sent. Supplying both
+                    revokes the same grant once.
+      responses:
+        '200':
+          description: The credential can no longer be used.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revoked, revokedAt]
+                properties:
+                  revoked:
+                    type: boolean
+                    description: Always `true`. The credential is unusable after this call.
+                  revokedAt:
+                    $ref: '#/components/schemas/Timestamp'
+                  accessTokensRevoked:
+                    type: integer
+                    description: |
+                      How many access tokens this call revoked. `0` when the
+                      credential was already revoked, expired or unknown — which
+                      is not an error.
+                  refreshTokensRevoked:
+                    type: integer
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/auth/me:
+    get:
+      operationId: getCurrentActor
+      tags: [auth]
+      summary: The authenticated actor and what it may do
+      description: |
+        What a client reads **before** it renders a screen. `permissions` is the
+        server's own authorization table evaluated for this actor, so a control
+        the client offers and a `403` from the endpoint behind it cannot
+        disagree — both are decided by the same list.
+
+        The list contains only actions this build serves. An action absent from
+        it is not "denied", it is "not offered by this server", and a client
+        should treat an unknown action the same way: ignore it. New entries may
+        be added within a major version.
+
+        `projects.all` is a flag rather than an empty-list convention, because
+        "every project" and "no projects" are otherwise one character apart, and
+        the direction that mistake fails in is the one that grants everything.
+
+        **This operation declares no `403`, and that is deliberate.** On this
+        surface `403 permission_denied` comes from the per-action guard and from
+        nowhere else, and there is no action to guard here — every authenticated
+        actor may ask who they are. A token whose account has since been
+        disabled or removed is a `401`, like any other dead credential: the
+        recovery is to sign in again, not to tell the operator they lack a
+        permission.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The actor, its scopes, and its effective permissions.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [actor, scopes, projects, permissions, generatedAt]
+                properties:
+                  actor:
+                    $ref: '#/components/schemas/Actor'
+                  roles:
+                    type: array
+                    items:
+                      type: string
+                  scopes:
+                    type: array
+                    description: OAuth scopes carried by the presented token.
+                    items:
+                      type: string
+                  projects:
+                    type: object
+                    required: [all, ids]
+                    properties:
+                      all:
+                        type: boolean
+                        description: |
+                          The actor sees every project. `ids` is then empty and
+                          means nothing — do not read it as a restriction.
+                      ids:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ProjectId'
+                  permissions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Permission'
+                  authScheme:
+                    type: string
+                    description: How the caller authenticated, e.g. `oauth`.
+                  generatedAt:
+                    $ref: '#/components/schemas/Timestamp'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/projects:
+    get:
+      operationId: listProjects
+      tags: [projects]
+      summary: Projects the caller may see, ordered by id
+      description: |
+        A **project** is a registry entry, addressed by `ProjectId` and never by
+        its server filesystem path — `ProjectModel.path` is excluded by
+        contract, see `docs/api/README.md` "Fields that must never ship".
+
+        `health`, `pendingDecisions`, `activeMissions` and `totalSessions` are
+        derived at read time from `TaskModel` and from executor liveness, not
+        stored columns of their own. See `docs/api/README.md` "Projects" for
+        what "mission" and "decision" mean here ahead of issues #6 and #7.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Case-insensitive substring match against project id or name.
+          schema:
+            type: string
+            maxLength: 255
+        - name: status
+          in: query
+          required: false
+          description: Restrict to projects that are enabled or disabled in the registry.
+          schema:
+            type: string
+            enum: [enabled, disabled]
+        - name: attention
+          in: query
+          required: false
+          description: |
+            When `true`, only projects that are enabled and unhealthy, or that
+            hold at least one pending decision. When `false`, the complement.
+            Absent means unfiltered. Combining this with `cursor` and `limit`
+            still yields authoritative pages — see `docs/api/README.md` for how
+            this filter is computed.
+          schema:
+            type: boolean
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of projects.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProjectStatus'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/projects/{projectId}:
+    get:
+      operationId: getProject
+      tags: [projects]
+      summary: One project's status
+      description: |
+        A project in a project scope the caller cannot see returns `404`, never
+        `403` — confirming that an identifier exists is what probing is for.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ProjectId'
+      responses:
+        '200':
+          description: The project's status.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectStatus'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/projects/{projectId}/summary:
+    get:
+      operationId: getProjectSummary
+      tags: [projects]
+      summary: The full operational dashboard for one project
+      description: |
+        Everything `GET /api/v1/projects/{projectId}` returns, plus the
+        per-executor liveness breakdown `health` is derived from and a
+        `generatedAt` timestamp. Split from the plain read because a list of
+        projects does not need one executor array repeated per row — opening a
+        single project's dashboard does.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ProjectId'
+      responses:
+        '200':
+          description: The project's full operational summary.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectSummary'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions:
+    get:
+      operationId: listSessions
+      tags: [sessions]
+      summary: Sessions the caller may see, newest first
+      description: |
+        A **session** is one `codex exec` run on an executor. Only sessions in
+        projects the caller may see are returned, and the filter is applied to
+        the query — so `page.hasMore` describes what the caller can actually
+        reach, not what exists.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: state
+          in: query
+          required: false
+          description: Repeatable. Restricts to these session states.
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: A page of sessions.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Session'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}:
+    get:
+      operationId: getSession
+      tags: [sessions]
+      summary: One session
+      description: |
+        Returns an `ETag` derived from the session's revision. Send it back as
+        `If-Match` on any write to this session.
+
+        A session in a project the caller cannot see returns `404`, never `403`:
+        confirming that an identifier exists is what probing is for.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The session.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}/logs:
+    get:
+      operationId: getSessionLogs
+      tags: [sessions]
+      summary: Log lines, by offset
+      description: |
+        **Offset-paged, not cursor-paged.** Log lines are append-only and
+        addressed by a monotonic integer offset in the store, and the MCP client
+        already reads the same rows that way; giving one table two paging
+        vocabularies would be a v1-breaking mistake to undo. This is the
+        exception `PageInfo` names, not a contradiction of it.
+
+        Lines are redacted on the way out — credentials in query strings,
+        absolute filesystem paths and `host:port` pairs — on top of whatever was
+        applied when they were stored. Do not treat stored log text as safe: the
+        gateway's own logs have carried a credential (issue #15).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: offset
+          in: query
+          required: false
+          description: First log offset to return. Resume with `nextOffset`.
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        '200':
+          description: A slice of the log.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextOffset, hasMore]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LogLine'
+                  nextOffset:
+                    type: integer
+                    description: Pass as `offset` to continue. Authoritative; do not add to it yourself.
+                  hasMore:
+                    type: boolean
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}/stop:
+    post:
+      operationId: stopSession
+      tags: [sessions]
+      summary: Cancel a queued or running session
+      description: |
+        `stop` sends `task.cancel` to the executor when it is connected, and
+        otherwise records the session as cancelled immediately.
+
+        Requires `If-Match`. With `Idempotency-Key`, a retry returns the first
+        response and stops nothing twice; the replay carries
+        `Idempotent-Replay: true`.
+
+        A disconnected executor does not fail the call: refusing would leave the
+        operator unable to stop a session exactly when the executor is
+        unreachable. The response then carries `executorNotified: false`, and
+        that distinction was load-bearing before issue #16: nothing resent
+        `task.cancel` on reconnect at all — not on a plain reconnect, and not
+        on a full gateway restart either, since the startup recovery sweep has
+        always skipped tasks already in `cancelled` (issue #17) — so the run
+        could continue indefinitely while the session read as cancelled.
+        Issue #16 built exactly that replay — for `task.cancel` and for
+        pending `task.pause`/`task.resume`/`task.restart` alike — as a side
+        effect of fixing the equivalent gap for its own three controls, so a
+        reconnect now resends whichever control a task is still waiting on.
+        `executorNotified: false` still means the executor did not hear about
+        it *yet*; it is resolved on the next reconnect rather than left open
+        indefinitely. The replay itself is bounded — `cancel_replay_max_age_seconds`
+        (default 24h) — so an executor that reappears long after the
+        cancellation is not chased with a `task.cancel` for a run that has
+        almost certainly already finished.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The session after cancellation.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}/pause:
+    post:
+      operationId: pauseSession
+      tags: [sessions]
+      summary: Ask the executor to pause a running session
+      description: |
+        Sends `task.pause` to a **connected** executor and moves the session to
+        `pausing` until the executor acknowledges it with `task.ack`.
+
+        Requires `If-Match`. With `Idempotency-Key`, a retry returns the first
+        response and does not enqueue a second pause request.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The session in its transitional control state.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}/resume:
+    post:
+      operationId: resumeSession
+      tags: [sessions]
+      summary: Ask the executor to resume a paused session
+      description: |
+        Sends `task.resume` to a **connected** executor and moves the session
+        to `resuming` until the executor acknowledges it with `task.ack`.
+
+        Requires `If-Match`. With `Idempotency-Key`, a retry returns the first
+        response and does not enqueue a second resume request.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The session in its transitional control state.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}/restart:
+    post:
+      operationId: restartSession
+      tags: [sessions]
+      summary: Ask the executor to restart a running or paused session
+      description: |
+        Sends `task.restart` to a **connected** executor and moves the session
+        to `restarting` until the executor acknowledges it with `task.ack`.
+
+        Requires `If-Match`. With `Idempotency-Key`, a retry returns the first
+        response and does not enqueue a second restart request.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The session in its transitional control state.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/sessions/{sessionId}/explain-error:
+    post:
+      operationId: explainSessionError
+      tags: [sessions]
+      summary: Why this session failed, assembled server-side
+      description: |
+        Gathers the recorded state, the stored error and the last `stderr`
+        lines, all redacted, in one response.
+
+        It is **not** a generated explanation: no model runs and the executor is
+        not contacted. It is the evidence in one place, so the client does not
+        stitch together a detail call and a log call and guess which lines
+        mattered. `POST` because it is expected to grow into something that
+        does more; it changes nothing today.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The evidence.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessionId, state, reasons, generatedAt]
+                properties:
+                  sessionId:
+                    $ref: '#/components/schemas/Id'
+                  state:
+                    type: string
+                  reasons:
+                    type: array
+                    items:
+                      type: string
+                  lastError:
+                    type: [string, 'null']
+                  recentStderr:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LogLine'
+                  generatedAt:
+                    $ref: '#/components/schemas/Timestamp'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/decisions:
+    get:
+      operationId: listDecisions
+      tags: [decisions]
+      summary: Decisions the caller may see, newest first
+      description: |
+        A **decision** is a session (`Session`/`TaskModel`) that needed
+        approval — the same mechanism the MCP transport's `approve_codex_task`
+        tool has driven since before this API existed. Only decisions in
+        projects the caller may see are returned, and the filter is applied to
+        the query — so `page.hasMore` describes what the caller can actually
+        reach, not what exists.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: project
+          in: query
+          required: false
+          description: |
+            Repeatable. Restricts to these projects, further narrowing —
+            never widening — whatever the caller's own authorization already
+            allows.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/ProjectId'
+        - name: state
+          in: query
+          required: false
+          description: Repeatable. Restricts to these decision states.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/DecisionState'
+        - name: urgency
+          in: query
+          required: false
+          description: Repeatable. Restricts to these urgency (priority) values.
+          schema:
+            type: array
+            items:
+              type: string
+        - name: risk
+          in: query
+          required: false
+          description: Repeatable. Restricts to these risk levels.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/DecisionRiskLevel'
+        - name: deadlineBefore
+          in: query
+          required: false
+          description: Restricts to decisions whose deadline is at or before this instant.
+          schema:
+            type: string
+            format: date-time
+        - name: deadlineAfter
+          in: query
+          required: false
+          description: Restricts to decisions whose deadline is at or after this instant.
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: A page of decisions.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Decision'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/decisions/{decisionId}:
+    get:
+      operationId: getDecision
+      tags: [decisions]
+      summary: One decision
+      description: |
+        Returns an `ETag` derived from the decision's revision. Send it back as
+        `If-Match` on `approve`, `reject`, or `request-revision`.
+
+        A decision in a project the caller cannot see returns `404`, never
+        `403` — and so does a session id that exists but never required
+        approval, for the same reason: confirming that an identifier exists,
+        or what kind of resource it names, is what probing is for.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: decisionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The decision.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/decisions/{decisionId}/approve:
+    post:
+      operationId: approveDecision
+      tags: [decisions]
+      summary: Approve a pending decision
+      description: |
+        Requires `If-Match`. A **critical** decision (`risk: sensitive` — every
+        decision this build produces) additionally requires `confirm: true` in
+        the body: `If-Match` proves the client saw the current state, not that
+        the operator meant to approve it, so a critical approval needs one more
+        deliberate bit set. A request missing it is refused with
+        `validation_failed`, naming `/confirm`.
+
+        With `Idempotency-Key`, a retry returns the first response and approves
+        nothing twice; the replay carries `Idempotent-Replay: true`.
+
+        Only a `pending` decision may be approved; a decision already resolved,
+        or otherwise no longer awaiting approval, answers `409`.
+
+        If the task's executor is connected and has a free concurrency slot,
+        it is dispatched the task in the same request — not left for a later,
+        unrelated event to discover it. An offline or already-busy executor
+        is unaffected: the task stays `waiting_executor`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: decisionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 4000
+                confirm:
+                  type: boolean
+                  default: false
+                  description: Required `true` to approve a critical decision. See the operation description.
+      responses:
+        '200':
+          description: The decision after approval.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/decisions/{decisionId}/reject:
+    post:
+      operationId: rejectDecision
+      tags: [decisions]
+      summary: Reject a pending decision
+      description: |
+        Requires `If-Match` and a non-empty `reason`: a rejection with no
+        justification is refused with `validation_failed` before it reaches the
+        session, because the operator on the other end of a Decision Center
+        needs to know why their request will not run.
+
+        With `Idempotency-Key`, a retry returns the first response and rejects
+        nothing twice; the replay carries `Idempotent-Replay: true`.
+
+        Only a `pending` decision may be rejected; a decision already resolved,
+        or otherwise no longer awaiting approval, answers `409`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: decisionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+      responses:
+        '200':
+          description: The decision after rejection.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/decisions/{decisionId}/request-revision:
+    post:
+      operationId: requestDecisionRevision
+      tags: [decisions]
+      summary: Send a pending decision back for revision
+      description: |
+        Requires `If-Match` and a non-empty `reason` describing what needs to
+        change, for the same reason `reject` requires one.
+
+        This still cancels the underlying session — see `Decision`'s and
+        `DecisionState`'s descriptions. The agent protocol has no message that
+        reopens a session for editing, so `revision_requested` is a distinct
+        **outcome** from `rejected`, not a state that holds the session open for
+        a resubmission.
+
+        With `Idempotency-Key`, a retry returns the first response and acts
+        nothing twice; the replay carries `Idempotent-Replay: true`.
+
+        Only a `pending` decision accepts this; a decision already resolved, or
+        otherwise no longer awaiting approval, answers `409`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: decisionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+      responses:
+        '200':
+          description: The decision after the revision request.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Decision'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+
+  /api/v1/missions:
+    get:
+      operationId: listMissions
+      tags: [missions]
+      summary: Missions the caller may see, newest first
+      description: |
+        A **mission** is the same run `GET /api/v1/sessions` returns, reframed
+        in mission-control vocabulary: `objective` for the instruction,
+        `assignedAgent` for the executor, `stage`/`risk`/`blocked` derived from
+        recorded state. There is no separate mission entity — see
+        `docs/api/README.md` "Missions (issue #7)".
+
+        `stage` is a coarser grouping over `state` (`pending`/`active`/`done`)
+        and is a separate filter from it; both may be given together, and an
+        empty intersection returns an empty page rather than an error.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: projectId
+          in: query
+          required: false
+          description: Repeatable. Restricts to these projects, intersected with what the caller may see.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/ProjectId'
+        - name: stage
+          in: query
+          required: false
+          description: Repeatable. Restricts to these coarse stages.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/MissionStage'
+        - name: state
+          in: query
+          required: false
+          description: Repeatable. Restricts to these exact states.
+          schema:
+            type: array
+            items:
+              type: string
+        - name: risk
+          in: query
+          required: false
+          description: Repeatable. Restricts to these risk levels.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/RiskLevel'
+        - name: blocked
+          in: query
+          required: false
+          description: Restricts to missions currently blocked (or not).
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: A page of missions.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Mission'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/missions/{missionId}:
+    get:
+      operationId: getMission
+      tags: [missions]
+      summary: One mission
+      description: |
+        Returns an `ETag` derived from the mission's revision — the same
+        validator `GET /api/v1/sessions/{sessionId}` returns, since they are
+        the same underlying row. Send it back as `If-Match` on `cancel`.
+
+        A mission in a project the caller cannot see returns `404`, never
+        `403`: confirming that an identifier exists is what probing is for.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: missionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The mission.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mission'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/missions/{missionId}/timeline:
+    get:
+      operationId: getMissionTimeline
+      tags: [missions]
+      summary: The mission's recorded events, oldest first
+      description: |
+        Backed by the same `audit_events` rows every mutator in
+        `gateway/app/services/store.py` already writes — not a new log.
+        Cursor-paginated like any other collection (unlike session logs,
+        which are an append-only stream addressed by offset): a timeline is
+        read forward from creation, so unlike other collections in this
+        contract it pages oldest-first.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: missionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of the mission's timeline, oldest first.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MissionTimelineEvent'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/missions/{missionId}/cancel:
+    post:
+      operationId: cancelMission
+      tags: [missions]
+      summary: Cancel a mission that has not finished
+      description: |
+        `cancel` is the only lifecycle command this API offers for missions,
+        for the same protocol reason `POST /api/v1/sessions/{sessionId}/stop`
+        is the only one for sessions: `task.cancel` is the only lifecycle
+        message the agent protocol defines. `pause` and `resume` need
+        protocol and executor work — see issue #16 — and are deliberately
+        absent rather than present and inert.
+
+        Requires `If-Match`. With `Idempotency-Key`, a retry returns the
+        first response and cancels nothing twice; the replay carries
+        `Idempotent-Replay: true`. This is the one destructive command in
+        this build: it requires an authenticated actor and is audited
+        (`docs/api/README.md`, "Missions (issue #7)").
+
+        A disconnected executor does not fail the call, and the response then
+        carries `executorNotified: false` — nothing replays `task.cancel` on
+        reconnect (issue #17), so the run may continue while the mission
+        reads as cancelled.
+
+        `reason` (issue #36) is optional free text — an operator-typed
+        explanation for the cancellation. It has no dedicated field on
+        `Mission`; it is recorded on the mission's timeline the same way
+        a decision's resolution reason already is.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: missionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 4000
+                  description: Optional. Recorded on the mission's timeline.
+      responses:
+        '200':
+          description: The mission after cancellation.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mission'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/missions/{missionId}/explain:
+    post:
+      operationId: explainMission
+      tags: [missions]
+      summary: Why this mission is in its current state, assembled server-side
+      description: |
+        The same evidence `POST /api/v1/sessions/{sessionId}/explain-error`
+        gathers — recorded state, stored error, recent `stderr`, all
+        redacted — plus `stage`, `risk`, `blocked` and `blockedReason`, so a
+        client does not need a second call to explain a block. No model runs
+        and the executor is not contacted.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: missionId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The evidence.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [missionId, state, stage, risk, blocked, reasons, generatedAt]
+                properties:
+                  missionId:
+                    $ref: '#/components/schemas/Id'
+                  state:
+                    type: string
+                  stage:
+                    $ref: '#/components/schemas/MissionStage'
+                  risk:
+                    $ref: '#/components/schemas/RiskLevel'
+                  blocked:
+                    type: boolean
+                  blockedReason:
+                    $ref: '#/components/schemas/BlockedReason'
+                  reasons:
+                    type: array
+                    items:
+                      type: string
+                  lastError:
+                    type: [string, 'null']
+                  recentStderr:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LogLine'
+                  generatedAt:
+                    $ref: '#/components/schemas/Timestamp'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/projects/{projectId}/epics:
+    get:
+      operationId: listEpics
+      tags: [epics]
+      summary: Epics in one project, newest first
+      description: |
+        `projectId` outside the caller's visible projects answers `404`, never
+        `403` — the same probing-prevention rule a single hidden session
+        answers with.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ProjectId'
+        - name: status
+          in: query
+          required: false
+          description: Repeatable. Restricts to these epic statuses.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/EpicStatus'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of epics.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Epic'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/projects/{projectId}/issues:
+    get:
+      operationId: listIssues
+      tags: [issues]
+      summary: Issues in one project, newest first
+      description: |
+        Filters combine with AND. `projectId` outside the caller's visible
+        projects answers `404`, never `403`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ProjectId'
+        - name: status
+          in: query
+          required: false
+          description: Repeatable. Restricts to these issue statuses.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/IssueStatus'
+        - name: priority
+          in: query
+          required: false
+          description: Repeatable. Restricts to these priorities.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/IssuePriority'
+        - name: epicId
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: assigneeUserId
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 255
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of issues.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Issue'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/issues/{issueId}:
+    get:
+      operationId: getIssue
+      tags: [issues]
+      summary: One issue
+      description: |
+        Returns an `ETag` derived from the issue's revision. Send it back as
+        `If-Match` on `PATCH` or on the epic-link endpoint.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: issueId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The issue.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    patch:
+      operationId: updateIssue
+      tags: [issues]
+      summary: Change status, priority, labels, assignee, dependencies or blocked reason
+      description: |
+        A field the caller does not mention is left untouched; a field sent
+        explicitly as `null` is cleared. `epicId` cannot be changed here —
+        `POST /api/v1/epics/{epicId}/issues/{issueId}` is the one way to move
+        an issue between epics, so there is exactly one mechanism to test and
+        audit instead of two that can disagree.
+
+        Requires `If-Match`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: issueId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateIssueRequest'
+      responses:
+        '200':
+          description: The issue after the update.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/issues:
+    post:
+      operationId: createIssue
+      tags: [issues]
+      summary: Create an issue
+      description: |
+        `projectId` outside the caller's visible projects answers `404`, never
+        `403`. With `Idempotency-Key`, a retry returns the first response
+        rather than creating a second issue.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIssueRequest'
+      responses:
+        '201':
+          description: The created issue.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/epics:
+    post:
+      operationId: createEpic
+      tags: [epics]
+      summary: Create an epic
+      description: |
+        `projectId` outside the caller's visible projects answers `404`, never
+        `403`. With `Idempotency-Key`, a retry returns the first response
+        rather than creating a second epic.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEpicRequest'
+      responses:
+        '201':
+          description: The created epic.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Epic'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/epics/{epicId}/issues/{issueId}:
+    post:
+      operationId: linkIssueToEpic
+      tags: [epics]
+      summary: Attach an issue to an epic
+      description: |
+        Both `epicId` and `issueId` must be in a project the caller may see, or
+        the response is `404`. Requires `If-Match` on the issue's current
+        revision. With `Idempotency-Key`, a retry replays the first response.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: epicId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: issueId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The issue after linking.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotent-Replay:
+              description: Present and `true` when this is a replayed response.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/conversations:
+    get:
+      operationId: listConversations
+      tags: [conversations]
+      summary: Conversations the caller may see, newest-created first
+      description: |
+        Ordered by creation time, never by `lastActivityAt` — sorting by an
+        activity timestamp would move a conversation's position in the list
+        the instant a new message lands, which can skip or repeat rows across
+        a paginated walk. See `docs/api/README.md` "Conversations (issue
+        #10)". A client that wants "most recently active first" sorts the
+        page client-side using `lastActivityAt`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: projectId
+          in: query
+          required: false
+          description: Repeatable. Restricts to these projects, intersected with what the caller may see.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/ProjectId'
+      responses:
+        '200':
+          description: A page of conversations.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Conversation'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: createConversation
+      tags: [conversations]
+      summary: Start a conversation
+      description: |
+        `context` must name at least one product entity — the acceptance
+        criterion this field exists to satisfy. Every reference is resolved
+        and authorization-checked the same way `POST /api/v1/epics/{epicId}/issues/{issueId}`
+        checks both sides of its link: a reference to an entity the caller
+        cannot see answers `404`, indistinguishable from a reference to one
+        that does not exist. Every reference must resolve to the same
+        project, or the request is rejected (`400`); there is no `projectId`
+        field of its own — the project is derived from `context`.
+
+        With `Idempotency-Key`, a retry returns the first response rather
+        than creating a second conversation.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConversationRequest'
+      responses:
+        '201':
+          description: The created conversation.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/conversations/{conversationId}:
+    get:
+      operationId: getConversation
+      tags: [conversations]
+      summary: One conversation
+      description: |
+        `conversationId` outside the caller's visible projects answers
+        `404`, never `403` — the same probing-prevention rule a single hidden
+        session answers with.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The conversation.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/conversations/{conversationId}/messages:
+    get:
+      operationId: listMessages
+      tags: [conversations]
+      summary: A conversation's messages, oldest first
+      description: |
+        Oldest first, unlike every newest-first collection elsewhere in this
+        API — a thread is read forward from where it starts, the same
+        reasoning `GET /api/v1/missions/{missionId}/timeline` uses.
+
+        Fetching a page advances the caller's read cursor to the newest
+        message *in that page*, not to "now" — a client that has only fetched
+        an early page must not have later, unfetched messages marked as seen.
+        `docs/api/README.md` "Conversations (issue #10)" has the full
+        reasoning behind `unread`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of messages.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Message'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: postMessage
+      tags: [conversations]
+      summary: Post a message
+      description: |
+        `Idempotency-Key` is what makes an offline retry safe: a mobile
+        client that loses the network right after sending cannot know
+        whether the message landed, and retrying with the same key returns
+        the first response rather than posting a second copy. This is issue
+        #10's acceptance criterion ("message creation is idempotent for
+        offline retries") verbatim.
+
+        `attachments` are opaque artifact/file identifiers, recorded and
+        returned unvalidated — no `ArtifactModel` exists yet (issue #11). See
+        `docs/api/README.md` "Conversations (issue #10)".
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMessageRequest'
+      responses:
+        '201':
+          description: The created message.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /health:
+    get:
+      operationId: getHealth
+      tags: [probes]
+      summary: Liveness probe
+      description: |
+        Reports that the process is running. Touches no dependency, so it stays
+        `ok` even when the database is down — a liveness probe that queries the
+        database restarts a healthy process because the database blinked.
+
+        Unauthenticated, and safe to poll.
+      security: []
+      responses:
+        '200':
+          description: The process is running.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, time]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                  time:
+                    $ref: '#/components/schemas/Timestamp'
+              example:
+                status: ok
+                time: '2026-08-10T14:32:07Z'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /ready:
+    get:
+      operationId: getReady
+      tags: [probes]
+      summary: Readiness probe
+      description: |
+        Reports whether the server can actually serve requests, and names the
+        dependency when it cannot.
+
+        **Degraded is not unready.** With no executor connected, new tasks cannot
+        run but every read still works, so this returns `200` with
+        `status: degraded`. Returning `503` there would take the API offline
+        exactly when an operator needs it to see why nothing is executing.
+
+        A `503` carries the standard `Error` envelope plus the same `checks`
+        array, so one parser handles both outcomes.
+      security: []
+      responses:
+        '200':
+          description: Ready to serve, possibly with non-required dependencies degraded.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, time, checks]
+                properties:
+                  status:
+                    type: string
+                    enum: [ready, degraded]
+                  time:
+                    $ref: '#/components/schemas/Timestamp'
+                  checks:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DependencyCheck'
+              examples:
+                ready:
+                  value:
+                    status: ready
+                    time: '2026-08-10T14:32:07Z'
+                    checks:
+                      - name: database
+                        status: ok
+                        required: true
+                      - name: executors
+                        status: ok
+                        required: false
+                degraded:
+                  value:
+                    status: degraded
+                    time: '2026-08-10T14:32:07Z'
+                    checks:
+                      - name: database
+                        status: ok
+                        required: true
+                      - name: executors
+                        status: degraded
+                        required: false
+        '503':
+          description: |
+            A required dependency is unavailable. The body is the standard
+            `Error` envelope with an added `checks` array naming what failed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Error'
+                  - type: object
+                    properties:
+                      checks:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/DependencyCheck'
+              example:
+                code: dependency_unavailable
+                message: A required dependency is unavailable.
+                requestId: 5a3f1c88-90b1-4e2a-8a6f-2f9c0d1e7b43
+                retryable: true
+                details:
+                  - field: database
+                    code: unavailable
+                    message: Dependency is not reachable.
+                checks:
+                  - name: database
+                    status: unavailable
+                    required: true
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/version:
+    get:
+      operationId: getApiVersion
+      tags: [probes]
+      summary: Server and contract versions, and capability flags
+      description: |
+        Lets a client decide whether it can talk to this server *before* it
+        commits to a namespace — which is why this path sits outside `/api/v1`.
+        It reports every namespace served, not the one it is nested in, and that
+        obligation is what keeps it from being a versioning hole.
+
+        `contractVersion` is the version of this document the build implements;
+        a contract test asserts the two are equal, so a client that pinned a
+        contract version can tell what the server actually speaks.
+
+        `capabilities` states what is true in this build. A flag is `true` only
+        when a **served endpoint** honours it — never because the server has the
+        code for it. Reporting `idempotencyKeys: true` while no endpoint accepts
+        the header produces exactly the 404 these flags exist to prevent, so a
+        test binds them to the served route table.
+
+        A `false` flag is an honest report of work not yet done, and lets a
+        client degrade instead of meeting a 404. Unknown flags must be ignored:
+        new ones may be added within a major version.
+      security: []
+      responses:
+        '200':
+          description: Version and capability report.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [application, applicationVersion, apiVersions, contractVersion, capabilities, time]
+                properties:
+                  application:
+                    type: string
+                  applicationVersion:
+                    type: string
+                  apiVersions:
+                    type: array
+                    description: Every namespace this server serves, e.g. `["v1"]`.
+                    items:
+                      type: string
+                  contractVersion:
+                    type: string
+                    description: Version of this OpenAPI document the build implements.
+                  buildRevision:
+                    type: string
+                    description: |
+                      Build or commit identifier. Absent when the deployment did
+                      not inject one; absence means "not reported", never "no build".
+                  capabilities:
+                    type: object
+                    additionalProperties:
+                      type: boolean
+                  time:
+                    $ref: '#/components/schemas/Timestamp'
+              example:
+                application: codex-bridge-gateway
+                applicationVersion: '0.1.0'
+                apiVersions: [v1]
+                contractVersion: '1.3.0'
+                buildRevision: b76a391
+                capabilities:
+                  errorEnvelope: true
+                  cursorPagination: true
+                  idempotencyKeys: true
+                  optimisticConcurrency: true
+                  passwordSignIn: true
+                  tokenRefresh: true
+                  tokenRevocation: true
+                  effectivePermissions: true
+                  deviceAuthorization: false
+                  eventStream: false
+                  artifactDownloads: false
+                time: '2026-08-10T14:32:07Z'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+# Public HTTP routes the gateway serves that are deliberately NOT part of this
+# contract. Every entry needs a reason: `tests/contract/test_openapi_document.py`
+# rejects an empty one. A route that is neither in `paths` nor listed here fails
+# that test, so an endpoint can never be omitted by accident — only on purpose,
+# in writing. The human-readable version of this table is `docs/api/README.md`.
+x-contract-excluded-paths:
+
+  - path: /healthz
+    methods: [GET]
+    reason: >-
+      Pre-existing infrastructure probe with no version or capability data.
+      Superseded for mobile by GET /health (issue #3); kept for the existing
+      deployment health checks.
+
+  - path: /metrics
+    methods: [GET]
+    reason: >-
+      Prometheus text exposition format, operator-facing. Its contract is the
+      Prometheus exposition spec, not this document.
+
+  - path: /mcp
+    methods: [POST]
+    reason: >-
+      JSON-RPC/MCP transport for ChatGPT. Its contract is docs/protocol.md and
+      the Model Context Protocol specification.
+
+  - path: /agent/ws
+    methods: [WEBSOCKET]
+    reason: >-
+      Reverse executor channel. Executors dial in over wss and receive tasks;
+      no client of this API ever opens it. Its contract is docs/protocol.md,
+      which specifies the envelope, the handshake and the message types.
+
+  - path: /oauth/authorize
+    methods: [GET, POST]
+    reason: >-
+      OAuth 2.1 authorization endpoint, returning HTML for a browser flow. Its
+      contract is RFC 6749 as profiled by OAuth 2.1, not this document.
+      docs/chatgpt-oauth-rollout.md is a rollout plan and does NOT specify these
+      request/response shapes — do not follow it expecting one.
+
+  - path: /oauth/token
+    methods: [POST]
+    reason: >-
+      OAuth 2.1 token endpoint. Its contract is RFC 6749 plus RFC 7636 (PKCE).
+      See gateway/app/core/oauth.py for what this deployment actually issues.
+
+  - path: /.well-known/oauth-authorization-server
+    methods: [GET]
+    reason: >-
+      OAuth 2.0 Authorization Server Metadata (RFC 8414). Shape is fixed by the
+      RFC and by what ChatGPT's client expects; served from
+      gateway/app/core/oauth.py issuer_metadata().
+
+  - path: /.well-known/openid-configuration
+    methods: [GET]
+    reason: >-
+      OpenID Provider Metadata alias of the RFC 8414 document, served for
+      clients that probe the OIDC path first.
+
+  - path: /.well-known/oauth-protected-resource
+    methods: [GET]
+    reason: >-
+      OAuth 2.0 Protected Resource Metadata (RFC 9728), consumed by the MCP
+      client during discovery.
+
+  # FastAPI's /openapi.json, /docs, /docs/oauth2-redirect and /redoc are NOT
+  # listed here. They are not served at all — main.py passes openapi_url=None,
+  # docs_url=None and redoc_url=None. An exclusion entry for a route the gateway
+  # does not serve would be caught by test_no_exclusion_outlives_its_route, which
+  # is the correct behaviour: this list describes served surfaces, and a surface
+  # that no longer exists needs no exclusion.
+
+# Components that exist in this document but are not referenced by any endpoint
+# yet, each with the issue that will use it. `tests/contract/test_openapi_document.py`
+# rejects an unreferenced component that is not listed here, and rejects an entry
+# with no issue — the same rule as `x-contract-excluded-paths`: a thing may be
+# unused only on purpose and in writing.
+#
+# A client must not build against these. They are published so that a later
+# issue adds endpoints rather than re-litigating shapes, not as a promise of
+# behaviour.
+#
+# Empty today: `Actor` was the last entry and issue #4 wired it into
+# `GET /api/v1/auth/me`, which `test_no_pending_component_is_stale` requires be
+# recorded here by removal. The key stays so the mechanism is visible to whoever
+# declares the next shape ahead of its endpoint.
+x-pending-components: []
+
+components:
+
+  headers:
+
+    XRequestId:
+      description: |
+        Identifier for this one request, echoed on every response including
+        errors. A client may send it to tie its own log to the server's; a value
+        that is not a valid `Id` is replaced rather than echoed, because this
+        header is written into response headers and log lines.
+      required: true
+      schema:
+        $ref: '#/components/schemas/Id'
+
+    RetryAfter:
+      description: |
+        Seconds to wait before repeating the request. Sent with `429` and with
+        `503`. A client that ignores it and retries immediately will be limited
+        again — treat it as the earliest useful retry, not a suggestion.
+      schema:
+        type: integer
+        minimum: 0
+
+    ETag:
+      description: |
+        Entity tag for the returned representation, quoted per RFC 9110. Send it
+        back as `If-Match` on any write to this entity. It is derived from a
+        monotonic revision, so it changes on every mutation — including ones
+        that leave every timestamp untouched.
+      schema:
+        type: string
+      example: '"7"'
+
+    CacheControl:
+      description: |
+        `no-store` on every response that carries a credential or an
+        authorization decision. A client must not write these bodies to disk,
+        and an intermediary must not hold them.
+      schema:
+        type: string
+      example: 'no-store'
+
+  parameters:
+
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: |
+        Opaque position from a previous `page.nextCursor`. Cursors are
+        single-purpose: one issued by a different endpoint, or by this endpoint
+        under different filters, is rejected rather than reinterpreted, because
+        silently paging through the wrong rows is worse than an error.
+      schema:
+        type: string
+        maxLength: 512
+
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: |
+        Maximum items to return. Values above the server maximum are clamped,
+        not rejected — a client that guessed the ceiling wrong should get a
+        smaller page, not a failure. Always read `page.hasMore` rather than
+        comparing the item count to `limit`.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: |
+        The `ETag` from the read that produced the value being changed. Required
+        on every write that mutates an existing entity: absent, the request is
+        refused with `428`. Treating a missing header as "no opinion" would make
+        concurrency protection opt-in on exactly the requests likeliest to
+        forget it.
+      schema:
+        type: string
+      example: '"7"'
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Client-generated key making a write safe to repeat. A retry carrying the
+        same key returns the first response and changes nothing, which is what
+        lets a mobile client retry after losing the network mid-request without
+        risking a double approval.
+
+        The key is scoped to the endpoint and the authenticated actor, so the
+        same key from a different actor is a different operation. Reusing one
+        key for a *different* body is a client bug and is refused with `409`
+        rather than answered with the earlier response, which would silently
+        drop the second write.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+
+  responses:
+
+    ValidationFailed:
+      description: The request was malformed or failed validation.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Unauthenticated:
+      description: |
+        No usable credential was presented. Absent, malformed, unknown, expired,
+        revoked, or belonging to an account that has since been disabled or
+        removed — one status, one code, one message for all of them, because
+        telling them apart tells a caller holding a token they were never given
+        whether it was ever real.
+
+        This is the branch a client answers by signing in again. `403` is the
+        other one.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    PermissionDenied:
+      description: |
+        The actor is authenticated but not permitted. Returned in preference to
+        `404` only when the resource's existence is already known to the caller.
+
+        Signing in again does not help — the credential is fine, the permission
+        is not. On `/api/v1` this comes from the per-action guard and from
+        nowhere else, which is why operations with no action to guard (such as
+        `getCurrentActor`) do not declare it.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    NotFound:
+      description: |
+        No such resource — or the actor may not know whether it exists. Hidden
+        resources return this rather than `403`, so that probing cannot map what
+        the caller cannot see.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Conflict:
+      description: |
+        The request cannot be applied to the resource's current state — an
+        invalid transition, or an `Idempotency-Key` reused for a different body.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    PreconditionRequired:
+      description: |
+        The write needs an `If-Match` header and none was sent. Re-read the
+        entity, then retry with the `ETag` it returned.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    StaleWrite:
+      description: |
+        The entity changed since the client read it, so the write was refused.
+        The response carries the current `ETag`; re-read, show the current state,
+        and let the operator decide again — never retry automatically.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        ETag:
+          $ref: '#/components/headers/ETag'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    RateLimited:
+      description: Too many requests. `retryable` is true; honour `Retry-After`.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    InternalError:
+      description: |
+        Unexpected server failure. The body carries only a `requestId`; the
+        detail stays in the server log, because raw driver errors and stack
+        traces leak schema, filesystem paths and sometimes credentials.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  securitySchemes:
+
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Opaque access token, presented as `Authorization: Bearer <token>`.
+
+        Two issuers, one credential store. `POST /api/v1/auth/sign-in` mints
+        tokens for CodexBridgeMobile, and the OAuth 2.1 + PKCE authorization
+        endpoints mint them for ChatGPT's MCP client. Both land in the same
+        table, so `POST /api/v1/auth/revoke` takes effect on both surfaces and
+        an expired or revoked token is refused everywhere.
+
+        A token is opaque: it carries no readable claims and must not be parsed.
+        Read `expiresIn` from the response that issued it, and refresh before it
+        elapses rather than waiting for a `401`.
+
+        Every rejection is `401` with code `unauthenticated` and the same
+        message — absent, unknown, expired and revoked are not distinguished,
+        because doing so tells a caller holding a token they were never given
+        whether it was ever real. A client that receives `401` should refresh
+        once, and sign in again if that also fails.
+
+  schemas:
+
+    Id:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: '^[A-Za-z0-9._:-]+$'
+      description: |
+        Opaque identifier. Clients must treat it as an opaque string and must
+        not parse, order or derive meaning from it. Some identifiers are UUIDs
+        and some are operator-assigned slugs; that difference is an
+        implementation detail and may change without a new API version.
+      examples:
+        - 'codexbridge-demo'
+        - '9f0d6b2c-2f5a-4c2b-9d5e-1a7c3f8e4b10'
+
+    ProjectId:
+      allOf:
+        - $ref: '#/components/schemas/Id'
+      description: Identifier of a project registered in the gateway registry.
+      examples:
+        - 'codexbridge-demo'
+
+    ExecutorId:
+      allOf:
+        - $ref: '#/components/schemas/Id'
+      description: Identifier of a registered executor machine.
+      examples:
+        - 'devel3'
+
+    Timestamp:
+      type: string
+      format: date-time
+      description: |
+        RFC 3339 instant, always in UTC and always carrying the `Z` offset.
+        Clients must not assume the server and the device clocks agree; use
+        server timestamps for ordering and display, never for elapsed-time
+        arithmetic against the device clock.
+      examples:
+        - '2026-08-10T14:32:07Z'
+
+    ActorKind:
+      type: string
+      enum:
+        - user
+        - executor
+        - system
+      description: |
+        What produced an action. `user` is a human principal authenticated
+        through the gateway. `executor` is a registered executor machine acting
+        under its own machine token. `system` is the gateway itself — startup
+        recovery, expiry sweeps and other unattended transitions.
+
+    Actor:
+      type: object
+      description: |
+        Who performed an auditable action. Present on every entity that records
+        provenance. `id` and `displayName` are always safe to render; `email` is
+        omitted when the caller is not authorized to see it.
+      required:
+        - kind
+        - id
+      properties:
+        kind:
+          $ref: '#/components/schemas/ActorKind'
+        id:
+          $ref: '#/components/schemas/Id'
+        displayName:
+          type: string
+          maxLength: 255
+          description: Human-readable label, safe to render in any context.
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: |
+            Omitted unless the caller is authorized to see the actor's email.
+            Absence means "not disclosed", never "the actor has no email".
+      examples:
+        - kind: user
+          id: esteban
+          displayName: Esteban D.Dortta
+        - kind: system
+          id: gateway
+          displayName: CodexBridge Gateway
+
+    AuthTokens:
+      type: object
+      description: |
+        One grant: a short-lived access token and the refresh token that renews
+        it. Returned by sign-in and by every rotation.
+
+        Both values are opaque credentials. Store them where the platform stores
+        secrets, never in application logs or crash reports, and treat the whole
+        object as `no-store`.
+      required:
+        - tokenType
+        - accessToken
+        - accessTokenExpiresAt
+        - expiresIn
+        - refreshToken
+        - refreshTokenExpiresAt
+        - scopes
+      properties:
+        tokenType:
+          type: string
+          enum: [Bearer]
+        accessToken:
+          type: string
+          description: |
+            Present in the `Authorization` header as `Bearer <accessToken>`.
+        accessTokenExpiresAt:
+          $ref: '#/components/schemas/Timestamp'
+        expiresIn:
+          type: integer
+          description: |
+            Seconds until the access token expires, counted from the response.
+            Prefer it over `accessTokenExpiresAt` for scheduling a refresh: it
+            is the only form that survives a device whose clock is wrong.
+        refreshToken:
+          type: string
+          description: |
+            Single use. Exchanging it returns a new one and kills this one, and
+            presenting a spent token revokes the whole grant.
+        refreshTokenExpiresAt:
+          $ref: '#/components/schemas/Timestamp'
+          description: |
+            The grant's absolute expiry. It does **not** move when the token is
+            rotated: after this instant the operator signs in again.
+        scopes:
+          type: array
+          description: |
+            What this grant carries. A rotation may return fewer — the registry
+            is re-read each time — and never more.
+          items:
+            type: string
+
+    PermissionCategory:
+      type: string
+      enum:
+        - read
+        - operational
+        - administrative
+      description: |
+        How much an action can do. `read` observes state. `operational` changes
+        what an executor is doing. `administrative` reaches beyond the actor's
+        own projects. A client may use this to group or to gate a confirmation
+        step, but must not infer `allowed` from it.
+
+    Permission:
+      type: object
+      description: |
+        One action, and whether this actor may perform it. The server's own
+        authorization table, evaluated for the caller — not a hint. An endpoint
+        guarded by an action refuses exactly when `allowed` is `false`.
+      required: [action, category, allowed]
+      properties:
+        action:
+          type: string
+          maxLength: 64
+          description: |
+            Stable identifier, e.g. `sessions.stop`. Clients branch on this.
+            Actions may be added within a major version, so an unrecognized one
+            must be ignored rather than treated as denied.
+        category:
+          $ref: '#/components/schemas/PermissionCategory'
+        requiredScope:
+          type: string
+          maxLength: 128
+          description: |
+            The scope that grants this action. Informational: a client must read
+            `allowed` and never re-derive it from the token's scope list, which
+            is how a client's copy of the rules drifts from the server's.
+        allowed:
+          type: boolean
+      examples:
+        - action: sessions.read
+          category: read
+          requiredScope: codexbridge.read
+          allowed: true
+        - action: sessions.stop
+          category: operational
+          requiredScope: codexbridge.task.cancel
+          allowed: false
+        - action: sessions.pause
+          category: operational
+          requiredScope: codexbridge.task.cancel
+          allowed: false
+
+    PageInfo:
+      type: object
+      description: |
+        Cursor pagination state for **collections** — projects, sessions,
+        decisions and the like. A collection response carries this object under
+        the `page` key alongside its `items` array.
+
+        It does **not** apply to append-only log streams. Those are addressed by
+        a monotonic integer offset in the store (`store.get_logs`) and are
+        already consumed that way by the MCP client; issue #9 defines their
+        paging shape. The distinction is repeated here, and not only in
+        `info.description`, because this schema is what a code generator and a
+        reviewer of a single endpoint actually read.
+
+        Cursors are opaque and single-purpose: a cursor obtained from one
+        endpoint, or from the same endpoint under different filters, is not
+        valid elsewhere and the server rejects it. Clients page forward by
+        resending `nextCursor` until `hasMore` is `false`.
+      required:
+        - hasMore
+      properties:
+        hasMore:
+          type: boolean
+          description: |
+            Whether more items exist after this page. This is authoritative;
+            do not infer the end of a list from a short page, because a page may
+            be short when items are filtered out by authorization.
+        nextCursor:
+          type:
+            - string
+            - 'null'
+          maxLength: 512
+          description: |
+            Cursor to pass as the `cursor` query parameter to fetch the next
+            page. `null` (or absent) exactly when `hasMore` is `false`.
+      examples:
+        - hasMore: true
+          nextCursor: 'eyJhZnRlciI6IjIwMjYtMDgtMTBUMTQ6MzI6MDdaIn0'
+        - hasMore: false
+          nextCursor: null
+
+    ProjectHealth:
+      type: string
+      enum: [ok, degraded, unknown, disabled]
+      description: |
+        Derived at read time, never stored. `ok` — the project is enabled and
+        at least one assigned executor is live right now. `degraded` — enabled,
+        executors are assigned, none are live. `unknown` — enabled, no executor
+        names this project at all, so there is nothing to judge liveness from.
+        `disabled` — the project itself is turned off in the registry; this is
+        an operator decision, not an incident.
+
+    ProjectStatus:
+      type: object
+      description: |
+        A project plus the counts and health a dashboard list row needs.
+        `pendingDecisions`, `activeMissions` and `totalSessions` all read the
+        same underlying `TaskModel` rows `GET /api/v1/sessions` (issue #9)
+        serves — under the vocabulary issues #6 and #7 will eventually give
+        their own endpoints, not a second entity. `issues` (issue #8) and
+        `artifacts` (issue #11) counts are not included: this build has no
+        backing entity for either, and an always-zero field would be a claim
+        with nothing behind it.
+      required: [id, name, enabled, health, pendingDecisions, activeMissions, totalSessions]
+      properties:
+        id:
+          $ref: '#/components/schemas/ProjectId'
+        name:
+          type: string
+        enabled:
+          type: boolean
+        health:
+          $ref: '#/components/schemas/ProjectHealth'
+        pendingDecisions:
+          type: integer
+          description: Sessions in this project currently `awaiting_approval`.
+        activeMissions:
+          type: integer
+          description: Sessions in this project in any non-terminal state.
+        totalSessions:
+          type: integer
+          description: All sessions this project has ever had, any state.
+        lastActivityAt:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            The most recent session's creation time, or `null` when the project
+            has never had one. There is no separate "branch" or "last commit"
+            metadata in this build — `ProjectModel` and the onboarding registry
+            carry neither.
+
+    ProjectExecutorStatus:
+      type: object
+      description: |
+        One executor allowed to run a project, and whether it is live right
+        now. Never a hostname, IP or port — `docs/api/README.md` "Fields that
+        must never ship" excludes all three from every response.
+      required: [executorId, connected]
+      properties:
+        executorId:
+          $ref: '#/components/schemas/ExecutorId'
+        connected:
+          type: boolean
+          description: |
+            Staleness-derived, not the raw connection flag: `true` only when the
+            executor's last heartbeat is within `reconnect_grace_seconds` of now.
+        lastSeenAt:
+          type: [string, 'null']
+          format: date-time
+
+    ProjectSummary:
+      description: |
+        Everything `ProjectStatus` has, plus the executor breakdown `health` is
+        derived from and a `generatedAt` timestamp.
+      allOf:
+        - $ref: '#/components/schemas/ProjectStatus'
+        - type: object
+          required: [executors, generatedAt]
+          properties:
+            executors:
+              type: array
+              items:
+                $ref: '#/components/schemas/ProjectExecutorStatus'
+            generatedAt:
+              $ref: '#/components/schemas/Timestamp'
+
+    Session:
+      type: object
+      description: |
+        One `codex exec` run. Deliberately omits the project's filesystem path,
+        the command line and the raw result blob: the first is forbidden by
+        "Fields that must never ship", and the other two carry paths and
+        unaudited executor output.
+      required: [id, projectId, executorId, state, revision, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        executorId:
+          $ref: '#/components/schemas/ExecutorId'
+        instruction:
+          type: string
+          description: What the operator asked for.
+        mode:
+          type: string
+        state:
+          type: string
+          enum:
+            - queued
+            - waiting_executor
+            - awaiting_approval
+            - pausing
+            - paused
+            - resuming
+            - restarting
+            - running
+            - completed
+            - failed
+            - cancelled
+            - expired
+            - lost
+        priority:
+          type: string
+        revision:
+          type: integer
+          description: |
+            Monotonic; the `ETag` is derived from it. Exposed so a client can
+            tell staleness without parsing the header.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        startedAt:
+          type: [string, 'null']
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+        approvalState:
+          type: [string, 'null']
+        requestedBy:
+          type: [string, 'null']
+        interventionRequired:
+          type: boolean
+          description: The session is held awaiting an approval decision.
+        lastError:
+          type: [string, 'null']
+          description: Redacted before it leaves the process.
+        executorNotified:
+          type: boolean
+          description: |
+            Present on the response to `stop`. Whether the executor was actually
+            told to cancel. `false` means the session is recorded as cancelled
+            **and the run may still be going right now**: the gateway resends
+            `task.cancel` the next time that executor reconnects (issue #16),
+            but until then a disconnected executor keeps running its
+            `codex exec`. Show the difference; do not present a `false` here
+            as an immediately stopped run. That resend is bounded by
+            `cancel_replay_max_age_seconds` (default 24h) since the
+            cancellation — an executor that stays disconnected longer than
+            that (a long weekend, a stuck redeploy) is not chased with
+            `task.cancel` on reconnect, and the session simply stays
+            `cancelled` in the gateway.
+
+    DecisionState:
+      type: string
+      enum: [pending, approved, rejected, revision_requested]
+      description: |
+        `pending` is the only state `approve`/`reject`/`request-revision` accept.
+        The other three are terminal: the underlying session has already left
+        `awaiting_approval` and none of these operations may run again.
+        `revision_requested` still cancels the session — see `Decision`'s
+        description — it is a distinct outcome from `rejected`, not a state that
+        holds the session open for editing.
+
+    DecisionRiskLevel:
+      type: string
+      enum: [read, controlled_write, sensitive]
+      description: |
+        The policy level a decision was raised at (`shared/policy.py`). Every
+        decision this build produces is `sensitive` — that level is the only one
+        `evaluate_task_policy` ever withholds approval for — but the field and
+        this enum are not narrowed to it, so a future policy change that starts
+        holding other levels for approval needs no contract change to be
+        filtered or reported.
+
+    Decision:
+      type: object
+      description: |
+        A sensitive session held for a human to approve, reject, or send back
+        for revision. Not a new domain object: it is the same `Session`
+        (`TaskModel`) in or past `awaiting_approval`, reshaped for the mobile
+        Decision Center. `id` is a session id and `GET /api/v1/sessions/{id}`
+        returns the same underlying row.
+
+        Omits `impact`, `evidence` and `recommendation` on purpose: no
+        submission path in this build populates them, and a field that is
+        always null is indistinguishable from one a client may reasonably build
+        against — the same reasoning `x-pending-components` applies to unused
+        components. `rationale` is different: it is genuinely absent before a
+        decision is made and populated by whoever resolves it.
+      required: [id, projectId, executorId, request, state, revision, createdAt, deadline]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        executorId:
+          $ref: '#/components/schemas/ExecutorId'
+        request:
+          type: string
+          description: What the operator asked for. Redacted like every other operator-authored field on this API.
+        mode:
+          type: string
+        state:
+          $ref: '#/components/schemas/DecisionState'
+        risk:
+          description: |
+            `DecisionRiskLevel`, or `null` — cannot be null in practice today
+            (see that schema's description) but is nullable in the contract
+            rather than assumed, since nothing here computes it for a session
+            this endpoint would refuse to serve anyway.
+          oneOf:
+            - $ref: '#/components/schemas/DecisionRiskLevel'
+            - type: 'null'
+        urgency:
+          type: string
+          description: The session's priority, reused as the decision's urgency.
+        revision:
+          type: integer
+          description: Monotonic; the `ETag` is derived from it. Same column and same meaning as `Session.revision`.
+        requestedBy:
+          type: [string, 'null']
+        rationale:
+          type: [string, 'null']
+          description: |
+            The reason recorded when this decision was resolved. `null` while
+            `state` is `pending` — there is no rationale yet because nobody has
+            decided.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        deadline:
+          $ref: '#/components/schemas/Timestamp'
+          description: The underlying session's `expiresAt`, renamed for this view.
+        decidedAt:
+          type: [string, 'null']
+          format: date-time
+          description: When `state` left `pending`. `null` while still pending.
+
+    MissionStage:
+      type: string
+      enum:
+        - pending
+        - active
+        - done
+      description: |
+        Coarse grouping over a mission's exact `state`, for a mission-control
+        list that groups rather than enumerates every state. `pending` covers
+        `queued` and `waiting_executor`; `active` covers `running` and
+        `awaiting_approval`; `done` covers every terminal state. `state` is
+        still returned unchanged and remains its own, finer-grained filter.
+
+    RiskLevel:
+      type: string
+      enum:
+        - read
+        - controlled_write
+        - sensitive
+      description: |
+        Derived from the mission's mode and, when the instruction matched a
+        sensitive keyword at creation, from the approval decision that
+        followed (`shared/policy.py`). It is not a live re-evaluation of the
+        instruction text.
+
+    BlockedReason:
+      type: object
+      description: |
+        Present exactly when `Mission.blocked` is `true`. `code` is stable and
+        machine-readable; `summary` is redacted human text, safe to render
+        directly. This build reports one code: `awaiting_approval` — the only
+        state a mission is held in without the agent protocol having a way to
+        move it forward on its own.
+      required: [code, summary]
+      properties:
+        code:
+          type: string
+          maxLength: 64
+        summary:
+          type: string
+          maxLength: 1024
+
+    Mission:
+      type: object
+      description: |
+        The mission-control view of one `codex exec` run — the same row
+        `Session` describes, reframed. There is no separate mission entity in
+        this build: see `docs/api/README.md` "Missions (issue #7)" for what
+        that means for `dependencies` and `relatedEntities`, named in issue
+        #7's scope but not present here because nothing in this codebase's
+        domain model links one mission to another or to any other entity yet.
+
+        Omits the project's filesystem path, the command line and the raw
+        result blob, for the same reason `Session` does.
+      required: [id, projectId, assignedAgent, state, stage, risk, blocked, revision, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        assignedAgent:
+          $ref: '#/components/schemas/ExecutorId'
+          description: The executor this mission is dispatched to. Same identifier `Session.executorId` names.
+        objective:
+          type: string
+          description: What the operator asked for. Redacted, like every other free-text field here.
+        mode:
+          type: string
+        state:
+          type: string
+        stage:
+          $ref: '#/components/schemas/MissionStage'
+        risk:
+          $ref: '#/components/schemas/RiskLevel'
+        blocked:
+          type: boolean
+        blockedReason:
+          $ref: '#/components/schemas/BlockedReason'
+        priority:
+          type: string
+        revision:
+          type: integer
+          description: Monotonic; the `ETag` is derived from it.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        startedAt:
+          type: [string, 'null']
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+        approvalState:
+          type: [string, 'null']
+        requestedBy:
+          type: [string, 'null']
+        lastError:
+          type: [string, 'null']
+          description: Redacted before it leaves the process.
+        executorNotified:
+          type: boolean
+          description: |
+            Present on the response to `cancel`. Whether the executor was
+            actually told to cancel — see the `cancel` operation description
+            for why `false` must not be read as a stopped run.
+
+    MissionTimelineEvent:
+      type: object
+      description: |
+        One recorded event from the mission's audit trail
+        (`gateway/app/services/audit.py:record_event`), not a new log —
+        the same rows Sessions' actor-audit writes already produce.
+      required: [type, at, summary]
+      properties:
+        type:
+          type: string
+          description: Stable event identifier, e.g. `task.created`, `task.state_changed`.
+        at:
+          $ref: '#/components/schemas/Timestamp'
+        state:
+          type: [string, 'null']
+          description: The mission's state at this event, when the event carries one.
+        actor:
+          type: [string, 'null']
+          description: Who performed the action, when the event records an actor.
+        summary:
+          type: string
+          maxLength: 1024
+          description: |
+            Human-readable, redacted. Built server-side from an explicit
+            per-event allowlist, never from the raw stored payload.
+
+    EpicStatus:
+      type: string
+      enum: [open, in_progress, done, cancelled]
+
+    IssueStatus:
+      type: string
+      enum: [open, in_progress, blocked, in_review, done, cancelled]
+
+    IssuePriority:
+      type: string
+      enum: [low, medium, high, urgent]
+
+    Epic:
+      type: object
+      description: |
+        A group of issues within one project. This build owns epics itself —
+        there is no GitHub sync — so every epic returned today came from
+        `POST /api/v1/epics`, never from an external tracker.
+      required: [id, projectId, title, status, revision, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        title:
+          type: string
+          maxLength: 255
+        description:
+          type: [string, 'null']
+          maxLength: 20000
+        status:
+          $ref: '#/components/schemas/EpicStatus'
+        revision:
+          type: integer
+          description: Monotonic; the `ETag` is derived from it.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        createdBy:
+          type: [string, 'null']
+          description: Email, or id when no email is on record, of who created this.
+        updatedBy:
+          type: [string, 'null']
+          description: Who last changed this. Absent when it has never been updated.
+
+    Issue:
+      type: object
+      description: |
+        One unit of work, optionally grouped under an `epicId`. Provider-neutral
+        by construction: nothing here is a GitHub node id, a GraphQL shape, or
+        anything else a mobile client would have to unlearn if the backing
+        system changed.
+      required: [id, projectId, title, status, priority, revision, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        epicId:
+          type: [string, 'null']
+          description: The epic this issue belongs to, or `null` when ungrouped.
+        title:
+          type: string
+          maxLength: 255
+        description:
+          type: [string, 'null']
+          maxLength: 20000
+        status:
+          $ref: '#/components/schemas/IssueStatus'
+        priority:
+          $ref: '#/components/schemas/IssuePriority'
+        labels:
+          type: array
+          items:
+            type: string
+        assigneeUserId:
+          type: [string, 'null']
+        assigneeEmail:
+          type: [string, 'null']
+        dependencies:
+          type: array
+          description: Ids of issues this one is blocked on.
+          items:
+            $ref: '#/components/schemas/Id'
+        blockedReason:
+          type: [string, 'null']
+        revision:
+          type: integer
+          description: Monotonic; the `ETag` is derived from it.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        createdBy:
+          type: [string, 'null']
+        updatedBy:
+          type: [string, 'null']
+
+    CreateEpicRequest:
+      type: object
+      required: [projectId, title]
+      properties:
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          maxLength: 20000
+        status:
+          $ref: '#/components/schemas/EpicStatus'
+          description: Defaults to `open` when omitted.
+
+    CreateIssueRequest:
+      type: object
+      required: [projectId, title]
+      properties:
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        epicId:
+          type: string
+          description: Must name an epic already in `projectId`, or the request is rejected.
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          maxLength: 20000
+        status:
+          $ref: '#/components/schemas/IssueStatus'
+          description: Defaults to `open` when omitted.
+        priority:
+          $ref: '#/components/schemas/IssuePriority'
+          description: Defaults to `medium` when omitted.
+        labels:
+          type: array
+          items:
+            type: string
+        assigneeUserId:
+          type: string
+          maxLength: 255
+        assigneeEmail:
+          type: string
+          maxLength: 255
+        dependencies:
+          type: array
+          description: Ids of issues this one is blocked on, all within `projectId`.
+          items:
+            $ref: '#/components/schemas/Id'
+        blockedReason:
+          type: string
+          maxLength: 20000
+
+    UpdateIssueRequest:
+      type: object
+      description: |
+        Every field is optional. A field the caller does not mention is left
+        unchanged; a field sent explicitly as `null` is cleared. There is no
+        `epicId` here — see the `PATCH` operation's description.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: [string, 'null']
+          maxLength: 20000
+        status:
+          $ref: '#/components/schemas/IssueStatus'
+        priority:
+          $ref: '#/components/schemas/IssuePriority'
+        labels:
+          type: array
+          items:
+            type: string
+        assigneeUserId:
+          type: [string, 'null']
+          maxLength: 255
+        assigneeEmail:
+          type: [string, 'null']
+          maxLength: 255
+        dependencies:
+          type: array
+          description: Replaces the whole set. Ids must all be within the issue's project.
+          items:
+            $ref: '#/components/schemas/Id'
+        blockedReason:
+          type: [string, 'null']
+          maxLength: 20000
+
+    ConversationContextType:
+      type: string
+      enum: [project, session, decision, mission, issue]
+      description: |
+        `session`, `decision` and `mission` all name the same `TaskModel` row
+        under three vocabularies — see `docs/api/README.md`'s "Decisions" and
+        "Missions" sections. `artifact` is deliberately absent: no
+        `ArtifactModel` exists yet (issue #11), so a reference of that type
+        could not be checked for existence or for project visibility. See
+        `docs/api/README.md` "Conversations (issue #10)".
+
+    ContextReference:
+      type: object
+      description: One product entity a conversation is about.
+      required: [type, id]
+      properties:
+        type:
+          $ref: '#/components/schemas/ConversationContextType'
+        id:
+          $ref: '#/components/schemas/Id'
+
+    Conversation:
+      type: object
+      description: |
+        A thread linked to at least one product entity. `projectId` is
+        derived from `context`, not supplied independently — every reference
+        in `context` resolves to the same project.
+      required: [id, projectId, context, unread, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        title:
+          type: [string, 'null']
+          maxLength: 255
+        context:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ContextReference'
+        unread:
+          type: boolean
+          description: |
+            Whether the caller has unseen activity. `false` for a
+            conversation with no messages yet. Advances only through
+            `GET .../messages` (up to the newest message actually fetched)
+            and `POST .../messages` (the sender's own cursor) — issue #10
+            names no "mark as read" endpoint. See `docs/api/README.md`
+            "Conversations (issue #10)".
+        lastActivityAt:
+          type: [string, 'null']
+          format: date-time
+          description: Timestamp of the most recent message, or `null` when there are none yet.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        createdBy:
+          type: [string, 'null']
+          description: Email, or id when no email is on record, of who started this.
+
+    CreateConversationRequest:
+      type: object
+      required: [context]
+      properties:
+        title:
+          type: string
+          maxLength: 255
+        context:
+          type: array
+          minItems: 1
+          maxItems: 16
+          description: |
+            At least one context reference is required — the acceptance
+            criterion this field exists to satisfy. Every reference must
+            resolve to the same project.
+          items:
+            $ref: '#/components/schemas/ContextReference'
+
+    Message:
+      type: object
+      required: [id, conversationId, body, attachments, createdAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        conversationId:
+          $ref: '#/components/schemas/Id'
+        author:
+          type: [string, 'null']
+          description: Email, or id when no email is on record, of who sent this.
+        body:
+          type: string
+          maxLength: 50000
+          description: Markdown source, stored and returned unrendered. Rendering is the client's responsibility.
+        attachments:
+          type: array
+          description: |
+            Opaque artifact/file identifiers. Unvalidated: no `ArtifactModel`
+            exists yet (issue #11), so these are recorded and returned
+            exactly as sent.
+          items:
+            type: string
+            maxLength: 255
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+
+    CreateMessageRequest:
+      type: object
+      required: [body]
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 50000
+          description: Markdown source.
+        attachments:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 255
+
+    LogLine:
+      type: object
+      required: [offset, stream, line]
+      properties:
+        offset:
+          type: integer
+          description: Position in the append-only stream; resume from it.
+        stream:
+          type: string
+          enum: [stdout, stderr]
+        line:
+          type: string
+          description: Redacted — credentials, filesystem paths and host:port pairs.
+        at:
+          type: [string, 'null']
+          format: date-time
+
+    DependencyCheck:
+      type: object
+      description: |
+        One dependency's state, as `/ready` sees it. `required: false` means a
+        failure here degrades the service without making it unready.
+      required: [name, status, required]
+      properties:
+        name:
+          type: string
+          description: |
+            Logical dependency name — `database`, `executors`. Never a hostname,
+            port or connection string: this endpoint is unauthenticated.
+        status:
+          type: string
+          enum: [ok, degraded, unavailable]
+        required:
+          type: boolean
+          description: Whether the service is unready when this check is not `ok`.
+
+    ErrorCode:
+      type: string
+      description: |
+        Stable, machine-readable error identifier. Clients branch on this, never
+        on `message`. New codes may be added within a major version, so clients
+        must treat an unrecognized code as a generic failure of the response's
+        HTTP status class rather than crashing.
+      enum:
+        - validation_failed
+        - unauthenticated
+        - token_expired
+        - permission_denied
+        - not_found
+        - conflict
+        - stale_write
+        - rate_limited
+        - dependency_unavailable
+        - internal_error
+      # `stale_write` was deliberately withheld by issue #2 and added here by
+      # issue #12, together with the `tasks.revision` column
+      # (migrations/0002_api_foundation.sql) that makes it possible to detect.
+      # Before that column there was nothing to compare against — the existing
+      # timestamps do not move when approval_state or last_error changes, so an
+      # ETag derived from them would match on both sides of a concurrent
+      # approval and the code could never fire. Publishing it first would have
+      # put a promise in v1 that v1 could not keep and could not withdraw.
+
+    ErrorDetail:
+      type: object
+      description: |
+        One specific problem inside a failed request. Validation errors carry
+        one entry per offending field.
+      required:
+        - message
+      properties:
+        field:
+          type: string
+          maxLength: 255
+          description: |
+            JSON Pointer-style path to the offending input, relative to the
+            request body or query string — for example `/instruction` or
+            `?limit`. Absent when the problem is not attributable to one field.
+        code:
+          type: string
+          maxLength: 64
+          description: Machine-readable sub-code, scoped to the parent `code`.
+        message:
+          type: string
+          maxLength: 1024
+          description: Human-readable explanation of this specific problem.
+
+    Error:
+      type: object
+      description: |
+        The single error envelope returned by every endpoint in this contract
+        for every non-2xx response. An endpoint that returns anything else is a
+        contract violation, not a variant.
+      required:
+        - code
+        - message
+        - requestId
+        - retryable
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          maxLength: 1024
+          description: |
+            Human-readable summary, safe to log. It is written for an operator,
+            not for an end user, and it is not localized. Clients must not parse
+            it and must not assume it is stable across releases.
+        requestId:
+          $ref: '#/components/schemas/Id'
+          description: |
+            Identifier tying this response to the server-side log record for
+            **this one request**. Always present, including on `internal_error`,
+            so an operator can find the failure from a mobile screenshot alone.
+
+            Named `requestId`, not `correlationId`, on purpose: `correlation_id`
+            already exists in this codebase as a column on `TaskModel`, scoped to
+            the whole lifetime of a task and shared by the executor protocol.
+            Populating this field from that column would make every failure on a
+            given task report the same identifier, defeating the only reason the
+            field exists — while the response stayed schema-valid, so no test
+            would catch it. The two are different identifiers and must not be
+            merged. When a response concerns a task, expose that task's
+            correlation id as its own named field instead.
+        retryable:
+          type: boolean
+          description: |
+            Whether repeating the identical request may succeed later without
+            the caller changing anything. `true` on transient failures
+            (`rate_limited`, `dependency_unavailable`); `false` on failures that
+            require caller action (`validation_failed`, `permission_denied`).
+
+            This is advice about the failure, not permission to retry blindly:
+            a client retrying a non-idempotent write still needs the idempotency
+            rules that issue #12 defines.
+        details:
+          type: array
+          description: |
+            Per-problem breakdown. Present on `validation_failed`; may be
+            omitted entirely on other codes. An empty array and an absent array
+            mean the same thing.
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+      examples:
+        - code: validation_failed
+          message: 'Request body failed validation.'
+          requestId: '5a3f1c88-90b1-4e2a-8a6f-2f9c0d1e7b43'
+          retryable: false
+          details:
+            - field: /timeoutSeconds
+              code: above_maximum
+              message: 'timeoutSeconds must not exceed the project limit of 3600.'
+        - code: permission_denied
+          message: 'The authenticated actor may not read this project.'
+          requestId: 'c1d2e3f4-a5b6-4708-9a0b-1c2d3e4f5061'
+          retryable: false
+        - code: rate_limited
+          message: 'Too many requests. Retry after the interval in Retry-After.'
+          requestId: '7e8f9a0b-1c2d-4e3f-a405-162738495a6b'
+          retryable: true
+        - code: internal_error
+          message: 'Unexpected server error. Report the requestId to the operator.'
+          requestId: 'b4c5d6e7-f809-4a1b-8c2d-3e4f50617283'
+          retryable: true
