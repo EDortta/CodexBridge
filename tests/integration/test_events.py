@@ -36,9 +36,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from gateway.app.api.errors import ApiError
 from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import notifications as notifications_routes
 from gateway.app.api.setup import install_api_conventions
+from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.db.base import Base
 from gateway.app.db.session import get_session
 from gateway.app.services import event_types, store
@@ -291,6 +293,13 @@ async def run_stream(factory, *, token: str, resume_from: int = 0, polls: int = 
     return parse_frames(frames)
 
 
+def redact_for_test(value: str | None) -> str | None:
+    """The real redactor, imported through the route module the code injects."""
+    from gateway.app.api.routes.sessions import redact
+
+    return redact(value)
+
+
 def entity_frames(frames: list[dict]) -> list[dict]:
     """Only the frames that carry an event — control frames and heartbeats out."""
     return [f for f in frames if "id" in f]
@@ -501,7 +510,7 @@ async def test_reading_events_requires_the_read_scope(api) -> None:
 
 
 async def test_no_stored_payload_key_is_passed_through_to_a_client(api) -> None:
-    """The audit payload is written by eleven call sites and is not a response.
+    """The audit payload is written by thirty-one call sites and is not a response.
 
     It carries `actor_email`, `requested_by_email` and free-text `context`
     blobs. A translation that spread the payload into the event — or that
@@ -553,7 +562,202 @@ async def test_free_text_in_a_summary_is_redacted_and_bounded(api) -> None:
     summary = body["items"][-1]["summary"]
 
     assert "sk-abcdefghijklmnop" not in summary
-    assert len(summary) < 400, "a notification line must not be an unbounded traceback"
+    # The contract publishes `MobileEvent.summary` as `maxLength: 300`, so that
+    # is the number to assert. The first cut said 400, which would have let a
+    # regression past the contract without failing (council round 1, a recorded
+    # question from the claim auditor).
+    assert len(summary) <= 300, "a notification line must not be an unbounded traceback"
+
+    # Asserted across every emitted type, not just this one: the bound belongs
+    # to the contract, and one type's builder is not evidence about the others.
+    for mobile_type in event_types.EMITTED_EVENT_TYPES:
+        built = event_types.summarize(
+            mobile_type,
+            {"error": "e" * 5000, "reason": "r" * 5000, "state": "running", "control": "pause"},
+            redact_for_test,
+        )
+        assert len(built) <= 300, f"{mobile_type} can exceed the contract's maxLength"
+
+
+
+async def test_an_executors_control_and_state_strings_cannot_reach_a_notification_line(api) -> None:
+    """Council round 1, the adversarial user — the whitelist's premise was false.
+
+    `_ENUM_KEYS` admitted `control` and `state` on the stated grounds that their
+    values "are server-generated enums rather than free text". They are not:
+    `gateway/app/main.py` reads both straight out of an executor's `task.ack`
+    frame with no validation, and the `invalid_state` branch records the very
+    string it just refused *because* it is not a `TaskState`. A connected
+    executor could therefore put a filesystem path, an internal `host:port`, a
+    `Bearer` value and a 200 KB blob into a mobile notification line, past every
+    guard in `event_types.py`.
+
+    Membership in a closed vocabulary is the fix, not redaction: `redact` strips
+    the patterns it knows, while a closed set admits only values this system
+    defines — whatever the rejected one contains, and however long it is.
+    """
+    task = await make_task(api.factory, "p1")
+    hostile = (
+        "/etc/codex-bridge/users.json on db.internal 10.0.0.7:5432 "
+        "Authorization: Bearer abc123 sk-SECRETSECRETSECRET " + ("x" * 5000)
+    )
+    await emit(
+        api.factory, "task", task.id, "task.control_acknowledged",
+        {"accepted": False, "control": hostile, "state": hostile},
+    )
+    await emit(
+        api.factory, "task", task.id, "task.ack_refused",
+        {"reason": "invalid_state", "state": hostile},
+    )
+
+    body = api.get("/api/v1/events", headers=auth(ALICE_TOKEN)).json()
+    serialized = json.dumps(body)
+
+    for secret in ("/etc/codex-bridge", "db.internal", "10.0.0.7:5432", "Bearer abc123", "sk-SECRET"):
+        assert secret not in serialized, f"{secret!r} reached a mobile client"
+    assert "xxxx" not in serialized
+
+    acknowledged = next(i for i in body["items"] if i["type"] == "session.control_acknowledged")
+    assert acknowledged["summary"] == "The executor refused a control."
+    assert "state" not in acknowledged, (
+        "a state outside TaskState is omitted, not echoed: a client switches on this enum"
+    )
+
+
+def test_every_echoed_payload_value_comes_from_a_closed_vocabulary() -> None:
+    """The guard behind the test above, asserted directly.
+
+    Two properties. Every key `_enum` will answer for has a vocabulary — so a
+    key added to a summary builder without one silently yields the default
+    rather than echoing. And the guard is not an `assert`: `python -O` strips
+    those, and a defence that vanishes under an interpreter flag is not one.
+    """
+    for key, allowed in event_types._ENUM_VOCABULARIES.items():
+        assert allowed, f"{key} has an empty vocabulary"
+        assert all(isinstance(value, str) and value for value in allowed)
+        assert event_types._enum({key: "definitely-not-a-member"}, key) == "unknown"
+        assert event_types._enum({key: next(iter(allowed))}, key) == next(iter(allowed))
+
+    # An unknown key falls back rather than raising, and does so with -O too.
+    assert event_types._enum({"nope": "value"}, "nope") == "unknown"
+    assert event_types.state_of({"state": "not-a-state"}) is None
+    assert event_types.state_of({"state": "running"}) == "running"
+
+
+async def test_the_gap_signal_cannot_report_on_events_the_caller_may_not_see(api) -> None:
+    """Council round 1 — the `gap` block was a one-bit oracle over the whole log.
+
+    `audit_cursor_status` and `oldest_audit_event_id` queried `audit_events`
+    unscoped while the page beside them was correctly scoped. A project-limited
+    token could therefore poll `?after=<newest+1>`, watch `gap` disappear the
+    instant *any* row was written anywhere — an operator's sign-in, a
+    revocation, another tenant's task — and binary-search `?after=` for the
+    global newest id, with `items` empty throughout. Every one of those is an
+    event this surface excludes by construction.
+    """
+    await make_task(api.factory, "p1")
+    ahead = await newest_audit_id(api.factory) + 1
+
+    before = api.get(f"/api/v1/events?after={ahead}", headers=auth(ALICE_TOKEN)).json()
+    assert before["gap"]["reason"] == store.CURSOR_AHEAD
+
+    # Three rows alice may never see: two auth, one another project's.
+    async with api.factory() as s:
+        await store.record_auth_event(
+            s, user_id="admin", event_type="auth.signed_in", payload={"reason": "password"}
+        )
+    await make_task(api.factory, "p2")
+
+    after = api.get(f"/api/v1/events?after={ahead}", headers=auth(ALICE_TOKEN)).json()
+    assert after["items"] == []
+    assert after["gap"] == before["gap"], (
+        "the gap signal moved because of rows the caller may not see — an oracle "
+        "over the audit log, including sign-in activity"
+    )
+
+    # And it still moves for a row alice *may* see, or the signal would be inert.
+    await make_task(api.factory, "p1")
+    visible = api.get(f"/api/v1/events?after={ahead}", headers=auth(ALICE_TOKEN)).json()
+    assert visible["items"], "precondition: the new row is one alice can see"
+
+
+async def test_the_oldest_available_id_is_the_callers_own_oldest(api) -> None:
+    """`oldestAvailableId` returned the global minimum audit id to any reader.
+
+    A client that fell behind needs somewhere to restart from — its own feed's
+    oldest position, not the first row the gateway ever wrote for anyone.
+    """
+    async with api.factory() as s:
+        await store.record_auth_event(
+            s, user_id="admin", event_type="auth.signed_in", payload={"reason": "password"}
+        )
+    await make_task(api.factory, "p2")
+    p1_task = await make_task(api.factory, "p1")
+
+    async with api.factory() as s:
+        p1_first = (await store.list_mobile_events_page(
+            s, project_ids=["p1"],
+            entity_types=sorted(event_types.DELIVERABLE_ENTITY_TYPES),
+            audit_event_types=sorted(event_types.TRANSLATED_AUDIT_EVENT_TYPES),
+            after=None, limit=5,
+        ))[0][0].id
+
+    body = api.get(f"/api/v1/events?after={p1_first + 10_000}", headers=auth(ALICE_TOKEN)).json()
+
+    assert body["gap"]["oldestAvailableId"] == p1_first
+    assert body["gap"]["oldestAvailableId"] != 1, (
+        "the global minimum belongs to an auth row alice may not know exists"
+    )
+    assert p1_task is not None
+
+
+async def test_a_resume_position_beyond_the_id_range_is_refused_not_a_500(api) -> None:
+    """Council round 1 — `?after=2**63+1` was an authenticated 500.
+
+    `ge=0` bounded the low end only, and the value went straight into the query,
+    where the driver raised `OverflowError` and the caller got
+    `500 internal_error`. An unbounded integer parameter is unbounded in both
+    directions.
+    """
+    response = api.get(f"/api/v1/events?after={2**63 + 1}", headers=auth(ALICE_TOKEN))
+
+    # 422 rather than 400: this is FastAPI's own parameter validation, and
+    # `errors.py` maps it to the same `validation_failed` envelope every other
+    # endpoint's bad parameter produces. What matters is that it is the caller's
+    # error and not an unhandled `OverflowError` reported as `internal_error`.
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_failed"
+
+    stream = api.get(f"/api/v1/events/stream?after={2**63 + 1}", headers=auth(ALICE_TOKEN))
+    assert stream.status_code == 422, (
+        "refused before the body commits to 200 text/event-stream, where no "
+        "status code is left to change"
+    )
+    assert events_routes.stream_slots.active == 0, "a refused stream must not hold a slot"
+
+
+async def test_an_out_of_range_last_event_id_is_clamped_not_replayed(api) -> None:
+    """The same overflow on the stream, where a 500 is not even available.
+
+    Once the body has committed to `200 text/event-stream` there is no status
+    code left to change: the unbounded version emitted `stream.open` and then
+    the generator died inside the cursor check, so the body simply ended — no
+    `stream.gap`, no `stream.closed`, indistinguishable from a quiet feed.
+
+    Clamped rather than discarded: discarding would fall back to `after`, or to
+    0, and replay the entire feed to a client that asked to *resume*.
+    """
+    assert events_routes._resume_from(str(2**63 + 5), None) == events_routes.MAX_EVENT_ID
+    assert events_routes._resume_from(None, 2**70) == events_routes.MAX_EVENT_ID
+
+    await make_task(api.factory, "p1")
+    frames = await run_stream(
+        api.factory, token=ALICE_TOKEN, resume_from=events_routes.MAX_EVENT_ID, polls=1
+    )
+
+    assert [f.get("event") for f in frames].count(event_types.STREAM_GAP) == 1
+    assert frames[-1]["event"] == event_types.STREAM_CLOSED
+    assert entity_frames(frames) == [], "a clamped position must not replay the feed"
 
 
 def test_every_emitted_event_type_has_a_summary_builder() -> None:
@@ -983,6 +1187,39 @@ async def test_a_newline_in_stored_text_cannot_split_one_frame_into_two(api) -> 
     assert raw.count("\n\n") == 1 and raw.endswith("\n\n")
     assert len(raw.strip().split("\n")) == 3, "id, event and exactly one data line"
 
+    # `\r` too. SSE terminates a line on CR, LF *or* CRLF, so a test that only
+    # covers `\n` leaves the other half of the line protocol unasserted.
+    carriage = events_routes._frame(
+        event="x", data={"summary": "a\rid: 999\revent: forged"}, event_id=1
+    )
+    assert "\r" not in carriage
+    assert len(carriage.strip().split("\n")) == 3
+
+    # And the mechanism is `json.dumps` escaping CR and LF, which it does
+    # whatever `ensure_ascii` says. The comment on `_frame` used to credit
+    # `ensure_ascii` with frame integrity, which would tell a reader that
+    # turning it off breaks a security property (council round 1, the claim
+    # auditor). For the SSE line terminators it does not:
+    hostile = "a\r\nid: 999\revent: forged"
+    for ensure_ascii in (True, False):
+        dumped = json.dumps({"summary": hostile}, ensure_ascii=ensure_ascii)
+        assert "\n" not in dumped and "\r" not in dumped, (
+            f"CR/LF escaping is not conditional on ensure_ascii={ensure_ascii}"
+        )
+
+    # `ensure_ascii` is not decorative either, and the difference is worth
+    # pinning so nobody "simplifies" it away: with it off, Python leaves U+2028
+    # and U+2029 raw. Neither is an SSE line terminator - the frame survives -
+    # but they are JavaScript line terminators, so a client that evaluates a
+    # payload instead of parsing it would see a different program. Keeping the
+    # body pure ASCII costs nothing and removes the question.
+    separator = "before\u2028after"
+    assert "\u2028" in json.dumps(separator, ensure_ascii=False)
+    assert "\u2028" not in json.dumps(separator, ensure_ascii=True)
+    assert "\u2028" not in events_routes._frame(
+        event="x", data={"summary": separator}, event_id=1
+    )
+
 
 async def test_a_stream_type_filter_narrows_delivery_without_stalling_the_cursor(api) -> None:
     task = await make_task(api.factory, "p1")
@@ -1017,25 +1254,131 @@ async def test_the_slot_ceiling_refuses_rather_than_degrading_the_shared_pool(ap
 async def test_a_finished_stream_gives_its_slot_back(api) -> None:
     """A slot that is not returned is gone for good, and the ceiling ratchets down.
 
-    Both release paths are exercised: the generator's `finally` here, and — for
-    a connection that dies before the body ever starts — the response's
-    background task, which is why `StreamSlot.release` is idempotent.
+    This is the generator's `finally` path. The other release path — the
+    response's background task, for a connection that dies before the body ever
+    starts — is
+    `test_a_connection_that_dies_before_the_body_starts_still_returns_its_slot`.
     """
     slots = events_routes.StreamSlots(2)
-    slot = slots.acquire()
+    slot = slots.acquire("alice")
     assert slots.active == 1
     slot.release()
     slot.release()
     assert slots.active == 0, "a double release must not push the counter below zero"
+    assert slots.active_for("alice") == 0
 
     async for _ in events_routes.event_stream(
         factory=api.factory, token=ALICE_TOKEN, resume_from=0,
         requested_projects=None, requested_types=[], poll_interval=0.0,
         heartbeat_seconds=1e9, max_duration_seconds=0.0, batch_limit=10,
-        on_close=slots.acquire().release, monotonic=FakeClock(), sleep=stepping_sleep(FakeClock()),
+        on_close=slots.acquire("alice").release,
+        monotonic=FakeClock(), sleep=stepping_sleep(FakeClock()),
     ):
         pass
     assert slots.active == 0
+
+
+async def test_a_connection_that_dies_before_the_body_starts_still_returns_its_slot(api) -> None:
+    """The release path the generator's `finally` cannot reach — council round 1.
+
+    `stream_events` takes the slot, then hands back a `StreamingResponse` whose
+    body is an async generator. An async generator that is never iterated has no
+    `finally` to run, so if the connection dies between the route returning and
+    the first `__anext__`, the `finally` never fires and the slot is leaked
+    permanently — the ceiling ratchets down until the endpoint answers 503
+    forever. `background=BackgroundTask(slot.release)` is what covers it, and the
+    claim auditor found that nothing in the suite touched that path: deleting
+    the argument left all 600 tests green.
+
+    Driven at the route, not through a client, because the failure is precisely
+    "the body was never started" and a test client always starts it.
+    """
+    slots = events_routes.StreamSlots(2)
+    events_routes.stream_slots = slots
+
+    class _Request:
+        headers = {"Authorization": f"Bearer {ALICE_TOKEN}"}
+
+        async def is_disconnected(self):
+            return True
+
+    principal = AuthenticatedPrincipal(
+        user_id="alice", email="alice@example.com", roles=[], allowed_projects=["p1"],
+        scopes=["codexbridge.read"], can_approve_sensitive=False, auth_scheme="oauth",
+    )
+    response = await events_routes.stream_events(
+        request=_Request(), after=None, project=None, type=None,
+        last_event_id=None, principal=principal,
+    )
+
+    assert slots.active == 1, "the route holds the slot while the response is in flight"
+    # The connection dies here: the body is never iterated, so the generator
+    # never starts and its `finally` never runs. Starlette runs the background
+    # task once the response is done either way.
+    await response.background()
+    assert slots.active == 0, (
+        "a connection dropped before the body started leaked its slot forever"
+    )
+    assert slots.active_for("alice") == 0
+
+
+async def test_one_account_cannot_take_every_stream_slot(api) -> None:
+    """A global ceiling is not a share — council round 1, the adversarial user.
+
+    Without a per-actor ceiling, one read-only token holding every slot answers
+    `503` to every other principal, an administrator included, for as long as it
+    keeps its connections (up to `event_stream_max_duration_seconds`, 15
+    minutes). The process ceiling protects the gateway; this protects everyone
+    else from whoever got there first.
+    """
+    slots = events_routes.StreamSlots(4, per_actor=2)
+
+    held = [slots.acquire("alice"), slots.acquire("alice")]
+    assert slots.active_for("alice") == 2
+
+    with pytest.raises(ApiError) as refused:
+        slots.acquire("alice")
+    assert refused.value.status_code == 503
+    assert refused.value.headers["Retry-After"] == "5"
+
+    # The process still has room, and it is room somebody else can use.
+    other = slots.acquire("bob")
+    assert slots.active == 3
+
+    held[0].release()
+    assert slots.acquire("alice") is not None, "releasing frees the actor's own share"
+    other.release()
+
+
+def test_the_per_actor_ceiling_can_never_exceed_the_process_ceiling() -> None:
+    """A per-actor ceiling above the global one reads as a share and is not one."""
+    assert events_routes.StreamSlots(4, per_actor=99).per_actor == 4
+    assert events_routes.StreamSlots(4).per_actor == 4
+
+
+def test_the_stream_ceiling_fits_inside_the_connection_pool() -> None:
+    """32 streams against a 15-connection pool is the incident `probes.py` records.
+
+    Each poll of each open stream takes a session from the pool every other
+    endpoint shares. A ceiling above the pool's own capacity means a slow poll
+    exhausts it, real requests block for `pool_timeout`, and the resulting
+    TimeoutError is reported as `database: unavailable` — the gateway asks to be
+    pulled from rotation and blames the database. Council round 1, the second
+    caller, measured the pool at 15 while this ceiling was 32.
+    """
+    from sqlalchemy.pool import QueuePool
+
+    from gateway.app.core.config import settings
+    from gateway.app.db.session import engine
+
+    pool = engine.pool
+    if not isinstance(pool, QueuePool):  # pragma: no cover - sqlite in some setups
+        pytest.skip("engine is not pooled in this configuration")
+    capacity = pool.size() + pool._max_overflow
+    assert settings.event_stream_max_concurrent <= capacity, (
+        f"{settings.event_stream_max_concurrent} concurrent streams against a "
+        f"{capacity}-connection pool; raising one means raising the other"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1244,6 +1587,85 @@ def test_the_manage_scope_is_one_a_signed_in_client_can_actually_be_granted() ->
     assert permissions.NOTIFICATIONS_READ.scope in granted
 
 
+def test_the_env_template_can_grant_every_scope_the_catalogue_needs() -> None:
+    """The allowlist has two sources, and production reads the one nobody edits.
+
+    Council round 1, the second caller: `CODEX_BRIDGE_OAUTH_DEFAULT_SCOPES` in
+    `.env.example` **replaces** `Settings.oauth_default_scopes` wholesale rather
+    than merging, and `docs/installation.md` tells the operator to build
+    `/etc/codex-bridge/env` from that template. Issues #8, #10 and #13 each added
+    a scope to `config.py` and not to the template, so a deployment built the
+    documented way had `issues.write`, `conversations.write` and
+    `notifications.manage` permanently ungrantable — `403` for every non-admin,
+    however `users.json` was edited.
+
+    The sibling test above pinned this against `settings.oauth_scopes()`, which
+    is the code default — the source production overrides. It therefore passed
+    while the endpoint was unreachable. This one reads the template.
+
+    `codexbridge.task.approve` is exempt and named as such: withholding it from
+    the deployment default is a deliberate operator decision, not drift.
+    """
+    from gateway.app.api import permissions
+
+    template = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    line = next(
+        (row for row in template.splitlines() if row.startswith("CODEX_BRIDGE_OAUTH_DEFAULT_SCOPES=")),
+        None,
+    )
+    assert line is not None, ".env.example no longer sets the scope allowlist"
+    templated = set(line.partition("=")[2].split())
+
+    deliberately_withheld = {permissions.APPROVE_SCOPE}
+    needed = {
+        action.scope
+        for action in permissions.CATALOGUE
+        if action.scope not in {permissions.ADMIN_SCOPE} | deliberately_withheld
+    }
+    missing = sorted(needed - templated)
+    assert not missing, (
+        f".env.example cannot grant {missing}; a deployment built from the template "
+        "answers 403 for every non-admin on the endpoints those scopes guard"
+    )
+
+
+async def test_a_rejected_subscription_list_cannot_amplify_the_response(api) -> None:
+    """Council round 1 — the count was bounded, the bytes were not.
+
+    `MAX_SUBSCRIBED_TYPES` capped the list at 64 entries, and `put_preferences`
+    then quoted every rejected value back at full length in `details[]`: 64
+    strings of 100,000 characters turned a 6.4 MB request into a 6.4 MB error
+    response. A bound on how many items there are is not a bound on how much
+    data they carry.
+    """
+    payload = {"eventTypes": ["z" * 100_000] * 64, "pushEnabled": False}
+    response = api.put("/api/v1/notifications/preferences", headers=auth(ALICE_TOKEN), json=payload)
+
+    assert response.status_code == 422, "an over-long value is refused by the model"
+    assert len(response.content) < 100_000, (
+        f"the error envelope was {len(response.content)} bytes for a rejected request"
+    )
+
+    # And a *plausible* mistake still tells the client what it got wrong.
+    readable = api.put(
+        "/api/v1/notifications/preferences",
+        headers=auth(ALICE_TOKEN),
+        json={"eventTypes": ["session.completedd"], "pushEnabled": False},
+    )
+    assert readable.status_code == 400
+    assert "session.completedd" in readable.json()["details"][0]["message"]
+
+
+async def test_a_rejected_type_filter_cannot_amplify_the_response(api) -> None:
+    """The same reflection on the query side, where the URL is the only limit."""
+    query = "&".join(f"type={'q' * 200}{index}" for index in range(200))
+    response = api.get(f"/api/v1/events?{query}", headers=auth(ALICE_TOKEN))
+
+    assert response.status_code == 400
+    assert len(response.json()["details"]) <= events_routes.MAX_ECHOED_DETAILS
+    assert len(response.content) < 10_000
+
+
 async def test_a_stored_type_that_no_longer_exists_is_dropped_on_the_way_out(api) -> None:
     """A stored preference can outlive the type it names.
 
@@ -1358,6 +1780,27 @@ async def test_epics_issues_and_conversations_all_resolve_to_their_project(api) 
     assert kinds.get("epic") == "p1"
     assert kinds.get("issue") == "p1"
     assert {item["entity"]["id"] for item in body["items"]} >= {epic.id, issue.id}
+
+
+def test_the_audit_index_exists_on_a_fresh_install_as_well_as_an_upgraded_one() -> None:
+    """An index declared only in SQL is missing on every new database.
+
+    `main.py` bootstraps a new database with `Base.metadata.create_all`, which
+    knows nothing about `migrations/`. An upgraded deployment runs 0009 and gets
+    the index; a fresh one never would — and that is the harder half to notice,
+    because nobody skipped a migration (council round 1, the second caller).
+    Both halves are needed: `create_all(checkfirst=True)` will not add an index
+    to a table that already exists, so the migration cannot be dropped either.
+    """
+    from gateway.app.models.entities import AuditEventModel
+
+    name = "audit_events_entity_type_id_idx"
+    declared = {index.name: index for index in AuditEventModel.__table__.indexes}
+    assert name in declared, "a fresh install would not get the index"
+    assert [column.name for column in declared[name].columns] == ["entity_type", "id"]
+
+    migration = (REPO_ROOT / "migrations" / "0009_event_subscriptions.sql").read_text(encoding="utf-8")
+    assert name in migration, "an existing deployment would not get the index"
 
 
 def test_the_poll_interval_is_floored_rather_than_honoured() -> None:

@@ -1106,7 +1106,7 @@ are excluded the same way.
 
 ### The summary is a whitelist; the stored payload never ships
 
-The internal audit payload is written by eleven call sites that were never
+The internal audit payload is written by thirty-one call sites that were never
 audited for what they may contain: `actor_email`, `requested_by_email`,
 free-text `reason` and `error` strings from an executor, `context` blobs.
 §"Fields that must never ship" applies to every byte of it and no existing
@@ -1163,6 +1163,20 @@ set on another device is how a phone silently misses the decision its operator
 was waiting for — and the failure would be indistinguishable from a quiet
 system. Narrow a live connection with that endpoint's `?type=` instead, which
 is per-connection state and cannot change underneath it.
+
+**A session that predates the scope grant keeps a token that cannot write.** A
+principal's scopes are snapshotted into the token row at sign-in, and
+`POST /api/v1/auth/refresh` rotates with `granted & user.scopes &
+server_allowlist` — an intersection, so it can only ever narrow. Adding
+`codexbridge.notifications.manage` to an account therefore does **not** reach a
+phone that is already signed in: it keeps answering `403` on this endpoint,
+through every refresh, until the absolute session lifetime expires or the user
+signs in again. That is the deliberate behaviour of a rotation that never
+escalates — a stolen refresh token must not be able to widen itself — and the
+cost is stated here rather than discovered. An operator granting a new scope to
+an existing user should expect to tell them to sign in again; a client seeing
+`403` on an action `GET /api/v1/auth/me` also reports as not allowed should
+offer re-authentication, not an error.
 
 `PUT` is a whole-document replacement, so it is idempotent by construction:
 there is no `Idempotency-Key` (nothing to duplicate) and no `ETag`/`If-Match`

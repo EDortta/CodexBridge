@@ -6,11 +6,16 @@ Two operations over one document: `GET /api/v1/notifications/preferences` and
 
 ## Recorded intent, not a delivery mechanism, and not a stream filter
 
-There is no push transport in this build — `GET /api/version` reports
-`pushNotifications`/`artifactDownloads` style flags for exactly this reason, and
-nothing reads these rows to decide delivery. They are the hook a later push
-integration reads, stored now so a client can offer the setting and so the
-choice survives a reinstall.
+There is no push transport in this build, and nothing reads these rows to decide
+delivery. They are the hook a later push integration reads, stored now so a
+client can offer the setting and so the choice survives a reinstall.
+
+The client learns that from `pushDeliveryAvailable` in the body below, **not**
+from `GET /api/version`: that probe's `capabilities` map has no push key at all,
+and three comments in the first cut of this delivery said it reported
+`pushNotifications: false` (council round 1, the claim auditor). A capability
+flag belongs in `probes.CAPABILITIES` only when a served endpoint honours it;
+this one is a property of the preferences resource, so it is reported there.
 
 They also **do not filter `GET /api/v1/events/stream`**, and that is a decision
 rather than an omission. A client that opened the stream asked for the stream;
@@ -42,6 +47,7 @@ about. Reading needs only `codexbridge.read`; the write has a scope of its own.
 from __future__ import annotations
 
 import json
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -66,6 +72,16 @@ router = APIRouter(prefix="/api/v1")
 # quietly widen an accepted request body.
 MAX_SUBSCRIBED_TYPES = 64
 
+# And how long any one of them may be. Bounding the count alone was not a bound:
+# 64 strings of 100,000 characters passed the list check, and `put_preferences`
+# then quoted every one of them back in `details[]`, turning a 6.4 MB request
+# into a 6.4 MB error response (council round 1, the adversarial user). Every
+# value in `MobileEventType` is well under this.
+MAX_EVENT_TYPE_LENGTH = 64
+
+# How many rejected values one error response quotes back.
+MAX_ECHOED_UNKNOWN = 10
+
 
 class NotificationPreferencesRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -74,7 +90,13 @@ class NotificationPreferencesRequest(BaseModel):
     # a Pydantic `Literal[...]`: the rejection has to be an `Error` envelope with
     # a `details[].field` naming `eventTypes`, and a 422 from the model layer
     # names the Python field and lists every allowed value back at the caller.
-    event_types: list[str] = Field(default_factory=list, alias="eventTypes", max_length=MAX_SUBSCRIBED_TYPES)
+    #
+    # The per-item `max_length` *is* on the model, though, because it is a size
+    # bound rather than a vocabulary check — it has to reject the body before the
+    # handler builds an error message out of it.
+    event_types: list[Annotated[str, Field(max_length=MAX_EVENT_TYPE_LENGTH)]] = Field(
+        default_factory=list, alias="eventTypes", max_length=MAX_SUBSCRIBED_TYPES
+    )
     push_enabled: bool = Field(default=False, alias="pushEnabled")
 
 
@@ -149,9 +171,16 @@ async def put_preferences(
             status_code=400,
             code=VALIDATION_FAILED,
             message="Unknown event type in the subscription list.",
+            # Bounded in count as well as in item length: the model caps each
+            # value at MAX_EVENT_TYPE_LENGTH, and this caps how many of them a
+            # single rejection quotes back.
             details=[
-                {"field": "eventTypes", "code": "unknown_event_type", "message": f"No such event type: {value}."}
-                for value in unknown
+                {
+                    "field": "eventTypes",
+                    "code": "unknown_event_type",
+                    "message": f"No such event type: {value}.",
+                }
+                for value in unknown[:MAX_ECHOED_UNKNOWN]
             ],
         )
 

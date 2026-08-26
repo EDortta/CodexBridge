@@ -1480,20 +1480,48 @@ async def list_mobile_events_page(
 
     Over-fetches by one, same convention as every other collection here.
     """
-    project_expression = _event_project_expression()
-    statement = (
-        select(AuditEventModel, project_expression.label("project_id"))
-        .where(AuditEventModel.entity_type.in_(list(entity_types)))
-        .where(AuditEventModel.event_type.in_(list(audit_event_types)))
-        .where(project_expression.is_not(None))
+    statement = select(AuditEventModel, _event_project_expression().label("project_id"))
+    statement = _restrict_to_visible_events(
+        statement,
+        project_ids=project_ids,
+        entity_types=entity_types,
+        audit_event_types=audit_event_types,
     )
-    if project_ids is not None:
-        statement = statement.where(project_expression.in_(project_ids))
     if after is not None:
         statement = statement.where(AuditEventModel.id > after)
     statement = statement.order_by(AuditEventModel.id.asc()).limit(limit + 1)
     result = await session.execute(statement)
     return [(row[0], row[1]) for row in result.all()]
+
+
+def _restrict_to_visible_events(
+    statement,
+    *,
+    project_ids: list[str] | None,
+    entity_types: Sequence[str],
+    audit_event_types: Sequence[str],
+):
+    """Every guard that decides whether one audit row is visible to one caller.
+
+    Factored out so the page query and the *gap* queries below cannot answer
+    different questions about the same row. They did: `audit_cursor_status` and
+    `oldest_audit_event_id` were written against the whole table while the page
+    was correctly scoped, which made the `gap` block a one-bit oracle over rows
+    the caller may never see — a project-scoped token could watch the signal
+    flip and learn that *some* audit row had been written, including the
+    operator's sign-in, and binary-search `?after=` for the global newest id
+    (council round 1, the adversarial user). The fix is not "scope the two other
+    queries as well" but "there is one predicate, and everything uses it".
+    """
+    project_expression = _event_project_expression()
+    statement = (
+        statement.where(AuditEventModel.entity_type.in_(list(entity_types)))
+        .where(AuditEventModel.event_type.in_(list(audit_event_types)))
+        .where(project_expression.is_not(None))
+    )
+    if project_ids is not None:
+        statement = statement.where(project_expression.in_(project_ids))
+    return statement
 
 
 # What `audit_cursor_status` returns. Constants rather than bare strings: the
@@ -1504,24 +1532,45 @@ CURSOR_BEYOND_RETENTION = "beyond_retention"
 CURSOR_AHEAD = "cursor_ahead"
 
 
-async def audit_cursor_status(session: AsyncSession, after: int) -> str:
+async def audit_cursor_status(
+    session: AsyncSession,
+    after: int,
+    *,
+    project_ids: list[str] | None,
+    entity_types: Sequence[str],
+    audit_event_types: Sequence[str],
+) -> str:
     """Whether resuming from `after` can be done without a silent gap.
 
     Issue #13's acceptance criterion is that reconnection does not *silently*
     lose events — not that no event is ever lost, which no retention policy can
     promise. This is the signal that keeps the loss from being silent.
 
+    **Answered over the caller's own events, never the whole table.** The scope
+    arguments are not optional and there is no unscoped default, because the
+    unscoped version of this function was an information leak rather than a
+    looser answer: every caller's `gap` block moved whenever *any* audit row was
+    written anywhere in the system, so a project-scoped token could detect the
+    operator's sign-in, a revocation, or another tenant's activity — the exact
+    events this surface excludes by construction — and could binary-search
+    `?after=` for the global newest id (council round 1, the adversarial user).
+
+    Scoping it also makes the answer *more* correct, not less. The question a
+    resuming client is asking is "can my position still be continued from", and
+    its position is an id from this feed. An id from someone else's feed is not
+    a position this client can hold.
+
     A resume cursor is always an id this gateway handed out, so the row it names
     exists unless something removed it. Three cases:
 
-    - the row is still there, or `after` is 0 (start from the beginning) —
-      nothing was lost;
-    - the row is gone and the log has moved past it — rows between the client's
-      position and the oldest surviving one were removed, so the client must
-      re-read rather than assume continuity (`beyond_retention`);
-    - `after` is beyond the newest id this log has ever had — the cursor came
-      from another deployment, or this database was restored from a backup older
-      than the client. Left unsignalled, the stream would simply never deliver
+    - the row is still there and still visible, or `after` is 0 (start from the
+      beginning) — nothing was lost;
+    - the row is gone and this feed has moved past it — rows between the
+      client's position and the oldest surviving one were removed, so the client
+      must re-read rather than assume continuity (`beyond_retention`);
+    - `after` is beyond the newest id in this feed — the cursor came from
+      another deployment, or this database was restored from a backup older than
+      the client. Left unsignalled, the stream would simply never deliver
       anything again, which is the same silence in the other direction
       (`cursor_ahead`).
 
@@ -1534,22 +1583,42 @@ async def audit_cursor_status(session: AsyncSession, after: int) -> str:
     """
     if after <= 0:
         return CURSOR_OK
-    exists = await session.execute(select(AuditEventModel.id).where(AuditEventModel.id == after).limit(1))
+    visible = _restrict_to_visible_events(
+        select(AuditEventModel.id),
+        project_ids=project_ids,
+        entity_types=entity_types,
+        audit_event_types=audit_event_types,
+    )
+    exists = await session.execute(visible.where(AuditEventModel.id == after).limit(1))
     if exists.scalars().first() is not None:
         return CURSOR_OK
-    newest = (await session.execute(select(func.max(AuditEventModel.id)))).scalar()
+    newest = (await session.execute(select(func.max(visible.subquery().c.id)))).scalar()
     if newest is None or after > newest:
         return CURSOR_AHEAD
     return CURSOR_BEYOND_RETENTION
 
 
-async def oldest_audit_event_id(session: AsyncSession) -> int | None:
-    """Lowest surviving audit id, reported alongside a `beyond_retention` gap.
+async def oldest_audit_event_id(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    entity_types: Sequence[str],
+    audit_event_types: Sequence[str],
+) -> int | None:
+    """Lowest id still in **this caller's** feed, reported alongside a gap.
 
     A client that learns it fell behind still has to know where to restart from;
-    "you lost some" with no position leaves it guessing.
+    "you lost some" with no position leaves it guessing. Scoped for the same
+    reason `audit_cursor_status` is: unscoped, this returned the global minimum
+    audit id to anyone holding a read token.
     """
-    return (await session.execute(select(func.min(AuditEventModel.id)))).scalar()
+    visible = _restrict_to_visible_events(
+        select(AuditEventModel.id),
+        project_ids=project_ids,
+        entity_types=entity_types,
+        audit_event_types=audit_event_types,
+    )
+    return (await session.execute(select(func.min(visible.subquery().c.id)))).scalar()
 
 
 # --------------------------------------------------------------------------

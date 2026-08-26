@@ -1,11 +1,11 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-26 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--gh-13`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--gh-13 map`
+> Generated: 2026-08-26 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 99 file(s) · 968 symbol(s) indexed
+- 99 file(s) · 987 symbol(s) indexed
 - Languages: config (2), python (95), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -324,14 +324,15 @@ tests/
 
 > Near-real-time delivery of what changed, and the backlog behind it — issue #13.
 
-- **`StreamSlot`** *(class)* — "One acquired slot, releasable exactly once."
-  - `__init__(self, slots)` *(method)*
+- **`StreamSlot`** *(class)* — "One acquired slot, releasable exactly once, remembering whose it was."
+  - `__init__(self, slots, owner)` *(method)*
   - `release(self)` *(method)*
 - **`StreamSlots`** *(class)* — "How many event streams this process will hold open at once."
-  - `__init__(self, limit)` *(method)*
+  - `__init__(self, limit, per_actor)` *(method)*
   - `active` *(property)*
-  - `acquire(self)` *(method)*
-  - `release(self)` *(method)*
+  - `active_for(self, owner)` *(method)*
+  - `acquire(self, owner)` *(method)*
+  - `release(self, owner)` *(method)*
 - `list_events(response, after, project, type, limit, principal, session)` *(async function)* — "Events the caller may see, oldest first, after `after`."
 - `event_stream()` *(async function)* — "The SSE body: an async generator of frames."
 - `stream_events(request, after, project, type, last_event_id, principal)` *(async function)* — "Open a live event stream for the caller's projects."
@@ -583,7 +584,7 @@ tests/
 - `classify(audit_event_type, payload)` — "`(mobile type, entity kind)` for one audit row, or None when it is internal."
 - `summarize(mobile_type, payload, redact)` — "A short, human-readable line for one event. Never the raw payload."
 - `actor_of(payload)`
-- `state_of(payload)`
+- `state_of(payload)` — "The entity's state, or None when the row does not record a defined one."
 
 ### `gateway/app/services/issue_types.py`
 
@@ -646,7 +647,7 @@ tests/
 - `list_task_events_page(session, task_id)` *(async function)* — "A mission's timeline, oldest first — the order a narrative reads in (issue #7)."
 - `list_mobile_events_page(session)` *(async function)* — "Deliverable audit rows after `after`, oldest first, with their project."
 - `audit_cursor_status(session, after)` *(async function)* — "Whether resuming from `after` can be done without a silent gap."
-- `oldest_audit_event_id(session)` *(async function)* — "Lowest surviving audit id, reported alongside a `beyond_retention` gap."
+- `oldest_audit_event_id(session)` *(async function)* — "Lowest id still in **this caller's** feed, reported alongside a gap."
 - `get_notification_preference(session, user_id)` *(async function)*
 - `set_notification_preference(session)` *(async function)* — "Replace one actor's preferences wholesale, creating the row if absent."
 - `create_epic(session)` *(async function)*
@@ -710,6 +711,9 @@ tests/
 
 - `test_the_codemap_names_every_module_it_claims_to_index()` — "`.docs/agents/programmer.md` tells the next agent to read this instead of scanning."
 - `test_the_api_readme_does_not_deny_the_limiter_that_ships(denial)` — "§"Rate limiting — vocabulary only, so far" outlived the wiring."
+- `test_no_document_names_a_capability_flag_the_probe_does_not_report()` — "A `false` flag a client can read is the point; a *missing* key is not one."
+- `test_the_codemap_names_the_canonical_checkout_not_a_worktree()` — "`governancekit map` stamps the root it was run from, and agents run in worktrees."
+- `test_the_audit_payload_writer_count_is_the_real_one()` — "Five files tell a reader how many writers can put a key in an audit payload."
 
 ### `tests/contract/test_openapi_document.py`
 
@@ -1067,8 +1071,14 @@ tests/
 - `test_a_preference_change_is_not_a_project_event(api)` *(async function)* — "`notification` rows are excluded the same way `auth` rows are."
 - `test_an_event_whose_project_cannot_be_derived_reaches_nobody(api)` *(async function)* — "Fail closed, administrators included."
 - `test_reading_events_requires_the_read_scope(api)` *(async function)*
-- `test_no_stored_payload_key_is_passed_through_to_a_client(api)` *(async function)* — "The audit payload is written by eleven call sites and is not a response."
+- `test_no_stored_payload_key_is_passed_through_to_a_client(api)` *(async function)* — "The audit payload is written by thirty-one call sites and is not a response."
 - `test_free_text_in_a_summary_is_redacted_and_bounded(api)` *(async function)* — "`redact` is applied to executor free text, and the line has a ceiling."
+- `test_an_executors_control_and_state_strings_cannot_reach_a_notification_line(api)` *(async function)* — "Council round 1, the adversarial user — the whitelist's premise was false."
+- `test_every_echoed_payload_value_comes_from_a_closed_vocabulary()` — "The guard behind the test above, asserted directly."
+- `test_the_gap_signal_cannot_report_on_events_the_caller_may_not_see(api)` *(async function)* — "Council round 1 — the `gap` block was a one-bit oracle over the whole log."
+- `test_the_oldest_available_id_is_the_callers_own_oldest(api)` *(async function)* — "`oldestAvailableId` returned the global minimum audit id to any reader."
+- `test_a_resume_position_beyond_the_id_range_is_refused_not_a_500(api)` *(async function)* — "Council round 1 — `?after=2**63+1` was an authenticated 500."
+- `test_an_out_of_range_last_event_id_is_clamped_not_replayed(api)` *(async function)* — "The same overflow on the stream, where a 500 is not even available."
 - `test_every_emitted_event_type_has_a_summary_builder()` — "A type with no builder falls back to a bland sentence — silently."
 - `test_every_audited_domain_event_type_is_translated()` — "A new audit event under a deliverable entity must be classified on purpose."
 - `test_the_non_deliverable_entity_constants_stay_non_deliverable()` — "The exclusion of auth and preference rows is by construction; pin it."
@@ -1086,9 +1096,14 @@ tests/
 - `test_a_project_removed_from_the_actor_stops_reaching_them(api, users_file)` *(async function)* — "`allowed_projects` is re-read per poll, not captured when the stream opened."
 - `test_a_disconnected_client_ends_the_stream_without_a_closing_frame(api)` *(async function)* — "Nothing is listening, so there is nothing to tell."
 - `test_an_idle_stream_sends_a_comment_not_an_event(api)` *(async function)* — "A heartbeat keeps a proxy from timing out an idle connection."
+- `test_a_newline_in_stored_text_cannot_split_one_frame_into_two(api)` *(async function)* — "SSE is a line protocol: a raw newline inside `data:` ends the frame early."
 - `test_a_stream_type_filter_narrows_delivery_without_stalling_the_cursor(api)` *(async function)*
 - `test_the_slot_ceiling_refuses_rather_than_degrading_the_shared_pool(api)` *(async function)* — "The rate limiter bounds requests per window, not connections held open."
 - `test_a_finished_stream_gives_its_slot_back(api)` *(async function)* — "A slot that is not returned is gone for good, and the ceiling ratchets down."
+- `test_a_connection_that_dies_before_the_body_starts_still_returns_its_slot(api)` *(async function)* — "The release path the generator's `finally` cannot reach — council round 1."
+- `test_one_account_cannot_take_every_stream_slot(api)` *(async function)* — "A global ceiling is not a share — council round 1, the adversarial user."
+- `test_the_per_actor_ceiling_can_never_exceed_the_process_ceiling()` — "A per-actor ceiling above the global one reads as a share and is not one."
+- `test_the_stream_ceiling_fits_inside_the_connection_pool()` — "32 streams against a 15-connection pool is the incident `probes.py` records."
 - `test_the_stream_is_served_as_an_event_stream_that_a_proxy_will_not_buffer(api, monkeypatch)` *(async function)*
 - `test_last_event_id_resumes_and_beats_the_query_parameter(api, monkeypatch)` *(async function)* — "The header is what a reconnecting `EventSource` sends by itself."
 - `test_a_malformed_last_event_id_is_ignored_rather_than_refused(api)` *(async function)* — "The user agent sets that header, not the application."
@@ -1098,6 +1113,10 @@ tests/
 - `test_preferences_are_per_actor_and_never_another_accounts(api)` *(async function)*
 - `test_an_unknown_event_type_is_refused_with_the_field_named(api)` *(async function)*
 - `test_writing_preferences_needs_a_scope_reading_them_does_not(api)` *(async function)* — "Two actions, because an operator may grant one without the other."
+- `test_the_manage_scope_is_one_a_signed_in_client_can_actually_be_granted()` — "A scope outside `oauth_default_scopes` can never be granted to anyone."
+- `test_the_env_template_can_grant_every_scope_the_catalogue_needs()` — "The allowlist has two sources, and production reads the one nobody edits."
+- `test_a_rejected_subscription_list_cannot_amplify_the_response(api)` *(async function)* — "Council round 1 — the count was bounded, the bytes were not."
+- `test_a_rejected_type_filter_cannot_amplify_the_response(api)` *(async function)* — "The same reflection on the query side, where the URL is the only limit."
 - `test_a_stored_type_that_no_longer_exists_is_dropped_on_the_way_out(api)` *(async function)* — "A stored preference can outlive the type it names."
 - `test_preferences_do_not_filter_the_stream(api)` *(async function)* — "A documented decision, not an omission — so it is pinned as behaviour."
 - `test_an_empty_project_list_matches_nothing_and_is_not_no_restriction(api)` *(async function)* — "The one-character mistake: `if project_ids:` instead of `is not None`."

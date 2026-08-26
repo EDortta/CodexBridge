@@ -189,7 +189,26 @@ class Settings(BaseSettings):
     # session every poll. This is the ceiling that actually bounds that, and
     # exceeding it answers 503 with Retry-After rather than degrading the API
     # everything else shares.
-    event_stream_max_concurrent: int = 32
+    #
+    # **8, not 32, and the number is chosen against the connection pool.**
+    # `gateway/app/db/session.py` builds the engine with SQLAlchemy's defaults:
+    # `pool_size=5` plus `max_overflow=10` is a hard ceiling of **15**
+    # connections, shared with every other endpoint. A stream takes one from
+    # that pool on every poll. At 32 the ceiling was more than twice the pool it
+    # is documented to protect, so a slow poll — the state a missing index or a
+    # large `audit_events` produces — would have exhausted the pool and made
+    # real requests block for the 30s `pool_timeout`. That is not hypothetical:
+    # `routes/probes.py` records the production incident with exactly that
+    # shape, where the resulting TimeoutError was reported as
+    # `database: unavailable` and the gateway asked to be pulled from rotation.
+    # Raising this above the pool means raising the pool with it.
+    event_stream_max_concurrent: int = 8
+    # Concurrent streams one actor may hold. Without it the process ceiling is
+    # not a share: one read-only token could take every slot and answer 503 to
+    # every other principal, administrators included, for as long as it held its
+    # connections. Two is a phone and a tablet; a third device reconnects when
+    # one of them ends.
+    event_stream_max_per_actor: int = 2
     # Rows one poll may deliver. Bounds the work a single iteration can do when
     # a client resumes from far behind; the next iteration continues immediately
     # because the cursor advanced.

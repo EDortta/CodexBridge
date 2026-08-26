@@ -105,6 +105,35 @@ router = APIRouter(prefix="/api/v1")
 
 EVENTS_ENDPOINT = "/api/v1/events"
 
+# The largest resume position this API accepts. `audit_events.id` is a 64-bit
+# signed identity column, so nothing above this can ever name a row — but until
+# this bound existed, `?after=2**63+1` was bound straight into the query and the
+# driver raised `OverflowError: Python int too large to convert to SQLite
+# INTEGER`, which reached the caller as `500 internal_error`. On the stream it
+# was worse: the response had already committed to `200 text/event-stream`, so
+# the body emitted `stream.open` and then simply ended — no `stream.gap`, no
+# `stream.closed`, and a client cannot tell that from a quiet feed (council
+# round 1, the adversarial user). `ge=0` bounded the low end only; an unbounded
+# integer parameter is an unbounded integer parameter in both directions.
+MAX_EVENT_ID = 2**63 - 1
+
+# How many `details[]` entries a rejected filter or subscription list may quote
+# back, and how much of each value. The details array exists so a client can
+# show which value it got wrong; quoting an unbounded number of unbounded
+# strings turned a large request into an equally large error response.
+MAX_ECHOED_DETAILS = 10
+MAX_ECHOED_VALUE = 64
+
+
+def _echo(value: str) -> str:
+    """One caller-supplied value, safe to put in an error message.
+
+    Truncated rather than omitted: a client that mistyped one event type needs
+    to see which one, and 64 characters is longer than every value this
+    vocabulary contains.
+    """
+    return value if len(value) <= MAX_ECHOED_VALUE else value[:MAX_ECHOED_VALUE] + "…"
+
 
 # --------------------------------------------------------------------------
 # Concurrency ceiling
@@ -112,7 +141,7 @@ EVENTS_ENDPOINT = "/api/v1/events"
 
 
 class StreamSlot:
-    """One acquired slot, releasable exactly once.
+    """One acquired slot, releasable exactly once, remembering whose it was.
 
     Idempotent because the slot is released down two paths that both have to
     exist: the generator's `finally`, which covers a normal end and a client
@@ -124,15 +153,16 @@ class StreamSlot:
     permanent: the ceiling ratchets down until the endpoint answers 503 forever.
     """
 
-    def __init__(self, slots: "StreamSlots") -> None:
+    def __init__(self, slots: "StreamSlots", owner: str) -> None:
         self._slots = slots
+        self._owner = owner
         self._released = False
 
     def release(self) -> None:
         if self._released:
             return
         self._released = True
-        self._slots.release()
+        self._slots.release(self._owner)
 
 
 class StreamSlots:
@@ -150,17 +180,32 @@ class StreamSlots:
     queueing: a client told to come back later reconnects with its
     `Last-Event-ID` and loses nothing, while a queued client holds the
     connection it was refused for.
+
+    **Two ceilings, because one global ceiling is not a share.** The process
+    ceiling protects the gateway; the per-actor ceiling is what stops one
+    read-only token from taking every slot and answering `503` to everybody
+    else — including an administrator — for as long as it keeps its connections
+    (council round 1, the adversarial user). Neither is a rate limit: the
+    limiter counts requests per window, and a request here is a connection held
+    for minutes.
     """
 
-    def __init__(self, limit: int) -> None:
+    def __init__(self, limit: int, per_actor: int | None = None) -> None:
         self.limit = limit
+        # A per-actor ceiling above the process ceiling would never bind, which
+        # reads as "there is a per-actor ceiling" while there is not.
+        self.per_actor = min(per_actor if per_actor is not None else limit, limit)
         self._active = 0
+        self._by_actor: dict[str, int] = {}
 
     @property
     def active(self) -> int:
         return self._active
 
-    def acquire(self) -> StreamSlot:
+    def active_for(self, owner: str) -> int:
+        return self._by_actor.get(owner, 0)
+
+    def acquire(self, owner: str) -> StreamSlot:
         if self._active >= self.limit:
             raise ApiError(
                 status_code=503,
@@ -168,17 +213,38 @@ class StreamSlots:
                 message="Too many event streams are open on this gateway. Retry shortly.",
                 headers={"Retry-After": "5"},
             )
+        if self._by_actor.get(owner, 0) >= self.per_actor:
+            raise ApiError(
+                status_code=503,
+                code=DEPENDENCY_UNAVAILABLE,
+                message=(
+                    "This account already has as many event streams open as it may. "
+                    "Close one, or retry shortly."
+                ),
+                headers={"Retry-After": "5"},
+            )
         self._active += 1
-        return StreamSlot(self)
+        self._by_actor[owner] = self._by_actor.get(owner, 0) + 1
+        return StreamSlot(self, owner)
 
-    def release(self) -> None:
+    def release(self, owner: str) -> None:
         # Never below zero. A counter that underflows reads as "off" forever
         # after, which would silently remove the ceiling
         # (`design-standards.md` §6).
         self._active = max(0, self._active - 1)
+        remaining = self._by_actor.get(owner, 0) - 1
+        if remaining > 0:
+            self._by_actor[owner] = remaining
+        else:
+            # Popped rather than left at zero: the dict is keyed by user id and
+            # would otherwise grow once per actor that ever opened a stream and
+            # never shrink — a slow leak in a process that runs for weeks.
+            self._by_actor.pop(owner, None)
 
 
-stream_slots = StreamSlots(settings.event_stream_max_concurrent)
+stream_slots = StreamSlots(
+    settings.event_stream_max_concurrent, settings.event_stream_max_per_actor
+)
 
 
 # --------------------------------------------------------------------------
@@ -203,9 +269,12 @@ def _requested_types(types: list[str] | None) -> list[str]:
             status_code=400,
             code=VALIDATION_FAILED,
             message="Unknown event type in the type filter.",
+            # Bounded in both dimensions. Unbounded, this reflected every
+            # rejected value at full length, so a caller could turn a large
+            # query string into an equally large error body.
             details=[
-                {"field": "?type", "code": "unknown_event_type", "message": f"No such event type: {value}."}
-                for value in unknown
+                {"field": "?type", "code": "unknown_event_type", "message": f"No such event type: {_echo(value)}."}
+                for value in unknown[:MAX_ECHOED_DETAILS]
             ],
         )
     return list(types)
@@ -222,6 +291,31 @@ def _narrow_projects(principal: AuthenticatedPrincipal, requested: list[str] | N
     if requested:
         return [value for value in requested if projects is None or value in projects]
     return projects
+
+
+async def _gap_for(
+    session: AsyncSession, principal: AuthenticatedPrincipal, after: int
+) -> tuple[str, dict | None]:
+    """The gap block for one resume position, or None when it is continuous.
+
+    One function for both transports so the `stream.gap` frame and the polling
+    endpoint's `gap` object cannot describe the position differently — they are
+    the same answer to the same question, and a client is expected to move
+    between the two mid-feed.
+    """
+    scope = dict(
+        project_ids=visible_projects(principal),
+        entity_types=sorted(event_types.DELIVERABLE_ENTITY_TYPES),
+        audit_event_types=sorted(event_types.TRANSLATED_AUDIT_EVENT_TYPES),
+    )
+    status = await store.audit_cursor_status(session, after, **scope)
+    if status == store.CURSOR_OK:
+        return status, None
+    return status, {
+        "reason": status,
+        "from": after,
+        "oldestAvailableId": await store.oldest_audit_event_id(session, **scope),
+    }
 
 
 def _to_event(row, project_id: str) -> event_types.MobileEvent | None:
@@ -253,7 +347,7 @@ def _to_event(row, project_id: str) -> event_types.MobileEvent | None:
 def _payload(raw: str | None) -> dict:
     """The stored payload as a dict, or an empty one.
 
-    Never raises. `payload_json` is years of rows written by eleven call sites,
+    Never raises. `payload_json` is years of rows written by thirty-one call sites,
     and one unparseable row must not take down a stream that is otherwise
     correct — the summary degrades to its default sentence instead.
     """
@@ -318,7 +412,7 @@ async def _load_events(
 @router.get("/events", tags=["events"])
 async def list_events(
     response: Response,
-    after: int | None = Query(default=None, ge=0),
+    after: int | None = Query(default=None, ge=0, le=MAX_EVENT_ID),
     project: list[str] | None = Query(default=None),
     type: list[str] | None = Query(default=None),  # noqa: A002 - the contract's parameter name
     limit: int | None = Query(default=None),
@@ -365,13 +459,14 @@ async def list_events(
         "page": {"hasMore": has_more, "nextAfter": next_after},
     }
     if after is not None:
-        status = await store.audit_cursor_status(session, after)
-        if status != store.CURSOR_OK:
-            body["gap"] = {
-                "reason": status,
-                "from": after,
-                "oldestAvailableId": await store.oldest_audit_event_id(session),
-            }
+        # Scoped to what this principal may see, and to `visible_projects` rather
+        # than to `projects` above: `?project=` is a filter the client chose for
+        # this one request, while continuity is a property of the whole feed the
+        # client resumes from. Narrowing the gap check by a transient filter
+        # would report a gap to a client that had merely changed its filter.
+        status, gap = await _gap_for(session, principal, after)
+        if gap is not None:
+            body["gap"] = gap
 
     response.headers["Cache-Control"] = "no-store"
     return body
@@ -394,8 +489,20 @@ def _frame(*, event: str, data: dict, event_id: int | None = None) -> str:
     if event_id is not None:
         lines.append(f"id: {event_id}")
     lines.append(f"event: {event}")
-    # `ensure_ascii=True` so a frame is always one line of ASCII: a raw newline
-    # inside `data:` would end the frame early and split one event into two.
+    # What keeps a frame on one line is `json.dumps` escaping `\r` and `\n`,
+    # which it does whatever `ensure_ascii` says: no value can end a `data:`
+    # line early and split one event into two. The first cut of this comment
+    # credited `ensure_ascii` with that, which would have told the next reader
+    # that turning it off breaks frame integrity — it does not (council round 1,
+    # the claim auditor).
+    #
+    # `ensure_ascii=True` is still not decorative. With it off, Python leaves
+    # U+2028 and U+2029 raw; neither is an SSE line terminator, so the frame
+    # survives, but both are *JavaScript* line terminators, and a client that
+    # evaluates a payload rather than parsing it would see a different program.
+    # An all-ASCII body also survives a proxy or client that mishandles UTF-8.
+    # Both properties are pinned by
+    # `test_a_newline_in_stored_text_cannot_split_one_frame_into_two`.
     lines.append(f"data: {json.dumps(data, ensure_ascii=True, separators=(',', ':'))}")
     return "\n".join(lines) + "\n\n"
 
@@ -413,6 +520,12 @@ def _resume_from(last_event_id: str | None, after: int | None) -> int:
     A malformed header is treated as absent rather than as an error. It is set
     by the user agent, not the application, and refusing the connection over it
     would strand a client that cannot control the value.
+
+    A value above `MAX_EVENT_ID` is **clamped, not discarded**. Discarding it
+    would fall back to `after`, or to 0, and replay the whole feed to a client
+    that asked to resume — the one outcome this endpoint must never produce.
+    Clamped, the position is beyond every row, so the client is told
+    `cursor_ahead` and knows exactly where it stands.
     """
     if last_event_id is not None:
         try:
@@ -420,8 +533,8 @@ def _resume_from(last_event_id: str | None, after: int | None) -> int:
         except (TypeError, ValueError):
             parsed = -1
         if parsed >= 0:
-            return parsed
-    return after or 0
+            return min(parsed, MAX_EVENT_ID)
+    return min(after or 0, MAX_EVENT_ID)
 
 
 async def _authorize(session: AsyncSession, token: str) -> AuthenticatedPrincipal | None:
@@ -478,22 +591,14 @@ async def event_stream(
     try:
         yield _frame(event=event_types.STREAM_OPEN, data={"type": event_types.STREAM_OPEN, "from": cursor, "at": now_z()})
 
-        async with factory() as session:
-            status = await store.audit_cursor_status(session, cursor)
-            oldest = await store.oldest_audit_event_id(session) if status != store.CURSOR_OK else None
-        if status != store.CURSOR_OK:
-            # Announced before a single event is delivered. Delivering first and
-            # mentioning the gap later would let a client act on a partial view
-            # believing it was continuous.
-            yield _frame(
-                event=event_types.STREAM_GAP,
-                data={
-                    "type": event_types.STREAM_GAP,
-                    "reason": status,
-                    "from": cursor,
-                    "oldestAvailableId": oldest,
-                },
-            )
+        # Computed on the first poll rather than before the loop, because the
+        # answer is scoped to the principal and the principal is resolved inside
+        # the loop. That ordering is not merely convenient: the gap block names
+        # positions in the caller's own feed, so producing it before the token
+        # was re-checked would have been a read performed for a credential this
+        # generator had not yet verified.
+        pending_gap: dict | None = None
+        first_poll = True
 
         while True:
             if is_disconnected is not None and await is_disconnected():
@@ -505,6 +610,8 @@ async def event_stream(
                 if principal is None:
                     closed_reason = "unauthenticated"
                     break
+                if first_poll:
+                    _status, pending_gap = await _gap_for(session, principal, cursor)
                 projects = _narrow_projects(principal, requested_projects)
                 # The cursor advances past every row this poll *loaded*, not
                 # just the ones a type filter kept. Advancing only past
@@ -517,6 +624,17 @@ async def event_stream(
                     after=cursor,
                     limit=batch_limit,
                 )
+
+            if first_poll:
+                first_poll = False
+                if pending_gap is not None:
+                    # Announced before a single event is delivered. Delivering
+                    # first and mentioning the gap later would let a client act
+                    # on a partial view believing it was continuous.
+                    yield _frame(
+                        event=event_types.STREAM_GAP,
+                        data={"type": event_types.STREAM_GAP, **pending_gap},
+                    )
 
             for event in events:
                 yield _frame(event=event.type, data=event.as_dict(), event_id=event.id)
@@ -558,7 +676,7 @@ async def event_stream(
 @router.get("/events/stream", tags=["events"])
 async def stream_events(
     request: Request,
-    after: int | None = Query(default=None, ge=0),
+    after: int | None = Query(default=None, ge=0, le=MAX_EVENT_ID),
     project: list[str] | None = Query(default=None),
     type: list[str] | None = Query(default=None),  # noqa: A002 - the contract's parameter name
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
@@ -583,7 +701,10 @@ async def stream_events(
     wanted = _requested_types(type)
     resume = _resume_from(last_event_id, after)
 
-    slot = stream_slots.acquire()
+    # Keyed by user id, not by token: two tokens for one account are one
+    # account's share, and a client that reconnects with a fresh token must not
+    # be able to double its allowance by doing so.
+    slot = stream_slots.acquire(principal.user_id)
     try:
         body = event_stream(
             factory=session_factory(),

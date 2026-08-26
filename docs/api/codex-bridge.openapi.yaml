@@ -2144,6 +2144,7 @@ paths:
         '400': {$ref: '#/components/responses/ValidationFailed'}
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/PermissionDenied'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
 
@@ -2177,9 +2178,16 @@ paths:
         ```
 
         `stream.closed` carries a `reason`: `max_duration` (the server bounds
-        how long one connection lives — reconnect), `unauthenticated` (the
-        credential stopped being usable) or `disconnected`. Every ending is a
-        reconnect with `Last-Event-ID`, which is exact.
+        how long one connection lives — reconnect) or `unauthenticated` (the
+        credential stopped being usable while the stream was open). Those are
+        the only two, and both are a reconnect with `Last-Event-ID`, which is
+        exact.
+
+        A stream that ends because the **client** went away sends no frame at
+        all — there is nothing listening to send it to. A client must therefore
+        treat a body that simply ends as an ordinary ending and reconnect from
+        its last id, exactly as it would after `stream.closed`; it must not wait
+        for a closing frame that is not coming.
 
         ## Resume
 
@@ -2294,12 +2302,13 @@ paths:
         '400': {$ref: '#/components/responses/ValidationFailed'}
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/PermissionDenied'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
         '503':
           description: |
             The gateway is already holding as many event streams open as it
-            will. Retry after the interval in `Retry-After`, with
+            will, or this account already has as many open as it may. Retry after the interval in `Retry-After`, with
             `Last-Event-ID`; nothing is lost by waiting.
           headers:
             X-Request-Id:
@@ -2599,7 +2608,7 @@ paths:
                 application: codex-bridge-gateway
                 applicationVersion: '0.1.0'
                 apiVersions: [v1]
-                contractVersion: '1.3.0'
+                contractVersion: '1.8.0'
                 buildRevision: b76a391
                 capabilities:
                   errorEnvelope: true
@@ -4338,9 +4347,10 @@ components:
           description: |
             On `stream.gap`, an `EventGap.reason`. On `stream.closed`, why the
             server ended the stream: `max_duration` (the server bounds how long
-            one connection lives), `unauthenticated` (the credential stopped
-            being usable while the stream was open) or `disconnected`. Every
-            one of them is a reconnect with `Last-Event-ID`.
+            one connection lives) or `unauthenticated` (the credential stopped
+            being usable while the stream was open). Both are a reconnect with
+            `Last-Event-ID`. A stream the client itself dropped produces no
+            frame — see `GET /api/v1/events/stream`.
         oldestAvailableId:
           type: [integer, 'null']
           format: int64

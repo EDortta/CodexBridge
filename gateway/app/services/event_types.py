@@ -9,7 +9,7 @@ Three rules shape everything below.
 
 ## 1. The row is internal; the event is public
 
-`AuditEventModel.payload_json` is written by eleven call sites that were never
+`AuditEventModel.payload_json` is written by thirty-one call sites that were never
 audited for what they may contain. It carries `actor_email`, `requested_by_email`,
 free-text `reason` and `error` strings from an executor, and `context` blobs.
 `docs/api/README.md`'s "Fields that must never ship" applies to every byte of it,
@@ -75,6 +75,9 @@ asserts `classify` can never return one.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from gateway.app.services.issue_types import EPIC_STATUSES, ISSUE_PRIORITIES, ISSUE_STATUSES
+from shared.protocol import ApprovalDecision, TaskState
 
 
 # Entity types whose rows carry a `project_id` this stream can authorize against.
@@ -233,22 +236,57 @@ def classify(audit_event_type: str, payload: dict) -> tuple[str, str] | None:
 # Summaries — the only place a stored payload is read
 # --------------------------------------------------------------------------
 
-# Payload keys that are safe to echo verbatim, per key, because their values are
-# server-generated enums rather than free text: a `TaskState`, a control name, an
-# `ApprovalDecision`, an issue status. Free text (`error`, `reason`) is read only
-# through `redact`, and `actor_email` / `requested_by_email` are read by nothing.
-_ENUM_KEYS = frozenset({"state", "control", "decision", "outcome", "status", "priority"})
+# Payload keys whose values are echoed, and the **closed set each one may take**.
+#
+# The first cut of this module keyed on the name alone and returned any non-empty
+# string, on the stated premise that these values "are server-generated enums
+# rather than free text". That premise was false for two of them, and the council
+# reproduced it end to end (round 1, the adversarial user): `control` and `state`
+# on a `task.control_acknowledged` / `task.ack_refused` row come straight from an
+# executor's `task.ack` frame — `gateway/app/main.py` reads
+# `envelope.payload.get("control")` and `.get("state")` with no validation, and
+# the `invalid_state` branch deliberately records the very string it just refused
+# as a `TaskState`. A connected executor could therefore put a filesystem path, an
+# internal `host:port`, a `Bearer` value or a 200 KB blob into a mobile
+# notification line, past every guard in this module.
+#
+# Membership, not redaction, is the fix. `redact` strips the patterns it knows;
+# a closed set admits only the values this system actually defines, so a value
+# nobody defined cannot be echoed at all whatever it contains. That is the
+# fail-closed direction (`design-standards.md` §6) and it bounds the length for
+# free, because every member is short by construction.
+_ENUM_VOCABULARIES: dict[str, frozenset[str]] = {
+    # Every `TaskState`. The one enum a client is most likely to switch on.
+    "state": frozenset(state.value for state in TaskState),
+    # The controls `routes/sessions.py` dispatches, plus the cancel path that
+    # `main.py` acknowledges under its own audit type.
+    "control": frozenset({"pause", "resume", "restart", "cancel"}),
+    # `decision` and `outcome` are both an `ApprovalDecision`; they differ only
+    # in which writer chose the key.
+    "decision": frozenset(decision.value for decision in ApprovalDecision),
+    "outcome": frozenset(decision.value for decision in ApprovalDecision),
+    "status": EPIC_STATUSES | ISSUE_STATUSES,
+    "priority": ISSUE_PRIORITIES,
+}
 
 
 def _enum(payload: dict, key: str, default: str = "unknown") -> str:
-    """One enum-ish payload value, defended against a non-string.
+    """One closed-vocabulary payload value, or `default` for anything else.
 
-    `payload_json` is JSON this process wrote, but it is also years of rows on
-    disk and a `null` there must not become the string "None" in a client's UI.
+    Anything else means: a missing key, a non-string, an empty string, and — the
+    case that matters — a string this system does not define. `payload_json` is
+    years of rows on disk written by many call sites, and one of those call sites
+    records unvalidated executor text; a value that is not in the vocabulary is
+    not a value this endpoint may repeat.
     """
-    assert key in _ENUM_KEYS, f"{key!r} is not an enum payload key; free text needs redact()"
+    allowed = _ENUM_VOCABULARIES.get(key)
+    if allowed is None:
+        # Not an assert: `python -O` strips those, and a guard that disappears
+        # under a flag is not a guard. An unknown key yields the default, which
+        # is the same fail-closed answer with no way to switch it off.
+        return default
     value = payload.get(key)
-    return value if isinstance(value, str) and value else default
+    return value if isinstance(value, str) and value in allowed else default
 
 
 def _free_text(payload: dict, key: str, redact) -> str | None:
@@ -414,5 +452,17 @@ def actor_of(payload: dict) -> str | None:
 
 
 def state_of(payload: dict) -> str | None:
+    """The entity's state, or None when the row does not record a defined one.
+
+    Checked against `TaskState` for the same reason `_enum` is, and it is the
+    same defect: `main.py`'s `invalid_state` branch records the executor's raw
+    `state` string — the one the gateway just refused *because* it is not a
+    `TaskState` — and this field was echoing it verbatim into a response body.
+    None rather than "unknown" here, because `state` is omitted from the event
+    when absent and a client switching on it must not be handed a value that is
+    not in the enum it was given.
+    """
     value = payload.get("state")
-    return value if isinstance(value, str) and value else None
+    if not isinstance(value, str) or value not in _ENUM_VOCABULARIES["state"]:
+        return None
+    return value

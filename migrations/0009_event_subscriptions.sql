@@ -26,9 +26,10 @@ create table if not exists notification_preferences (
   -- JSON list of MobileEventType values, validated against the closed
   -- vocabulary in gateway/app/services/event_types.py before it is written.
   event_types_json text not null default '[]',
-  -- Recorded intent only. This build has no push transport and
-  -- `GET /api/version` reports `pushNotifications: false`; nothing reads this
-  -- column to decide delivery. See gateway/app/api/routes/notifications.py.
+  -- Recorded intent only. This build has no push transport, and nothing reads
+  -- this column to decide delivery. The client is told so by
+  -- `pushDeliveryAvailable` in the preferences response body; `GET /api/version`
+  -- has no push capability flag. See gateway/app/api/routes/notifications.py.
   push_enabled boolean not null default false,
   updated_at timestamptz not null
 );

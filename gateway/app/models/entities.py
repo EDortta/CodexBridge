@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from gateway.app.db.base import Base
@@ -203,6 +203,18 @@ class TaskLogModel(Base):
 
 
 class AuditEventModel(Base):
+    # Declared in the model as well as in `migrations/0009_event_subscriptions.sql`
+    # so a **fresh** install gets it: `main.py` bootstraps a new database with
+    # `Base.metadata.create_all`, which knows nothing about the migrations
+    # directory, so an index that lived only in SQL would exist on upgraded
+    # deployments and be missing on new ones — the harder of the two to notice,
+    # because it is the one nobody ran a migration for (council round 1, the
+    # second caller). `create_all(checkfirst=True)` does not add an index to a
+    # table that already exists, which is exactly why 0009 has to carry it too.
+    __table_args__ = (
+        Index("audit_events_entity_type_id_idx", "entity_type", "id"),
+    )
+
     __tablename__ = "audit_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -216,8 +228,10 @@ class AuditEventModel(Base):
 class NotificationPreferenceModel(Base):
     """Which events one actor wants to be notified about — issue #13.
 
-    Recorded intent, not a delivery mechanism. This build has no push transport
-    (`GET /api/version` reports `pushNotifications: false`), and these rows do
+    Recorded intent, not a delivery mechanism. This build has no push transport —
+    reported to the client as `pushDeliveryAvailable: false` in the preferences
+    body, not by `GET /api/version`, whose `capabilities` map has no push key —
+    and these rows do
     **not** filter `GET /api/v1/events/stream`: a client that subscribed to the
     stream asked for the stream, and silently withholding events from it because
     of a preference set on another device is how a mobile client misses a
