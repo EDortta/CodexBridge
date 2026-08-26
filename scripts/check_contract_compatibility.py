@@ -194,6 +194,9 @@ class _Facts:
 
     def __init__(self, document: dict) -> None:
         self.facts: dict[str, tuple[str, Any]] = {}
+        #: Kept so a `$ref` can be resolved where the *reference site* is what
+        #: changed. See `_parameter`.
+        self.root = document
         self._document(document)
 
     def _emit(self, pointer: str, kind: str, value: Any = None) -> None:
@@ -302,10 +305,19 @@ class _Facts:
         if keyed:
             reference = parameter.get("$ref")
             if isinstance(reference, str):
-                # A `$ref` parameter carries neither name nor `in` here; the
-                # reference string is its identity, and its `required` lives on
-                # the component, which is walked separately.
-                self._emit(f"{parent}.parameters[{reference}]", "parameter", False)
+                # A `$ref` parameter carries neither name nor `in` here, so the
+                # reference string is its identity. Its `required` is resolved
+                # from the component rather than assumed `False`: council round
+                # 2 showed that pointing an existing operation at an
+                # already-required component parameter — `IfMatch`, say —
+                # passed in silence, because the component itself had not
+                # changed and the reference site claimed nothing was required.
+                # 41 of the 90 operation parameters in this contract are `$ref`s.
+                self._emit(
+                    f"{parent}.parameters[{reference}]",
+                    "parameter",
+                    self._component_parameter_is_required(reference),
+                )
                 return
             name = parameter.get("name")
             location = parameter.get("in")
@@ -317,6 +329,16 @@ class _Facts:
             pointer = parent
         self._emit(pointer, "parameter", bool(parameter.get("required")))
         self._schema(parameter.get("schema"), f"{pointer}.schema")
+
+    def _component_parameter_is_required(self, reference: str) -> bool:
+        """`required` of the component a parameter `$ref` points at."""
+        prefix = "#/components/parameters/"
+        if not reference.startswith(prefix):
+            return False
+        component = (self.root.get("components") or {}).get("parameters", {}).get(
+            reference[len(prefix):]
+        )
+        return bool(isinstance(component, dict) and component.get("required"))
 
     def _header(self, header: Any, pointer: str) -> None:
         if not isinstance(header, dict):
@@ -501,10 +523,23 @@ def _additions(before: dict, after: dict) -> Iterator[Finding]:
             # Born inside something that is itself new: nothing existed to
             # tighten. Applies to a new *required parameter* too — required on
             # an endpoint no client has ever called constrains nobody.
-            # `test_a_compatible_change_is_left_alone[add_an_endpoint_with_a_required_constrained_parameter]`
-            # is what keeps this branch honest.
+            # `test_a_compatible_change_is_left_alone[add_a_realistic_endpoint]`
+            # is what keeps this branch honest: it carries a required path
+            # parameter, a constrained query parameter, a required request body
+            # and a response `required`, all at once.
             continue
-        if kind == "unmodelled":
+        if kind == "requestBody" and value:
+            # An existing operation that starts demanding a body. Council round
+            # 2: 28 of the 40 operations here carry none today, and every
+            # existing caller of one that gains a required body starts getting
+            # 4xx. The `required` *inside* its schema is suppressed above —
+            # the media type is new — so without this branch the whole change
+            # was silent.
+            yield pointer, (
+                "this operation now requires a request body where it accepted "
+                "none. Existing callers send nothing and start failing."
+            )
+        elif kind == "unmodelled":
             yield pointer, (
                 f"this schema uses restriction keyword(s) this gate does not "
                 f"model, so it abstained rather than approving: {value}. Review "
@@ -602,12 +637,19 @@ def _changes(before: dict, after: dict) -> Iterator[Finding]:
                     "omits this field silently gets different behaviour."
                 )
         elif kind == "unmodelled":
-            yield pointer, (
-                f"this schema uses restriction keyword(s) this gate does not "
-                f"model, so it abstained rather than approving: {new}. Review "
-                "the change against docs/api/README.md §\"What is a breaking "
-                "change\" by hand."
-            )
+            # Only on a *change*. Yielding unconditionally would make the first
+            # `readOnly: true` anywhere in the contract a permanent red build,
+            # since the keyword would still be there tomorrow — and a gate that
+            # cannot be made green by fixing the thing it complains about is a
+            # gate that gets deleted. Council round 2 flagged this before it
+            # could happen: no such keyword is in the contract today.
+            if old != new:
+                yield pointer, (
+                    f"this schema's unmodelled restriction keyword(s) changed, "
+                    f"and this gate does not compare them, so it abstained "
+                    f"rather than approving: {new}. Review by hand against "
+                    "docs/api/README.md §\"What is a breaking change\"."
+                )
         elif kind == "ceiling":
             if _lt(new, old):
                 yield pointer, f"ceiling lowered from {old!r} to {new!r}."

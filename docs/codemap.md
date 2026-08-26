@@ -5,7 +5,7 @@
 
 ## Summary
 
-- 100 file(s) · 955 symbol(s) indexed
+- 100 file(s) · 959 symbol(s) indexed
 - Languages: config (2), python (96), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -716,6 +716,8 @@ tests/
 - `change_a_default(document)` — "A client that omits the field gets different behaviour and no error."
 - `rename_a_server_variable(document)` — "`servers` was not walked at all; every generated client embeds it."
 - `add_a_required_parameter_to_a_path_item(document)` — "Path-item parameters apply to every operation under the path."
+- `demand_a_request_body_where_there_was_none(document)` — "An operation that starts requiring a body every existing caller omits."
+- `point_an_operation_at_a_required_component_parameter(document)` — "A `$ref` to an already-required component parameter, added to an operation."
 - `use_a_restriction_keyword_the_gate_does_not_model(document)` — "The tripwire: abstaining loudly beats abstaining silently."
 - `test_a_breaking_change_is_caught_and_named(baseline, mutate)` — "Every rule in §"What is a breaking change" that a schema diff can see."
 - `add_an_endpoint(document)`
@@ -751,6 +753,8 @@ tests/
 - `test_the_codemap_names_every_module_it_claims_to_index()` — "`.docs/agents/programmer.md` tells the next agent to read this instead of scanning."
 - `test_the_api_readme_does_not_deny_the_limiter_that_ships(denial)` — "§"Rate limiting — vocabulary only, so far" outlived the wiring."
 - `test_the_api_readme_does_not_deny_the_publication_machinery_that_ships(denial)` — "§"Getting the contract to the mobile repository" described its own absence."
+- `test_the_testing_doc_counts_the_gates_that_exist()` — "`docs/api/testing.md` enumerates the gates; the enumeration must be true."
+- `test_the_contract_docs_do_not_deny_what_ships(denial)` — "Sentences that were false when written, pinned so they cannot come back."
 
 ### `tests/contract/test_openapi_document.py`
 

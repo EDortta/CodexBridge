@@ -488,6 +488,64 @@ def add_a_required_parameter_to_a_path_item(document: dict) -> str:
     return f"paths[{path}].{method}.parameters[tenantId:query]"
 
 
+def demand_a_request_body_where_there_was_none(document: dict) -> str:
+    """An operation that starts requiring a body every existing caller omits.
+
+    Council round 2. 28 of the 40 operations in this contract carry no request
+    body, and the `required` *inside* a newly added body is correctly suppressed
+    — the media type is new — so without a rule for the body itself the whole
+    change was silent.
+    """
+    for path, item in document["paths"].items():
+        for method, operation in item.items():
+            if method in checker.OPERATIONS and "requestBody" not in operation:
+                operation["requestBody"] = {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["reason"],
+                                "properties": {"reason": {"type": "string"}},
+                            }
+                        }
+                    },
+                }
+                return f"paths[{path}].{method}.requestBody"
+    pytest.skip("every operation in the contract already has a request body")
+
+
+def point_an_operation_at_a_required_component_parameter(document: dict) -> str:
+    """A `$ref` to an already-required component parameter, added to an operation.
+
+    Council round 2: the reference site claimed nothing was required and the
+    component itself had not changed, so nothing fired — while every existing
+    caller of that operation now omits a required header. 41 of the 90 operation
+    parameters in this contract are `$ref`s.
+    """
+    required = next(
+        (
+            name
+            for name, entry in document["components"]["parameters"].items()
+            if isinstance(entry, dict) and entry.get("required")
+        ),
+        None,
+    )
+    if required is None:
+        pytest.skip("no component parameter is declared required")
+    reference = f"#/components/parameters/{required}"
+    for path, item in document["paths"].items():
+        for method, operation in item.items():
+            if method not in checker.OPERATIONS:
+                continue
+            existing = operation.get("parameters") or []
+            if any(p.get("$ref") == reference for p in existing if isinstance(p, dict)):
+                continue
+            operation["parameters"] = [*existing, {"$ref": reference}]
+            return f"paths[{path}].{method}.parameters[{reference}]"
+    pytest.skip("every operation already references that parameter")
+
+
 def use_a_restriction_keyword_the_gate_does_not_model(document: dict) -> str:
     """The tripwire: abstaining loudly beats abstaining silently.
 
@@ -522,6 +580,9 @@ BREAKING: list[Callable[[dict], str]] = [
     rename_a_server_variable,
     add_a_required_parameter_to_a_path_item,
     use_a_restriction_keyword_the_gate_does_not_model,
+    # Added in council round 2; both were green after round 1.
+    demand_a_request_body_where_there_was_none,
+    point_an_operation_at_a_required_component_parameter,
 ]
 
 

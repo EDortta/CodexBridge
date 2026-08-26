@@ -25,6 +25,7 @@ from gateway.app.main import app
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 API_README = REPO_ROOT / "docs" / "api" / "README.md"
+API_TESTING = REPO_ROOT / "docs" / "api" / "testing.md"
 CODEMAP = REPO_ROOT / "docs" / "codemap.md"
 
 
@@ -205,3 +206,87 @@ def test_the_api_readme_does_not_deny_the_publication_machinery_that_ships(denia
         f"docs/api/README.md still says {denial!r}, while contract/ publishes "
         f"{published} and both contract scripts exist"
     )
+
+
+def _contract_test_files() -> list[str]:
+    return sorted(
+        path.name for path in (REPO_ROOT / "tests" / "contract").glob("test_*.py")
+    )
+
+
+def test_the_testing_doc_counts_the_gates_that_exist() -> None:
+    """`docs/api/testing.md` enumerates the gates; the enumeration must be true.
+
+    Council round 1: the heading said "The four gates" over a five-row table
+    while `tests/contract/` held six files, and the one missing from both it and
+    `README.md` was `test_proxy_routes.py` — which is also the gate the same
+    document went on to deny existed. A count is the cheapest thing in a
+    document to leave behind, and this file is `docs/required-reading.md`'s
+    **obrigatório** reading for anyone touching the contract.
+    """
+    files = _contract_test_files()
+    prose = " ".join(API_TESTING.read_text(encoding="utf-8").split())
+    spelled = {4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight"}[len(files)]
+
+    assert f"## The {spelled} gates" in prose, (
+        f"tests/contract/ holds {len(files)} gate files {files}, and "
+        f"docs/api/testing.md does not say \"The {spelled} gates\". Update the "
+        "heading and the table together."
+    )
+    missing = [name for name in files if name not in prose]
+    assert not missing, (
+        f"docs/api/testing.md's gate table does not name {missing}. A reader "
+        "uses it as the enumeration it claims to be."
+    )
+
+
+@pytest.mark.parametrize(
+    "denial",
+    [
+        # Said while `test_proxy_routes.py` asserted precisely the opposite.
+        "end-to-end reachability of a contracted route is not verified by this repository's tests.**",
+        # Cited the Incus edge, retired 2026-08-10, as the live front door.
+        "the nginx edge in `deploy/incus/` decides separately what it forwards",
+        # Claimed an immutability `publish()` does not provide.
+        "editing `contract/1.6.0/…` in place fails rather than quietly rewriting what a client already pinned. Ship a new version instead.",
+        # Claimed the mobile repository already consumes the artifact.
+        "`EDortta/CodexBridgeMobile` fetches that directory and verifies the digest",
+    ],
+)
+def test_the_contract_docs_do_not_deny_what_ships(denial: str) -> None:
+    """Sentences that were false when written, pinned so they cannot come back.
+
+    Same mechanism as the rate-limiter denials above and the same reason: each
+    of these was a statement about machinery, in the document a contract author
+    or the mobile team reaches for first, that the code contradicted.
+
+    Preconditions asserted, not assumed — a denial is only stale while the thing
+    it denies is really there.
+    """
+    assert (REPO_ROOT / "tests" / "contract" / "test_proxy_routes.py").is_file()
+    assert (REPO_ROOT / "deploy" / "nginx").is_dir(), "the live vhosts moved"
+    assert "RETIRED" in (
+        REPO_ROOT / "deploy" / "incus" / "codexbridge_edge_proxy.py"
+    ).read_text(encoding="utf-8")[:200]
+
+    for document in _contract_prose_documents():
+        prose = " ".join(document.read_text(encoding="utf-8").split())
+        assert denial not in prose, (
+            f"{document.relative_to(REPO_ROOT)} still says {denial!r}, and it is "
+            "not true of the code in this commit."
+        )
+
+
+def _contract_prose_documents() -> list[Path]:
+    """Every document that describes the contract machinery in prose.
+
+    Council round 2: the denial loop covered `README.md` and `testing.md`, and
+    the issue's own `RESUME.md` — added by the same commit that retired those
+    sentences — reinstated one of them (`deploy/incus/`) plus stale test counts.
+    A handoff note is the first thing the next agent reads; leaving it outside
+    the gate that polices the other two is the asymmetric-robustness shape
+    `design-standards.md` §3 warns about.
+    """
+    documents = [API_README, API_TESTING]
+    documents += sorted((REPO_ROOT / "docs" / "issues").rglob("RESUME.md"))
+    return documents

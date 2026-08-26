@@ -119,7 +119,11 @@ The public namespace is `/api/v1`.
   compares the working document against the published copy of that version and
   fails the build on any change the next section forbids. Raising the floor
   drops the promise to every client still on the older pin, and needs the same
-  conversation with the mobile team that a deprecation does.
+  conversation with the mobile team that a deprecation does — so it must be the
+  oldest published version unless `x-minimum-supported-version-raised` records
+  why not, naming the mobile release that stopped using it. That is not
+  bureaucracy: raising the floor is also the cheapest way to silence this gate
+  permanently, and a one-line diff should not be able to do that unremarked.
 
 What is enforced, and what is still on trust: the digest of a published version
 is enforced (a version edited after publication fails
@@ -151,10 +155,27 @@ stop working because of it:
 - renaming anything, in either direction;
 - narrowing a type, tightening a constraint (`maxLength`, `pattern`, `required`),
   or making an optional request field required;
+- **a field of a *response* leaving that schema's `required` list.** A generated
+  client makes a required field non-nullable and reads it unconditionally, so
+  "it might not be there now" breaks it. On a request-only schema the same edit
+  is a relaxation — the gate reports both and names the direction, because a
+  JSON pointer cannot tell which a shared schema is, and most here are shared;
+- **changing a `default`.** A client that omits the field gets different
+  behaviour with no code change on either side and no error to notice;
+- **changing which credential an operation accepts** — a different scheme, or a
+  scope a client's token does not carry. An endpoint that stops being
+  unauthenticated is the same rule at its limit;
+- **requiring a request body where the operation accepted none**, or pointing an
+  operation at an already-required component parameter;
 - changing the meaning of an existing field while keeping its name and type
   — the most dangerous kind, because no schema diff catches it;
 - changing the HTTP status or the `code` returned for an existing failure;
 - changing default sort order, or the identity/lifetime of a pagination cursor.
+
+The five bold rules were added by issue #14 alongside the gate that enforces
+them. They were always true; nothing stated them, so nothing could be held to
+them. `scripts/check_contract_compatibility.py` transcribes **this** list, and
+`docs/api/testing.md` records which of these it can and cannot see.
 
 ### What is not breaking
 
@@ -1228,9 +1249,10 @@ are in **[`testing.md`](./testing.md)**.
 publishes a pinnable, checksummed artifact and refuses to let it drift.
 `EDortta/CodexBridgeMobile` does **not** consume it yet: it has no `contract/`
 directory, fetches nothing, verifies no digest, and still cites this document by
-hand. The artifact also has not reached `main`, which carries no `docs/api/` at
-all — `development` is where it lives today. Nothing here is a pin until the
-mobile build does the verifying, and that is a change in the other repository.
+hand. And **no branch carries `contract/` yet** — not `development`, and `main`
+has no `docs/api/` at all; it exists only on the branch that introduced it.
+Nothing here is a pin until this work merges *and* the mobile build does the
+verifying, and the second half is a change in the other repository.
 
 `tests/contract/test_published_contract_artifact.py` fails when the published
 copy falls behind the document, and separately when a version that was already

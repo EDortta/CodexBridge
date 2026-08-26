@@ -1,0 +1,221 @@
+{
+  "round": 1,
+  "triggers": ["shared-contract", "adds-not-validated-claim"],
+  "lenses": ["sweep skeptic", "claim auditor", "second caller"],
+  "findings": [
+    {
+      "lens": "sweep skeptic",
+      "trigger": "add a new endpoint carrying a required query parameter with pattern/maxLength; add a new optional request field with maxLength+pattern; add a new optional response field with a pattern",
+      "wrong_outcome": "the gate fails all three, and README section \"What is not breaking\" lists all three by name. _additions keyed off pointer novelty and never asked whether the parent property/parameter/endpoint was also new",
+      "location": "scripts/check_contract_compatibility.py:345-368 (_additions); the self-test that missed it, tests/contract/test_contract_compatibility.py:400-407 add_an_endpoint",
+      "evidence": "reproduction /tmp/gh14/m6.py cases 12-14: REPORTED paths[/api/v1/widgets].get.parameters[projectId:query] a new *required* parameter; ...schema.maxLength; ...schema.pattern; ...responses[200]...required",
+      "closure": "scripts/check_contract_compatibility.py _new_addressables + the ancestor suppression in _additions; tests/contract/test_contract_compatibility.py::add_a_realistic_endpoint (path param + constrained query param + required body + response required). Verified 0 findings against the real feature/gh-11 and feature/gh-13 documents, down from 31 and 21"
+    },
+    {
+      "lens": "sweep skeptic",
+      "trigger": "/ready answers 503 with an extra top-level field such as a server filesystem path",
+      "wrong_outcome": "skipped, not failed: schema.get('properties') is None for every {$ref} or {allOf} response, and the guard read that as 'not a described JSON object'. Every error shape in the contract is one of those two",
+      "location": "tests/contract/test_declared_examples_are_real.py:304-307",
+      "evidence": "reproduction /tmp/gh14/skipdemo.py: 'SKIPPED -> /ready 503 is not a described JSON object'; of 8 declared responses on the drivable operations only the 3 inline 200s ran",
+      "closure": "_declared_properties resolves $ref and unions allOf branches; test_the_undeclared_field_check_is_not_skipping_everything added as the third anti-vacuity guard"
+    },
+    {
+      "lens": "sweep skeptic",
+      "trigger": "break components.schemas.Error.examples[0] to {\"code\":\"invented_code\",\"message\":123}",
+      "wrong_outcome": "green. _example_cases walked only paths.*.*.responses.*.content.*, reaching 5 of 24 declared example values, while README and testing.md both told the mobile team every example was checked",
+      "location": "tests/contract/test_declared_examples_are_real.py:120-142; claims at docs/api/README.md:92 and docs/api/testing.md:149-158",
+      "evidence": "reproduction /tmp/gh14/ex.py: 'EXAMPLE_CASES found by _example_cases(): 5' vs 'independent scan, every declared example VALUE: 24'; after breaking Error.examples[0]: 'broken value present? False'",
+      "closure": "_example_cases now walks the three shapes an example takes (media-type object, schema examples list, header/parameter example) across paths and components; 24 parametrized cases collected, 0 skipped"
+    },
+    {
+      "lens": "sweep skeptic",
+      "trigger": "swap security: [{bearerAuth: []}] to [{oauth2: ['admin']}] on one operation, or add a scope to all 35 authenticated operations",
+      "wrong_outcome": "green in both. _operation reduced the whole security block to one boolean, operation.get('security') == []. Every existing bearer token stops working",
+      "location": "scripts/check_contract_compatibility.py:187-192",
+      "evidence": "reproduction /tmp/gh14/m1.py cases 2 and 2b: *** NO FINDINGS (gate green) ***, mutated ops: 35",
+      "closure": "a securityRequirements fact carrying the canonical requirement set; test swap_the_credential_an_operation_accepts"
+    },
+    {
+      "lens": "sweep skeptic",
+      "trigger": "append {maxLength: 4} to components.schemas.ProjectId.allOf",
+      "wrong_outcome": "green. _changes reported only old - new for composition, so a set that only gains members never fired; every project identifier in the contract is silently truncated",
+      "location": "scripts/check_contract_compatibility.py:297-305 and :404-407",
+      "evidence": "reproduction /tmp/gh14/m4.py cases 7b and 7c: *** NO FINDINGS (gate green) ***. Control 7a (edit inside a branch) did report",
+      "closure": "additions to an allOf now report (allOf is an AND); oneOf/anyOf still widen. Test add_a_branch_to_an_all_of"
+    },
+    {
+      "lens": "sweep skeptic",
+      "trigger": "components.parameters.Limit.schema.default: 50 -> 1, or delete it",
+      "wrong_outcome": "green in both. A client that omits limit silently gets a different page size; same invisible behavioural flip the README names for default sort order",
+      "location": "scripts/check_contract_compatibility.py:255-312, `default` never read",
+      "evidence": "reproduction /tmp/gh14/m1.py cases 5 and 5b: *** NO FINDINGS (gate green) ***; 5 default sites in the document",
+      "closure": "a default fact, reported on change and on removal; test change_a_default"
+    },
+    {
+      "lens": "sweep skeptic",
+      "trigger": "rename the server variable host -> hostname, or delete servers entirely",
+      "wrong_outcome": "green in both, while README says 'renaming anything, in either direction' is breaking and every generated client embeds the server variable",
+      "location": "scripts/check_contract_compatibility.py:157-181, _document read only paths and components",
+      "evidence": "reproduction /tmp/gh14/m1.py cases 4 and 4b: *** NO FINDINGS (gate green) ***",
+      "closure": "_servers walks server urls and variables, keyed by url template so reordering is not a rename; test rename_a_server_variable"
+    },
+    {
+      "lens": "sweep skeptic",
+      "trigger": "(a) add a required path-item-level parameter to /api/v1/projects; (b) hoist that path's five GET parameters up to the path item, a pure refactor",
+      "wrong_outcome": "(a) green on a new required parameter; (b) five phantom 'this parameter was removed or renamed' findings, after which those parameters are permanently outside the walker",
+      "location": "scripts/check_contract_compatibility.py:157-166",
+      "evidence": "reproduction /tmp/gh14/m1.py case 1 *** NO FINDINGS ***; case 1b reported 5 removals including parameters[#/components/parameters/Cursor]",
+      "closure": "path-item parameters are inherited into every operation under the path; tests add_a_required_parameter_to_a_path_item (breaking) and hoist_parameters_to_the_path_item (compatible)"
+    },
+    {
+      "lens": "sweep skeptic",
+      "trigger": "hoist a request body into components.requestBodies and $ref it, then set maxLength: 8 on a field there",
+      "wrong_outcome": "the hoist reports 3 phantom removals and the tightening that follows is invisible; _document dispatched only schemas/parameters/responses/headers",
+      "location": "scripts/check_contract_compatibility.py:168-181",
+      "evidence": "reproduction /tmp/gh14/m4.py cases 9 and 9b printed identical output, with no mention of maxLength",
+      "closure": "components.requestBodies content is walked. Latent in this contract (no entry today), so covered by the walker rather than by a mutation of its own -- recorded as a residual in RESUME.md"
+    },
+    {
+      "lens": "sweep skeptic",
+      "trigger": "components.schemas.Error gains dependentRequired: {code: [details]}; Error.properties.message gains readOnly: true",
+      "wrong_outcome": "green on both. Also never read: prefixItems, contains, uniqueItems, multipleOf, propertyNames, patternProperties, not, if/then/else, dependentSchemas, writeOnly, discriminator",
+      "location": "scripts/check_contract_compatibility.py:255-312",
+      "evidence": "reproduction /tmp/gh14/m4.py cases 10 and 10b: *** NO FINDINGS (gate green) ***",
+      "closure": "UNMODELLED_RESTRICTIONS tripwire: an unmodelled restriction keyword makes the gate fail saying it abstained rather than approving. Test use_a_restriction_keyword_the_gate_does_not_model"
+    },
+    {
+      "lens": "sweep skeptic",
+      "trigger": "read the two published limitation lists side by side",
+      "wrong_outcome": "the module docstring says 'Four classes' then lists five bullets, one of which is not a class that passes at all; testing.md repeats 'Four classes', lists four, and drops the securitySchemes bullet, so the mobile-facing document admits fewer gaps than the code does",
+      "location": "scripts/check_contract_compatibility.py:23-46; docs/api/testing.md:130-142",
+      "evidence": "bullet count 5 under a heading saying 4; grep -n 'Four classes|securitySchemes' docs/api/testing.md returns only line 133 with no securitySchemes bullet",
+      "closure": "both lists rewritten to the same shape and the same content: three silent classes, two imprecise-not-silent, one that fails loudly, plus the one still uncompared (securitySchemes contents)"
+    },
+    {
+      "lens": "claim auditor",
+      "trigger": "a pull request removes a name from any response schema's required list, e.g. Actor.required loses id",
+      "wrong_outcome": "exit 0, 'No breaking change'. A generated client makes a required field non-nullable and reads it unconditionally. Worse, the COMPATIBLE fixture drop_a_required_request_field mutates Actor, which is response-only, so the matrix certified the break as compatible",
+      "location": "scripts/check_contract_compatibility.py:336-342 (_removals) and :400-403 (_changes); false certification at tests/contract/test_contract_compatibility.py:443-448 and :459",
+      "evidence": "'=== compat: response schema loses a required field (Actor.id) === No breaking change ... exit=0'; and 'FIRST schema with required: Actor -> [kind, id]', Actor appearing only at docs/api/codex-bridge.openapi.yaml:312 inside a 200 body",
+      "closure": "required removals are reported, with the direction named so a reviewer can say whether the schema is request-only; the bogus fixture is deleted and replaced by the breaking mutation stop_requiring_a_response_field"
+    },
+    {
+      "lens": "claim auditor",
+      "trigger": "read section \"Getting the contract to the mobile repository\" to decide whether the document <-> mobile client pair is now guarded",
+      "wrong_outcome": "present indicative claim that the mobile repository fetches and verifies the digest, with the hand-copying in the past tense. Neither is true: CodexBridgeMobile has no contract/ directory, no manifest fetch, no digest verification",
+      "location": "docs/api/README.md:1224 and :1233; recipe at docs/api/testing.md:78-83",
+      "evidence": "grep -rIn 'contract/1\\.|x-minimum-supported-version' ~/Sync/Projects/AI/CodexBridgeMobile returns nothing; ls -d .../CodexBridgeMobile/contract absent; git ls-tree main -- contract | wc -l = 0",
+      "closure": "README now says the producing half is done and the consuming half is not, in as many words, and names what the mobile repository would have to do"
+    },
+    {
+      "lens": "claim auditor",
+      "trigger": "edit the document, leave info.version at 1.6.0, run the command the failure message tells you to run",
+      "wrong_outcome": "contract/1.6.0/ -- a directory a client pinned by digest -- is silently rewritten together with its manifest, --check exits 0 and the suite is green, directly contradicting testing.md's unqualified immutability claim",
+      "location": "docs/api/testing.md:61-63; scripts/publish_contract.py:25-28 vs :139-148",
+      "evidence": "on a /tmp copy: BEFORE 1e229f26... / 'Published contract 1.6.0' / '--check ... exit=0' / AFTER 80071984...",
+      "closure": "testing.md carries the caveat in full, naming the mechanism, the remedy and the review rule. The hole itself is a written risk acceptance in RESUME.md: closing it needs a version bump that belongs to #11/#13"
+    },
+    {
+      "lens": "claim auditor",
+      "trigger": "ask whether anything verifies that a contracted route survives the front door, and read the closing paragraph of testing.md",
+      "wrong_outcome": "told no, and pointed at deploy/incus/. test_proxy_routes.py asserts precisely that every contract path is routed by every terminating vhost; the live vhosts are in deploy/nginx/, and deploy/incus/ was retired 2026-08-10",
+      "location": "docs/api/testing.md:191-194; contradicted by tests/contract/test_proxy_routes.py:83-101 and deploy/incus/codexbridge_edge_proxy.py:1",
+      "evidence": "ls deploy/nginx -> three .conf files; head -1 deploy/incus/codexbridge_edge_proxy.py -> '\"\"\"RETIRED 2026-08-10 - the Incus edge proxy on the dom1 path.'",
+      "closure": "the paragraph now says the front door is checked statically from deploy/nginx/ and that no test sends a request to a real host; both denials pinned by test_the_contract_docs_do_not_deny_what_ships"
+    },
+    {
+      "lens": "claim auditor",
+      "trigger": "follow testing.md to extract fixtures, or edit an example under components.schemas.<Name>.examples",
+      "wrong_outcome": "16 schema-level example values are never checked, including all four Error examples -- the envelope the delivery is built around -- and the stated extraction rule yields 5 fixtures out of 24",
+      "location": "tests/contract/test_declared_examples_are_real.py:111-142; claims at docs/api/testing.md:149-159",
+      "evidence": "'response media examples (covered): 5' vs 'schema-level examples lists (NOT covered): 8 -- Id(2) ProjectId(1) ExecutorId(1) Timestamp(1) Actor(2) Permission(3) PageInfo(2) Error(4)'",
+      "closure": "same fix as sweep skeptic finding 3; testing.md replaces the single-shape sentence with a table of the three shapes and says 24"
+    },
+    {
+      "lens": "claim auditor",
+      "trigger": "use the 'what this cannot see' list as the exhaustive statement it presents itself as",
+      "wrong_outcome": "'Four classes' followed by five bullets in the script, and four in testing.md with securitySchemes dropped; commit a0063fd repeats the four. With the response-required finding the real number was at least six",
+      "location": "scripts/check_contract_compatibility.py:26 vs :29-46; docs/api/testing.md:132-143",
+      "evidence": "quoted heading 'Four classes of breaking change pass this gate, and three of them are in the README's own list:' followed by five bullets",
+      "closure": "same rewrite as sweep skeptic finding 11; the lists now also record which gaps round 1 closed rather than documented"
+    },
+    {
+      "lens": "claim auditor",
+      "trigger": "read commit a0063fd as the record of what the mutation matrix proves",
+      "wrong_outcome": "it says 'Thirteen breaking mutations'; the BREAKING list held fourteen callables and fourteen cases ran",
+      "location": "commit a0063fd body; tests/contract/test_contract_compatibility.py:362-377",
+      "evidence": "pytest --collect-only | grep -c test_a_breaking_change_is_caught_and_named = 14 (the 'eight' compatible in the same sentence was correct)",
+      "closure": "not amendable without rewriting a published commit; recorded in RESUME.md as a known error in a0063fd's message, and the current counts are stated there instead"
+    },
+    {
+      "lens": "claim auditor",
+      "trigger": "use testing.md's table as the enumeration it claims to be",
+      "wrong_outcome": "heading 'The four gates' above a five-row table, while tests/contract/ holds six files; README said five. The one missing from both is test_proxy_routes.py, which is the root of the denial finding above",
+      "location": "docs/api/testing.md:22-34; docs/api/README.md:1269",
+      "evidence": "ls tests/contract/*.py | wc -l = 6",
+      "closure": "heading and table name all six; test_the_testing_doc_counts_the_gates_that_exist derives the count from the directory so the next file added fails the doc"
+    },
+    {
+      "lens": "claim auditor",
+      "trigger": "match CI output against the sample in testing.md",
+      "wrong_outcome": "the sample shows paths[...] before components[...], which sorted() on the pointer cannot produce, and omits the '  - ' prefix the CLI writes",
+      "location": "docs/api/testing.md:119-124; scripts/check_contract_compatibility.py:463 and :536",
+      "evidence": "actual output with both documented mutations applied: header line then '  - components.schemas[Error]...' then '  - paths[/api/v1/auth/sign-in]...'",
+      "closure": "the sample is replaced with real output including the header line and the prefix, plus a sentence explaining the ordering"
+    },
+    {
+      "lens": "second caller",
+      "trigger": "issue #11 or #13 merges into development; both are purely additive releases",
+      "wrong_outcome": "the gate exits 1 with 31 breaking changes for #11 and 21 for #13, none touching anything a 1.6.0 client can address. Since OpenAPI requires in: path parameters to be required, every endpoint with a path parameter fires forever, and the remedy text on screen says 'needs a new namespace (/api/v2)' when the correct action is to ignore all 31",
+      "location": "scripts/check_contract_compatibility.py:345-368; the self-test at tests/contract/test_contract_compatibility.py:400-406",
+      "evidence": "real git merge of feature/gh-11 in a /tmp clone then pytest: 'E 31 breaking change(s)'; ancestry classification 'gh-11: 31 findings; 0 on a pointer whose ancestor exists in 1.6.0' and 'gh-13: 21 findings; 0'",
+      "closure": "same fix as sweep skeptic finding 1. Re-measured after the fix: 0 findings against both sibling documents"
+    },
+    {
+      "lens": "second caller",
+      "trigger": "a merger facing a red gate raises x-minimum-supported-version from 1.6.0 to the current info.version",
+      "wrong_outcome": "the gate then compares the document with a published copy of itself and can never fire again; the promise to every client pinned on the old version is dropped with no test, no warning and no reviewer prompt. test_the_minimum_supported_version_is_not_ahead_of_the_document asserts low <= high, so floor == current is explicitly permitted",
+      "location": "tests/contract/test_contract_compatibility.py:146; the floor at docs/api/codex-bridge.openapi.yaml:2313",
+      "evidence": "on the simulated gh-11 merge, raising the floor to 1.7.0 and republishing gave '91 passed' -- fully green",
+      "closure": "test_raising_the_floor_past_a_published_version_is_written_down: the floor must be the oldest published version unless x-minimum-supported-version-raised records why. Reproduced closed in /tmp/gh14sim3 -- raising the floor now fails with the reason demanded by name"
+    },
+    {
+      "lens": "second caller",
+      "trigger": "any contributor changes the document without moving info.version and follows the failure message",
+      "wrong_outcome": "publish() overwrites the pinned copy and its manifest together, so --check and test_every_published_version_hashes_to_its_manifest both agree again; testing.md, which docs/required-reading.md marks obrigatorio, asserts the opposite",
+      "location": "docs/api/testing.md:61-63; mechanism at scripts/publish_contract.py:149-161",
+      "evidence": "clean-slate run: 'pinned 1.6.0 sha BEFORE 1e229f26...' / 'Published contract 1.6.0' / 'AFTER 830c303d...' / '91 passed'",
+      "closure": "same as claim auditor finding 3 -- caveat written into testing.md and the hole recorded as an accepted risk"
+    },
+    {
+      "lens": "second caller",
+      "trigger": "the mobile team follows testing.md's consuming section today",
+      "wrong_outcome": "every curl 404s. origin/main contains no contract/ and no docs/api/ at all, and the doc asserts main 'moves' and carries the artifact",
+      "location": "docs/api/testing.md:73-83",
+      "evidence": "origin/main fad0cb2 2026-08-21; 'origin/main: docs/api ?' and 'origin/main: contract/ ?' both empty; development ahead of origin/main by 19",
+      "closure": "REF defaults to development, and the section opens by saying main carries neither directory and the recipe does not work until the API work reaches it"
+    },
+    {
+      "lens": "second caller",
+      "trigger": "any merge that moves info.version before contract/<new>/ exists, i.e. every release merge by construction",
+      "wrong_outcome": "three of seven failures are bare FileNotFoundError with no remedy, two of them tests of the publisher's own behaviour failing for an unrelated reason; and with the floor pointing at an unpublished version, 23 tests ERROR from an unguarded module fixture, burying the one actionable message",
+      "location": "tests/contract/test_published_contract_artifact.py:144, :169, :196; tests/contract/test_contract_compatibility.py:99-100",
+      "evidence": "'FileNotFoundError: .../contract/1.7.0/codex-bridge.openapi.yaml' in three tests; and '3 failed, 65 passed, 23 errors' with the floor unpublished",
+      "closure": "the baseline fixture and _isolated_tree fail with the publish command instead of opening a missing file, and the byte-identical test guards its read. Re-walked in /tmp/gh14sim2: 7 failures, every one carrying 'Run python3 scripts/publish_contract.py', 0 errors"
+    },
+    {
+      "lens": "second caller",
+      "trigger": "developer edits the OpenAPI document and runs only pytest tests/integration or tests/unit",
+      "wrong_outcome": "fully green; nothing hints that contract/ is stale or that the compatibility gate exists",
+      "location": "pyproject.toml:63 (testpaths = [\"tests\"]); no contract reference under tests/integration or tests/unit",
+      "evidence": "with an optional field added and no republish: 'tests/integration: 443 passed, 3 skipped' and 'tests/unit: 81 passed'",
+      "closure": "accepted, not fixed: .github/workflows/contract.yml runs pytest tests/contract on every push and pull request, and testpaths makes a bare pytest -q cover it. Recorded as a residual risk in RESUME.md rather than solved by coupling unrelated suites"
+    }
+  ],
+  "questions": [
+    "components.securitySchemes entry *contents* are still not compared -- its removal reports like any component, but a bearer-to-apiKey swap on the scheme itself does not. Every operation in this contract carries the same scheme, so there is no observable wrong result today; it is named in both honesty lists.",
+    "Republishing an edited document under the same info.version rewrites the copy and its manifest together, so every gate stays green while the bytes behind a pinned number change. Closing it means enforcing 'every change moves info.version' in the publisher, which would force a version bump belonging to the endpoint work in flight (#11, #13). Written into docs/api/README.md and accepted in RESUME.md.",
+    "A required-name removal on a request-only schema now reports, which is a deliberate false positive: the pointer cannot tell request from response and most schemas here are shared. The message names the direction so a reviewer can resolve it rather than the gate guessing.",
+    "The live compatibility comparison cannot fail on a version bump while the floor equals info.version (1.6.0 both today). It is not vacuous -- it still catches an in-place removal under 1.6.0 -- but its full value arrives when #11/#13 move info.version above the floor."
+  ]
+}

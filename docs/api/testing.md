@@ -85,16 +85,20 @@ Fetch the version directory, verify the digest, and keep the digest in the
 mobile repository. The pin is the *digest*, not the version number — a number
 alone is what the contract had before this existed.
 
-**Not usable yet, and the reason matters.** `origin/main` carries no
-`contract/` directory — it carries no `docs/api/` at all — so every command
-below 404s until the API work reaches it. `development` is where the artifact
-lives today. Point `REF` at `development`, at a tag, or at a commit sha; a build
-that must be reproducible should never name a moving branch anyway, which is
-also why the digest check below is the real guard rather than the URL.
+**Not usable yet, and the reason matters.** **No branch carries `contract/`.**
+It exists only on the unmerged `feature/gh-14/contract-integration-compat-tests`
+branch that introduced it; `origin/development` does not have it, and
+`origin/main` carries no `docs/api/` at all. Every command below 404s until this
+work merges, and it is written down here rather than left to be discovered by
+whoever runs it first.
+
+Once it merges, point `REF` at the branch it landed on — or better, at a tag or
+a commit sha, since a build that must be reproducible should never name a moving
+branch. The digest check below is the real guard either way.
 
 ```bash
 VERSION=1.6.0
-REF=development
+REF=development     # once contract/ has merged there; see above
 BASE=https://raw.githubusercontent.com/EDortta/CodexBridge/$REF/contract/$VERSION
 
 curl -fsSL "$BASE/codex-bridge.openapi.yaml" -o codex-bridge.openapi.yaml
