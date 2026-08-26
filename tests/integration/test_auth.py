@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.app.api import permissions
+from gateway.app.api.routes import artifacts as artifacts_routes
 from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import decisions as decisions_routes
@@ -164,6 +165,7 @@ async def api(users_file, monkeypatch):
     app.include_router(epics_routes.router)
     app.include_router(issues_routes.router)
     app.include_router(conversations_routes.router)
+    app.include_router(artifacts_routes.router)
 
     async def override():
         async with factory() as s:
@@ -1038,6 +1040,12 @@ ENDPOINT_FOR_ACTION = {
     "conversations.read": ("GET", "/api/v1/conversations"),
     "conversations.create": ("POST", "/api/v1/conversations"),
     "conversations.postMessage": ("POST", "/api/v1/conversations/{id}/messages"),
+    # Issue #11. Same reasoning as the six above: `require_action` runs before
+    # the handler resolves `{id}`, so a 403 for a caller lacking the scope — or
+    # a non-403 for one that has it — is reliable even though no artifact row
+    # exists behind that id (nothing in this build produces one).
+    "artifacts.read": ("GET", "/api/v1/artifacts"),
+    "artifacts.download": ("POST", "/api/v1/artifacts/{id}/download-token"),
 }
 
 # Actions with no endpoint of their own, each naming the test that covers it

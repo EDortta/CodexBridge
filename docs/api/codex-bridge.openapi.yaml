@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.6.0
+  version: 1.7.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -2043,7 +2043,11 @@ paths:
         offline retries") verbatim.
 
         `attachments` are opaque artifact/file identifiers, recorded and
-        returned unvalidated — no `ArtifactModel` exists yet (issue #11). See
+        returned unvalidated. Issue #11 has since given this contract a real
+        `Artifact`, so the reason is no longer "there is nothing to check
+        against" — it is that resolving them here would change what this
+        endpoint accepts, which is a declared change to issue #10's surface and
+        not a side effect of #11's diff (`design-standards.md` §7). See
         `docs/api/README.md` "Conversations (issue #10)".
       security:
         - bearerAuth: []
@@ -2211,6 +2215,375 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /api/v1/artifacts:
+    get:
+      operationId: listArtifacts
+      tags: [artifacts]
+      summary: Artifacts the caller may see, newest first
+      description: |
+        An **artifact** is a retained file this gateway can hand to the mobile
+        client: an APK, an archive, a report or a log bundle. Scoped to the
+        caller's projects exactly as every other collection here is; `project`
+        narrows that set and can never widen it.
+
+        `sha256` and, for an APK, `android.signingFingerprint` are on **every**
+        item, not only on the download response — a client decides whether to
+        start a multi-megabyte transfer from what this list already told it.
+
+        **This build has no producer.** No executor message, no upload endpoint
+        and no build hook writes an artifact; ingestion is a future issue. A
+        deployment can therefore answer with an empty list and be working
+        correctly. `capabilities.artifactDownloads` reports whether the server
+        *speaks* this API, which is the different question a client meeting an
+        empty page needs answered — see `docs/api/README.md` "Artifacts,
+        downloads and Android builds (issue #11)".
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: project
+          in: query
+          required: false
+          description: Repeatable. Restricts to these projects, intersected with what the caller may see.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/ProjectId'
+        - name: type
+          in: query
+          required: false
+          description: Repeatable. Restricts to these artifact types.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/ArtifactType'
+        - name: origin
+          in: query
+          required: false
+          description: Repeatable. Restricts to these origins.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/ArtifactOrigin'
+      responses:
+        '200':
+          description: A page of artifacts.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Artifact'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/artifacts/{artifactId}:
+    get:
+      operationId: getArtifact
+      tags: [artifacts]
+      summary: One artifact
+      description: |
+        An `artifactId` outside the caller's visible projects answers `404`,
+        never `403` — the same probing-prevention rule a hidden session or
+        conversation answers with, and the two responses are identical down to
+        the message.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: artifactId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The artifact.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Artifact'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/artifacts/{artifactId}/download-token:
+    post:
+      operationId: mintArtifactDownloadToken
+      tags: [artifacts]
+      summary: Mint a short-lived authorization to download this artifact
+      description: |
+        Returns a bearer credential for the bytes of **exactly this one
+        artifact**, plus the path to present it at. The phone does not usually
+        perform the transfer itself — Android hands a large download to the
+        system downloader, a separate process with no access to the app's
+        session — so the credential that fetches bytes is deliberately not the
+        session token.
+
+        Four things narrow it:
+
+        - bound to this artifact: presenting it on another one is refused;
+        - bound to the minting account, **re-read at download time**, so an
+          account disabled after minting cannot still pull the bytes;
+        - expires in minutes (`CODEX_BRIDGE_ARTIFACT_DOWNLOAD_TOKEN_TTL_SECONDS`,
+          clamped to `[30, 3600]`);
+        - stored hashed, so the database never holds anything downloadable.
+
+        It is deliberately **not** single-use: a token consumed by the first
+        request makes a resumed (`Range`) transfer impossible. The lifetime is
+        the control.
+
+        `downloadPath` is a path, not a URL, and carries **no credential**. The
+        token travels in `Authorization: Bearer` on the request to that path —
+        a query-string credential reaches access logs, proxies and `Referer`,
+        which this deployment has already been burned by once.
+
+        No `Idempotency-Key`: a repeated mint produces another short-lived
+        credential and no durable side effect, and replaying the first would
+        hand back a token with less life left than the caller expects.
+
+        `409` when the artifact is past `retainedUntil`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: artifactId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '201':
+          description: A download authorization. Carries a credential, so it is never cached.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactDownloadGrant'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/artifacts/{artifactId}/download:
+    get:
+      operationId: downloadArtifact
+      tags: [artifacts]
+      summary: Stream an artifact's bytes to the holder of a download token
+      description: |
+        Authenticated by the token from
+        `POST /api/v1/artifacts/{artifactId}/download-token` and by **nothing
+        else**: a session access token is refused here, and this endpoint
+        checks no permission from the catalogue — the grant already names the
+        one artifact it authorizes.
+
+        Every refusal is the same `401`: absent, unknown, expired, minted for a
+        different artifact, or belonging to an account since disabled. They are
+        indistinguishable on purpose.
+
+        Supports a single `Range` in `bytes`. A satisfiable range answers `206`
+        with `Content-Range`; a well-formed range starting past the end answers
+        `416` with `Content-Range: bytes */<size>`; an absent, malformed,
+        multi-range or unknown-unit header is ignored and the whole
+        representation is served with `200`, which RFC 9110 §14.2 permits.
+
+        `404` when the row exists and its stored content does not. The response
+        never names a filesystem path in either case.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: artifactId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: Range
+          in: header
+          required: false
+          description: |
+            A single byte range, e.g. `bytes=0-1048575` or `bytes=-4096`. Any
+            other form is ignored rather than refused.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The whole artifact.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+            Accept-Ranges:
+              $ref: '#/components/headers/AcceptRanges'
+            Content-Disposition:
+              $ref: '#/components/headers/ContentDisposition'
+            X-Artifact-Sha256:
+              $ref: '#/components/headers/XArtifactSha256'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: The requested byte range.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Accept-Ranges:
+              $ref: '#/components/headers/AcceptRanges'
+            Content-Range:
+              $ref: '#/components/headers/ContentRange'
+            Content-Disposition:
+              $ref: '#/components/headers/ContentDisposition'
+            X-Artifact-Sha256:
+              $ref: '#/components/headers/XArtifactSha256'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '416':
+          description: |
+            The requested range cannot be satisfied. `Content-Range` reports
+            the artifact's real size so the client can retry without a
+            speculative second request.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Content-Range:
+              $ref: '#/components/headers/ContentRange'
+            Accept-Ranges:
+              $ref: '#/components/headers/AcceptRanges'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/builds/android:
+    get:
+      operationId: listAndroidBuilds
+      tags: [artifacts]
+      summary: Android builds the caller may see, newest first
+      description: |
+        The same rows `GET /api/v1/artifacts?type=apk` returns, with `android`
+        guaranteed present and with the two filters that exist only on the
+        build metadata. An Android build is **not** a second entity: it is an
+        artifact of type `apk` plus that metadata, keyed by the artifact's own
+        id, so a client never holds two identifiers for one file.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: project
+          in: query
+          required: false
+          description: Repeatable. Restricts to these projects, intersected with what the caller may see.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/ProjectId'
+        - name: environment
+          in: query
+          required: false
+          description: Repeatable. Restricts to these build environments.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/AndroidEnvironment'
+        - name: packageName
+          in: query
+          required: false
+          description: Exact Android application id.
+          schema:
+            type: string
+            maxLength: 255
+      responses:
+        '200':
+          description: A page of Android builds.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Artifact'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/builds/android/{buildId}:
+    get:
+      operationId: getAndroidBuild
+      tags: [artifacts]
+      summary: One Android build, addressed by the id of the artifact it is
+      description: |
+        `buildId` is an `ArtifactId`. An artifact that exists but carries no
+        APK metadata answers the same `404` as an id that does not exist: from
+        this endpoint's vocabulary there is no such build, and saying "that id
+        is an artifact, just not a build" would describe the row under the
+        wrong name.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: buildId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The Android build, with `android` always present.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Artifact'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
   /api/version:
     get:
       operationId: getApiVersion
@@ -2288,7 +2661,7 @@ paths:
                   effectivePermissions: true
                   deviceAuthorization: false
                   eventStream: false
-                  artifactDownloads: false
+                  artifactDownloads: true
                 time: '2026-08-10T14:32:07Z'
         '429':
           $ref: '#/components/responses/RateLimited'
@@ -2416,6 +2789,46 @@ components:
       schema:
         type: string
       example: '"7"'
+
+    AcceptRanges:
+      description: |
+        `bytes` on every artifact download, including the `416`. It tells a
+        client that an interrupted transfer can be resumed with `Range` rather
+        than restarted, which is the difference between a failed 60 MB download
+        costing seconds and costing the whole file again.
+      schema:
+        type: string
+      example: bytes
+
+    ContentRange:
+      description: |
+        Which bytes this response carries and how large the whole
+        representation is (`bytes <start>-<end>/<size>`). On `416` the range
+        part is `*`, so the client learns the real size from the refusal itself
+        and does not need a second speculative request.
+      schema:
+        type: string
+      example: bytes 0-1048575/60817408
+
+    ContentDisposition:
+      description: |
+        `attachment` plus the artifact's `name`. The name is constrained to
+        `[A-Za-z0-9][A-Za-z0-9._-]*` when the artifact is recorded, which is
+        what makes interpolating it here safe: no quote, newline or path
+        separator can reach this header.
+      schema:
+        type: string
+      example: 'attachment; filename="app-release.apk"'
+
+    XArtifactSha256:
+      description: |
+        Lowercase hex SHA-256 of the **whole** artifact, repeated on the
+        download so a client streaming to disk can verify without holding the
+        catalogue response. Unchanged by `Range`: it describes the artifact,
+        not the part in this response.
+      schema:
+        type: string
+        pattern: '^[a-f0-9]{64}$'
 
     CacheControl:
       description: |
@@ -2888,9 +3301,10 @@ components:
         same underlying `TaskModel` rows `GET /api/v1/sessions` (issue #9)
         serves — under the vocabulary issues #6 and #7 will eventually give
         their own endpoints, not a second entity. `issues` (issue #8) and
-        `artifacts` (issue #11) counts are not included: this build has no
-        backing entity for either, and an always-zero field would be a claim
-        with nothing behind it.
+        `artifacts` (issue #11) counts are not included. Issues have no
+        backing entity here at all; artifacts now do, but nothing in this build
+        *produces* one, so the count could only ever read zero — the same
+        always-one-value field this document already refuses to publish.
       required: [id, name, enabled, health, pendingDecisions, activeMissions, totalSessions]
       properties:
         id:
@@ -3451,10 +3865,13 @@ components:
       description: |
         `session`, `decision` and `mission` all name the same `TaskModel` row
         under three vocabularies — see `docs/api/README.md`'s "Decisions" and
-        "Missions" sections. `artifact` is deliberately absent: no
-        `ArtifactModel` exists yet (issue #11), so a reference of that type
-        could not be checked for existence or for project visibility. See
-        `docs/api/README.md` "Conversations (issue #10)".
+        "Missions" sections. `artifact` is absent. Issue #11 has since shipped
+        the entity a reference of that type could be checked against, so what
+        keeps it out now is the enum rule, not the missing model: adding a
+        member to a *response* enum is a breaking change
+        (`docs/api/README.md` §"What is a breaking change"), and it belongs to
+        a declared change to the conversations surface rather than to #11's
+        diff. See `docs/api/README.md` "Conversations (issue #10)".
 
     ContextReference:
       type: object
@@ -3541,9 +3958,10 @@ components:
         attachments:
           type: array
           description: |
-            Opaque artifact/file identifiers. Unvalidated: no `ArtifactModel`
-            exists yet (issue #11), so these are recorded and returned
-            exactly as sent.
+            Opaque artifact/file identifiers, recorded and returned exactly
+            as sent. Still unvalidated after issue #11 gave this contract a
+            real `Artifact`: resolving them would change what this endpoint
+            accepts, which is a declared change to issue #10's surface.
           items:
             type: string
             maxLength: 255
@@ -3566,6 +3984,202 @@ components:
             type: string
             minLength: 1
             maxLength: 255
+
+    ArtifactType:
+      type: string
+      description: |
+        What kind of thing the bytes are. `apk` is the one
+        `GET /api/v1/builds/android` lists; the other three are the coarse
+        categories this gateway can retain. Deliberately small: a value no
+        producer ever writes is easier to add later than to withdraw. Adding a
+        member to this enum is a breaking change for a *response* — see
+        `docs/api/README.md` §"What is a breaking change".
+      enum: [apk, archive, report, log]
+
+    ArtifactOrigin:
+      type: string
+      description: |
+        Where the bytes came from. Not where they are stored — that is an
+        internal field and never ships.
+      enum: [executor, ci, manual]
+
+    AndroidEnvironment:
+      type: string
+      description: Which deployment an APK was built for. A client shows the badge from it.
+      enum: [production, staging, development]
+
+    AndroidBuild:
+      type: object
+      description: |
+        APK metadata for one artifact. Present on an artifact of type `apk` and
+        absent — not null — on every other type.
+      required:
+        - packageName
+        - versionName
+        - versionCode
+        - environment
+        - signingFingerprint
+      properties:
+        packageName:
+          type: string
+          maxLength: 255
+          description: Android application id, at least two dot-separated segments.
+        versionName:
+          type: string
+          maxLength: 64
+          description: Human-readable version, as `versionName` in the manifest.
+        versionCode:
+          type: integer
+          minimum: 1
+          description: Monotonic integer build number, as `versionCode` in the manifest.
+        environment:
+          $ref: '#/components/schemas/AndroidEnvironment'
+        minSdkVersion:
+          type: [integer, 'null']
+          minimum: 1
+          description: Minimum Android SDK level, when the producer recorded one.
+        changelog:
+          type: [string, 'null']
+          maxLength: 20000
+          description: Release notes for this build, when the producer recorded any.
+        signingFingerprint:
+          type: string
+          maxLength: 128
+          description: |
+            SHA-256 certificate fingerprint, 32 colon-separated uppercase hex
+            pairs — the form `apksigner verify --print-certs` prints. Normalized
+            on write so one certificate has one spelling.
+
+            **Not a credential.** A certificate fingerprint is public by
+            construction, and publishing it is what lets an operator refuse an
+            APK signed by anything other than their own key *before* installing
+            it — issue #11's "signing metadata is included before
+            download/install".
+          example: 'AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89'
+
+    Artifact:
+      type: object
+      description: |
+        A retained file this gateway can hand to the mobile client.
+
+        **No field here names a location on the server.** The stored path is an
+        internal field, excluded by construction the same way `ProjectModel.path`
+        is — `docs/api/README.md` §"Fields that must never ship". The bytes are
+        reached only through `POST .../download-token` followed by
+        `GET .../download`, never by composing a path.
+      required:
+        - id
+        - projectId
+        - type
+        - name
+        - sizeBytes
+        - sha256
+        - origin
+        - contentType
+        - createdAt
+        - retained
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        type:
+          $ref: '#/components/schemas/ArtifactType'
+        name:
+          type: string
+          maxLength: 255
+          description: |
+            Filename this artifact is served under. Constrained to
+            `[A-Za-z0-9][A-Za-z0-9._-]*` at creation, which is what makes it
+            safe to interpolate into `Content-Disposition`.
+        version:
+          type: [string, 'null']
+          maxLength: 64
+          description: Producer-supplied version label, when there is one.
+        sizeBytes:
+          type: integer
+          minimum: 0
+          description: Size of the stored content in bytes.
+        sha256:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+          description: |
+            Lowercase hex SHA-256 of the bytes. Reported here, in the list, and
+            on the download grant — **before** the transfer — so a client can
+            verify what it received rather than trusting that it arrived whole.
+        origin:
+          $ref: '#/components/schemas/ArtifactOrigin'
+        contentType:
+          type: string
+          maxLength: 255
+          description: Media type the download is served with. A bare type, never with parameters.
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        retainedUntil:
+          oneOf:
+            - $ref: '#/components/schemas/Timestamp'
+            - type: 'null'
+          description: |
+            End of the retention window, or `null` for "kept until an operator
+            removes it". Past it the artifact is still listed — a client showing
+            a stale entry deserves an explanation rather than a mystery `404` —
+            but minting a token and downloading both answer `409`.
+        retained:
+          type: boolean
+          description: |
+            Whether the artifact is still downloadable, decided by the server's
+            clock. Derived rather than stored: a client comparing
+            `retainedUntil` against its own clock would disagree with the server
+            that actually refuses the download, and one of the two has to be
+            authoritative.
+        android:
+          $ref: '#/components/schemas/AndroidBuild'
+
+    ArtifactDownloadGrant:
+      type: object
+      description: |
+        A short-lived authorization to download one artifact's bytes, and the
+        path to spend it at. Carries a credential: never cached, never logged,
+        never put in a URL.
+      required:
+        - artifactId
+        - token
+        - tokenType
+        - expiresAt
+        - downloadPath
+        - sizeBytes
+        - sha256
+        - contentType
+      properties:
+        artifactId:
+          $ref: '#/components/schemas/Id'
+        token:
+          type: string
+          description: |
+            The credential. Send it as `Authorization: Bearer <token>` on the
+            request to `downloadPath` — **never** as a query parameter.
+        tokenType:
+          type: string
+          enum: [Bearer]
+        expiresAt:
+          $ref: '#/components/schemas/Timestamp'
+        downloadPath:
+          type: string
+          description: |
+            Path to `GET` with the token. A path and not an absolute URL: the
+            server does not publish its own address here, and the value carries
+            no credential.
+          example: /api/v1/artifacts/9b1f/download
+        sizeBytes:
+          type: integer
+          minimum: 0
+        sha256:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+          description: Repeated here so a downloader that never read the catalogue can still verify.
+        contentType:
+          type: string
+          maxLength: 255
 
     LogLine:
       type: object

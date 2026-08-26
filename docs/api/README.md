@@ -907,6 +907,16 @@ decisions" as issue links and issue #7 applied to `dependencies` /
 `relatedEntities`: no backing entity, no field. See
 `gateway/app/services/conversation_types.py`'s module docstring.
 
+**Issue #11 has now shipped that entity, and the member is still absent.** The
+reason changed rather than expired: adding a member to a response enum is a
+breaking change (§"What is a breaking change" above), so widening
+`ConversationContextType` is a declared change to the conversations surface,
+not something issue #11's diff performs on the way past
+(`design-standards.md` §7). Whoever wants it adds the member, the resolver
+branch through `store.get_artifact_for_projects`, and the test that a
+reference to an artifact in an invisible project answers `404` — in one
+change, under its own issue.
+
 This does not remove artifacts from the feature: "attachment references
 through artifact/file identifiers" is a *message* concept.
 `Message.attachments` carries opaque artifact/file ids on each message,
@@ -992,6 +1002,166 @@ different-fingerprint call is answered `409`, never silently replayed. This
 is issue #10's "message creation is idempotent for offline retries"
 acceptance criterion, and the mechanism that also prevents the duplicate
 messages the issue's own test coverage requirement names.
+
+---
+
+## Artifacts, downloads and Android builds (issue #11)
+
+`GET /api/v1/artifacts`, `GET .../{artifactId}`,
+`POST .../{artifactId}/download-token`, `GET .../{artifactId}/download`,
+`GET /api/v1/builds/android`, `GET .../{buildId}`.
+
+An **artifact** is a retained file this gateway can hand to
+CodexBridgeMobile: type, project, name, version, size, origin, checksum,
+creation time and retention window. An **Android build** is not a second
+entity — it is an artifact of type `apk` plus its APK metadata, keyed by the
+artifact's own id, so `GET /api/v1/builds/android/{buildId}` takes an
+`ArtifactId` and a client never holds two identifiers for one file.
+
+### Nothing in this build produces an artifact
+
+There is no ingestion path: no executor message, no upload endpoint, no build
+hook writes an `artifacts` row. Every artifact this API can serve was created
+by a direct call to `store.create_artifact`, which today means a test fixture
+or an operator script. Ingestion is a future issue; the catalogue, the
+authorization and the download lifecycle are this one's.
+
+That is said out loud for the same reason "Counts read one entity, not three"
+is: a mobile client reading these endpoints on this deployment gets an empty
+list, and an empty list is worth knowing the reason for.
+`capabilities.artifactDownloads` is `true` because the **endpoints are
+served**, not because artifacts exist — the flag answers "does this server
+speak the artifact API", which is the question a client that would otherwise
+meet a `404` is asking.
+
+### The bytes are not behind the session token
+
+`POST .../{artifactId}/download-token` mints a short-lived bearer credential
+for exactly one artifact. `GET .../{artifactId}/download` accepts **that**
+credential and nothing else: it never looks at a session token and never
+consults the permission catalogue.
+
+The split exists because the phone does not do the transfer. Android hands a
+multi-megabyte download to the system downloader — a separate process with no
+access to the app's session — and giving it the session bearer would put the
+credential that can approve a sensitive task into a component whose only job is
+fetching a file.
+
+**The credential travels in `Authorization: Bearer`, never in the URL.** The
+design note for this issue floated `?token=…`; this codebase has already been
+burned by exactly that (issue #15: an executor's machine token reached the
+gateway log through a query string) and `security-standards.md` §2 forbids it —
+a query string reaches access logs, proxies, browser history and `Referer`. So
+the mint response carries a *path* with no credential in it, and the token
+separately.
+
+Four things narrow the credential, and each has a test in
+`tests/integration/test_artifacts.py`:
+
+- **bound to the artifact** — presenting it on another artifact is refused, so
+  a token for a public report cannot fetch a signed APK;
+- **bound to the minting account, re-read at download time** — an account the
+  operator disables after minting cannot still pull the bytes. Same rule
+  refresh rotation already applies to a grant;
+- **expires in minutes** — `CODEX_BRIDGE_ARTIFACT_DOWNLOAD_TOKEN_TTL_SECONDS`,
+  default 300, clamped to `[30, 3600]`;
+- **stored hashed** — through the same `shared.security.hash_token` the OAuth
+  access tokens use, so a reader of the database cannot download anything.
+
+Every refusal on the download endpoint is the same `401` with the same message
+— absent, unknown, expired, minted for another artifact, or belonging to a
+disabled account. Distinguishing them tells a holder of a token they were never
+given whether it was ever real, and which artifact it was for.
+
+### The token is deliberately not single-use
+
+Issue #11 asks for range and resumable downloads in the same breath as
+short-lived authorization, and those two pull in opposite directions. A token
+consumed by the first request makes a resumed transfer impossible: the
+downloader would have to re-authenticate mid-stream, which is the thing this
+endpoint exists to avoid. **The lifetime is the control**, and it is short for
+that reason. `test_a_token_survives_reuse_inside_its_lifetime` pins the choice
+so it stays a decision on the record rather than becoming an accident.
+
+### Range requests
+
+A single `bytes=` range is honoured: `206` with `Content-Range` when it is
+satisfiable, `416` with `Content-Range: bytes */<size>` when it is well formed
+and starts past the end. Anything else — an unknown unit, a malformed value,
+more than one range, an inverted range — is **ignored** and the whole
+representation is served with `200`, which RFC 9110 §14.2 explicitly permits.
+Answering `416` to a header a client sent speculatively would break that client
+for no gain.
+
+### Retention is load-bearing, not a decorative timestamp
+
+Past `retainedUntil` the catalogue still lists the artifact — a client showing
+a stale entry deserves an explanation rather than a mystery `404` — and reports
+`retained: false`. Minting a token and serving the bytes both answer `409`. A
+retention field that only ever described something would be the always-null
+field this document refuses to publish, and `retained` is computed from the
+server's clock because a client comparing timestamps would disagree with the
+server that actually refuses the download.
+
+### Checksums and signing metadata come before the download
+
+`sha256` is on every artifact in the list, on the detail, and on the mint
+response; `android.signingFingerprint` is on every APK in all three. That is
+issue #11's acceptance criterion read literally: *before* download or install
+means in the catalogue, not only in the transfer, because a client decides
+whether to start a 60 MB download from what the list already told it. The
+download itself repeats the digest in `X-Artifact-Sha256`, unchanged by
+`Range`, so a client streaming to disk can verify without holding the
+catalogue response.
+
+A certificate fingerprint is public by construction and is not a credential:
+publishing it is what lets an operator refuse an APK signed by anything other
+than their own key.
+
+### The stored path never leaves the server
+
+`ArtifactModel.storage_path` is this table's `ProjectModel.path` — see
+§"Fields that must never ship". It is relative to `CODEX_BRIDGE_ARTIFACTS_ROOT`
+and is excluded from every response by construction, not by a filter applied
+late. `gateway/app/services/artifact_storage.py` is the only code that turns it
+into a real file, and it checks confinement twice:
+
+- **lexically, at the write** — an absolute path, a backslash, a colon, a `..`
+  or `.` segment, an empty segment or any character outside
+  `[A-Za-z0-9][A-Za-z0-9._-]*` is refused, so a traversing path never enters
+  the table;
+- **after resolution, at the read** — the candidate and the root are both
+  resolved and anything landing outside the root is refused. `Path.resolve`
+  follows symlinks, which is what catches a link planted inside the root
+  pointing at `/etc/shadow` — something no amount of string checking can see.
+
+A confined path with no regular file behind it is a typed `404` that names the
+artifact and never the path. Same answer for a path that stopped resolving
+inside the root: the caller has no business learning that a path exists at all,
+and the operator has the `requestId`.
+
+### Authorization
+
+Two catalogued actions, both at read scope: `artifacts.read` (list and read,
+including the Android endpoints) and `artifacts.download` (mint a download
+token). They are separate even though both require `codexbridge.read`, because
+a client decides whether to show a Download control separately from whether to
+show the catalogue — the same relationship `sessions.read` and
+`sessions.readLogs` already have. `GET /api/v1/auth/me` reports the split, so a
+deployment that later withholds bytes while still showing metadata needs no
+client change.
+
+Project scope is the same rule as sessions and conversations: applied to the
+query, never to the loaded rows, and an artifact in a project the caller cannot
+see answers a `404` that is byte-identical to the answer for an id that does
+not exist.
+
+### Deploy needs migration 0008
+
+`migrations/0008_artifacts.sql` creates `artifacts`, `android_builds` and
+`artifact_download_tokens`. `schema_guard` demands all three by name, so a
+build started against a database without them fails at boot naming the file,
+rather than failing at the first request in a way that reads like a code bug.
 
 ---
 

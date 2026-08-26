@@ -8,6 +8,9 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.models.entities import (
+    AndroidBuildModel,
+    ArtifactDownloadTokenModel,
+    ArtifactModel,
     AuditEventModel,
     ConversationMessageModel,
     ConversationModel,
@@ -22,6 +25,21 @@ from gateway.app.models.entities import (
     ProjectModel,
     TaskLogModel,
     TaskModel,
+)
+from gateway.app.services.artifact_storage import validate_storage_path
+from gateway.app.services.artifact_types import (
+    ANDROID_ENVIRONMENTS,
+    ARTIFACT_ORIGINS,
+    ARTIFACT_TYPES,
+    CONTENT_TYPE_RE,
+    DEFAULT_CONTENT_TYPE,
+    MAX_CHANGELOG_LENGTH,
+    NAME_RE,
+    PACKAGE_NAME_RE,
+    SHA256_RE,
+    VERSION_RE,
+    ArtifactError,
+    normalize_fingerprint,
 )
 from gateway.app.services.audit import record_event
 from gateway.app.services.conversation_types import (
@@ -2023,3 +2041,400 @@ async def list_conversation_messages_page(
     ).limit(limit + 1)
     result = await session.execute(statement)
     return list(result.scalars())
+
+
+# --------------------------------------------------------------------------
+# Artifacts, Android builds and download tokens (issue #11).
+#
+# There is no producer. No executor message, no upload endpoint and no build
+# hook writes an artifact row; `create_artifact` below is the only way one
+# comes into existence, which today means a test fixture or an operator
+# script. See `gateway/app/services/artifact_types.py` for why that is stated
+# rather than implied, and `gateway/app/services/artifact_storage.py` for the
+# confinement rule `storage_path` is held to.
+# --------------------------------------------------------------------------
+
+
+def _require(condition: bool, field: str, code: str, message: str) -> None:
+    if not condition:
+        raise ArtifactError(field, code, message)
+
+
+def _validated_android(metadata: dict) -> dict:
+    """The APK half of `create_artifact`, checked field by field.
+
+    Separate from the artifact half so the two rules that matter — an `apk`
+    carries this and nothing else does — read as one line at the call site
+    instead of being spread through a long function.
+    """
+    package_name = str(metadata.get("package_name") or "").strip()
+    _require(
+        bool(PACKAGE_NAME_RE.match(package_name)),
+        "/android/packageName",
+        "invalid_package_name",
+        "packageName must be a dotted Android application id.",
+    )
+    version_name = str(metadata.get("version_name") or "").strip()
+    _require(
+        bool(VERSION_RE.match(version_name)),
+        "/android/versionName",
+        "invalid_version",
+        "versionName must match [A-Za-z0-9][A-Za-z0-9._+-]{0,63}.",
+    )
+    version_code = metadata.get("version_code")
+    _require(
+        isinstance(version_code, int) and not isinstance(version_code, bool) and version_code > 0,
+        "/android/versionCode",
+        "invalid_version_code",
+        "versionCode must be a positive integer.",
+    )
+    environment = str(metadata.get("environment") or "").strip()
+    _require(
+        environment in ANDROID_ENVIRONMENTS,
+        "/android/environment",
+        "invalid_environment",
+        f"environment must be one of {sorted(ANDROID_ENVIRONMENTS)}.",
+    )
+    min_sdk_version = metadata.get("min_sdk_version")
+    _require(
+        min_sdk_version is None
+        or (isinstance(min_sdk_version, int) and not isinstance(min_sdk_version, bool) and min_sdk_version > 0),
+        "/android/minSdkVersion",
+        "invalid_min_sdk",
+        "minSdkVersion must be a positive integer when present.",
+    )
+    changelog = metadata.get("changelog")
+    _require(
+        changelog is None or len(str(changelog)) <= MAX_CHANGELOG_LENGTH,
+        "/android/changelog",
+        "too_long",
+        f"changelog may be at most {MAX_CHANGELOG_LENGTH} characters.",
+    )
+    return {
+        "package_name": package_name,
+        "version_name": version_name,
+        "version_code": version_code,
+        "environment": environment,
+        "min_sdk_version": min_sdk_version,
+        "changelog": changelog,
+        # Raises `ArtifactError` itself, with its own pointer.
+        "signing_fingerprint": normalize_fingerprint(str(metadata.get("signing_fingerprint") or "")),
+    }
+
+
+async def create_artifact(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    artifact_type: str,
+    name: str,
+    size_bytes: int,
+    sha256: str,
+    origin: str,
+    storage_path: str,
+    version: str | None = None,
+    content_type: str | None = None,
+    retained_until: datetime | None = None,
+    android: dict | None = None,
+) -> ArtifactModel:
+    """Record an artifact and, for an APK, its build metadata.
+
+    Every rule this write must never violate lives here rather than at the
+    caller (`design-standards.md` §3): the project must exist and be enabled,
+    the vocabulary must be one of `artifact_types`', the checksum must be a real
+    SHA-256, the name must be safe to put in a `Content-Disposition` header, and
+    the storage path must be confined to the artifacts root. There is exactly
+    one caller today; the guard is here so the second one cannot forget it.
+
+    An `apk` **must** carry `android` and nothing else may: an APK with no
+    metadata would appear in `GET /api/v1/builds/android` with nothing to show,
+    and metadata on a log bundle describes nothing.
+    """
+    project = await session.get(ProjectModel, project_id)
+    if project is None or not project.enabled:
+        raise ArtifactError("/projectId", "unknown_project", "No such project.")
+
+    _require(
+        artifact_type in ARTIFACT_TYPES,
+        "/type", "invalid_type", f"type must be one of {sorted(ARTIFACT_TYPES)}.",
+    )
+    _require(
+        origin in ARTIFACT_ORIGINS,
+        "/origin", "invalid_origin", f"origin must be one of {sorted(ARTIFACT_ORIGINS)}.",
+    )
+    cleaned_name = (name or "").strip()
+    _require(
+        bool(NAME_RE.match(cleaned_name)),
+        "/name",
+        "invalid_name",
+        "name must match [A-Za-z0-9][A-Za-z0-9._-]{0,254} — it is served as a filename.",
+    )
+    _require(
+        isinstance(size_bytes, int) and not isinstance(size_bytes, bool) and size_bytes >= 0,
+        "/sizeBytes", "invalid_size", "sizeBytes must be a non-negative integer.",
+    )
+    checksum = (sha256 or "").strip().lower()
+    _require(
+        bool(SHA256_RE.match(checksum)),
+        "/sha256", "invalid_checksum", "sha256 must be 64 lowercase hex characters.",
+    )
+    if version is not None:
+        version = version.strip()
+        _require(
+            bool(VERSION_RE.match(version)),
+            "/version", "invalid_version", "version must match [A-Za-z0-9][A-Za-z0-9._+-]{0,63}.",
+        )
+    media_type = (content_type or DEFAULT_CONTENT_TYPE).strip()
+    _require(
+        bool(CONTENT_TYPE_RE.match(media_type)),
+        "/contentType",
+        "invalid_content_type",
+        "contentType must be a bare media type with no parameters.",
+    )
+    # Raises `ArtifactError` with its own pointer; returns the normalized form.
+    relative_path = validate_storage_path(storage_path)
+
+    if artifact_type == "apk":
+        _require(android is not None, "/android", "required", "An apk artifact must carry Android build metadata.")
+    else:
+        _require(
+            android is None,
+            "/android",
+            "not_applicable",
+            "Android build metadata belongs only to an apk artifact.",
+        )
+
+    now = datetime.now(timezone.utc)
+    artifact = ArtifactModel(
+        id=str(uuid4()),
+        project_id=project_id,
+        type=artifact_type,
+        name=cleaned_name,
+        version=version,
+        size_bytes=size_bytes,
+        sha256=checksum,
+        origin=origin,
+        content_type=media_type,
+        storage_path=relative_path,
+        created_at=now,
+        retained_until=retained_until,
+    )
+    session.add(artifact)
+    if android is not None:
+        fields = _validated_android(android)
+        session.add(AndroidBuildModel(artifact_id=artifact.id, **fields))
+    await record_event(
+        session,
+        "artifact",
+        artifact.id,
+        "artifact.recorded",
+        # No `storage_path`: the audit trail is read back by
+        # `GET /api/v1/missions/{id}/timeline`-shaped endpoints and by an
+        # operator, and an internal path is internal in both places.
+        {"project_id": project_id, "type": artifact_type, "origin": origin, "sha256": checksum},
+    )
+    await session.commit()
+    await session.refresh(artifact)
+    return artifact
+
+
+def artifact_is_retained(artifact: ArtifactModel, now: datetime | None = None) -> bool:
+    """Whether the artifact is still inside its retention window.
+
+    A null `retained_until` means "kept until an operator removes it". Past the
+    window the catalogue still lists the row — a client that shows a stale link
+    deserves an explanation rather than a 404 — but no download token is minted
+    and no bytes are served.
+    """
+    if artifact.retained_until is None:
+        return True
+    return _as_utc(artifact.retained_until) > (now or datetime.now(timezone.utc))
+
+
+async def get_artifact_for_projects(
+    session: AsyncSession, artifact_id: str, project_ids: list[str] | None
+) -> ArtifactModel | None:
+    """An artifact the caller may see, or None. Mirrors `get_conversation_for_projects`.
+
+    None covers both "no such artifact" and "in a project you cannot see", and
+    the route answers a single `404` for both — the probing-prevention rule
+    every other resource in this contract follows.
+    """
+    artifact = await session.get(ArtifactModel, artifact_id)
+    if artifact is None:
+        return None
+    if project_ids is not None and artifact.project_id not in project_ids:
+        return None
+    return artifact
+
+
+async def list_artifacts_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    types: list[str] | None = None,
+    origins: list[str] | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[ArtifactModel]:
+    """Artifacts the caller may see, newest first, over-fetched by one.
+
+    Project scope is applied to the query, never to the result: filtering after
+    loading is how `page.hasMore` ends up describing rows the caller may not
+    see (`gateway/app/api/auth.py`).
+    """
+    statement = select(ArtifactModel)
+    if project_ids is not None:
+        if not project_ids:
+            return []
+        statement = statement.where(ArtifactModel.project_id.in_(project_ids))
+    if types:
+        statement = statement.where(ArtifactModel.type.in_(types))
+    if origins:
+        statement = statement.where(ArtifactModel.origin.in_(origins))
+    if after is not None:
+        created_at, artifact_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                ArtifactModel.created_at < created_at,
+                and_(ArtifactModel.created_at == created_at, ArtifactModel.id < artifact_id),
+            )
+        )
+    statement = statement.order_by(ArtifactModel.created_at.desc(), ArtifactModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def android_builds_for(
+    session: AsyncSession, artifact_ids: list[str]
+) -> dict[str, AndroidBuildModel]:
+    """`{artifact_id: AndroidBuildModel}` for a whole page in one query.
+
+    Same reasoning as `conversation_read_states`: one query for a page rather
+    than one per row.
+    """
+    if not artifact_ids:
+        return {}
+    result = await session.execute(
+        select(AndroidBuildModel).where(AndroidBuildModel.artifact_id.in_(artifact_ids))
+    )
+    return {row.artifact_id: row for row in result.scalars()}
+
+
+async def get_android_build(session: AsyncSession, artifact_id: str) -> AndroidBuildModel | None:
+    return await session.get(AndroidBuildModel, artifact_id)
+
+
+async def list_android_builds_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    environments: list[str] | None = None,
+    package_name: str | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[tuple[ArtifactModel, AndroidBuildModel]]:
+    """APK artifacts with their build metadata, newest first, over-fetched by one.
+
+    A join rather than "list artifacts, then look each one up": the filters
+    (`environment`, `packageName`) live on the metadata table, and a filter
+    applied after the page is chosen is a page that can come back short for a
+    reason `hasMore` cannot describe.
+    """
+    statement = select(ArtifactModel, AndroidBuildModel).join(
+        AndroidBuildModel, AndroidBuildModel.artifact_id == ArtifactModel.id
+    )
+    if project_ids is not None:
+        if not project_ids:
+            return []
+        statement = statement.where(ArtifactModel.project_id.in_(project_ids))
+    if environments:
+        statement = statement.where(AndroidBuildModel.environment.in_(environments))
+    if package_name:
+        statement = statement.where(AndroidBuildModel.package_name == package_name)
+    if after is not None:
+        created_at, artifact_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                ArtifactModel.created_at < created_at,
+                and_(ArtifactModel.created_at == created_at, ArtifactModel.id < artifact_id),
+            )
+        )
+    statement = statement.order_by(ArtifactModel.created_at.desc(), ArtifactModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return [(artifact, build) for artifact, build in result.all()]
+
+
+async def create_artifact_download_token(
+    session: AsyncSession,
+    *,
+    artifact_id: str,
+    user_id: str,
+    token: str,
+    expires_at: datetime,
+) -> ArtifactDownloadTokenModel:
+    """Store the hash of a freshly minted download token.
+
+    The plaintext is never persisted, exactly as with `create_oauth_access_token`
+    — `shared.security.hash_token` is the same one-way function both use, so a
+    reader of this table cannot download anything.
+
+    Expired rows are swept here rather than by a scheduler, for the same reason
+    `idempotency.purge_expired` sweeps at startup: this deployment has no
+    scheduler, and a credential table nothing ever prunes grows forever.
+
+    **Issuing it is audited**, under `AUTH_ENTITY_TYPE` and keyed by the actor,
+    exactly as `issue_auth_grant` audits an access/refresh pair. This is a
+    credential for bytes: an operator investigating a leaked APK has to be able
+    to answer "who was authorized to fetch it, and when" from the audit trail,
+    and a credential table whose rows are deleted as they expire cannot answer
+    it. `auth` is the entity type on purpose rather than `artifact` — it is what
+    puts these rows inside `purge_expired_audit_events`'s retention window, so
+    the trail does not become the unbounded table this function's own sweep
+    exists to avoid. The payload names the artifact and the expiry and never
+    the token: writing a credential into the audit table would undo the hashing
+    two lines below it.
+    """
+    now = datetime.now(timezone.utc)
+    await session.execute(
+        delete(ArtifactDownloadTokenModel).where(ArtifactDownloadTokenModel.expires_at <= now)
+    )
+    item = ArtifactDownloadTokenModel(
+        token_hash=hash_token(token),
+        artifact_id=artifact_id,
+        user_id=user_id,
+        created_at=now,
+        expires_at=expires_at,
+    )
+    session.add(item)
+    await record_event(
+        session,
+        AUTH_ENTITY_TYPE,
+        user_id,
+        "auth.artifact_download_authorized",
+        {"artifact_id": artifact_id, "expires_at": expires_at.isoformat()},
+    )
+    await session.commit()
+    await session.refresh(item)
+    return item
+
+
+async def get_artifact_download_token(
+    session: AsyncSession, token: str
+) -> ArtifactDownloadTokenModel | None:
+    """The live token row for `token`, or None when it is unknown or expired.
+
+    Collapsing "never existed" and "expired" into one None is deliberate and is
+    the same choice `get_oauth_access_token` makes: telling a holder which one
+    happened tells them whether the credential was ever real.
+    """
+    item = await session.get(ArtifactDownloadTokenModel, hash_token(token))
+    if item is None:
+        return None
+    if _as_utc(item.expires_at) <= datetime.now(timezone.utc):
+        return None
+    return item

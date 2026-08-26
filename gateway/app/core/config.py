@@ -161,6 +161,40 @@ class Settings(BaseSettings):
     # connection from the same pool that serves the API, and enough of them made
     # the gateway report itself database-down and ask to be pulled from rotation.
     ready_cache_seconds: float = 5.0
+    # The one directory artifact bytes may be read from (issue #11).
+    # `ArtifactModel.storage_path` is relative to it and never leaves the
+    # server; `gateway/app/services/artifact_storage.py` resolves the pair and
+    # refuses anything that lands outside this root, symlinks included.
+    #
+    # Absolute at import, the same idiom `registry_file` above uses — and it is
+    # worth being exact about what that does and does not buy, because the
+    # obvious reading of it is wrong. `Path(...).resolve()` resolves against the
+    # **current working directory at import time**, not against the checkout, so
+    # the default still moves with the directory the service was started from:
+    # `cd /tmp && python -m gateway` yields `/tmp/data/artifacts`. What it buys
+    # is that the value is absolute once read, so nothing later re-interprets it
+    # against a different cwd — not a stable location. Treat the default as a
+    # development convenience only; **a deployment sets
+    # `CODEX_BRIDGE_ARTIFACTS_ROOT` explicitly**, which is what `.env.example`
+    # says. (Changing the idiom would convert `registry_file` too, which is a
+    # declared refactor and not this issue's — `design-standards.md` §7.)
+    #
+    # The directory does not have to exist: with no producer of artifacts in
+    # this build, an absent root simply means every artifact's content is
+    # missing, which the download endpoint answers as a typed 404.
+    artifacts_root: str = str(Path("data/artifacts").resolve())
+    # How long a minted artifact download token is accepted, in seconds. Short
+    # on purpose: it is a bearer credential for bytes, carried by whatever
+    # downloader the phone hands the transfer to. Five minutes is enough to
+    # start (and to resume) a download and short enough that a leaked one is
+    # worth little. Floored at 30s and capped at an hour by
+    # `effective_artifact_download_token_ttl_seconds` — a zero or negative TTL
+    # would mint credentials that are already dead, and an unbounded one turns
+    # a short-lived grant into a permanent link.
+    artifact_download_token_ttl_seconds: int = 300
+
+    def effective_artifact_download_token_ttl_seconds(self) -> int:
+        return max(30, min(3600, int(self.artifact_download_token_ttl_seconds)))
 
     def effective_ready_cache_seconds(self) -> float:
         # A zero or negative TTL disables caching and restores the DoS the cache

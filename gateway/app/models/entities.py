@@ -191,6 +191,112 @@ class ConversationReadStateModel(Base):
     last_read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ArtifactModel(Base):
+    """A retained file this gateway can hand to CodexBridgeMobile — issue #11.
+
+    Nothing in this build *produces* one: there is no ingestion path, no upload
+    endpoint and no executor message that writes a row here (see
+    `gateway/app/services/artifact_types.py`). Every artifact served today was
+    created through `store.create_artifact`, which means a test fixture or an
+    operator script. The catalogue endpoints are honest about that rather than
+    reporting an always-empty list as if a producer existed.
+
+    `storage_path` is the trap on this table, exactly as `ProjectModel.path` is
+    on that one: it is a path relative to `settings.artifacts_root` and it never
+    appears in a response (`docs/api/README.md` §"Fields that must never ship").
+    `gateway/app/services/artifact_storage.py` is the only code that turns it
+    into a real file, and it is what confines it to the root.
+    """
+
+    __tablename__ = "artifacts"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    # `artifact_types.ARTIFACT_TYPES` / `.ARTIFACT_ORIGINS`. Stored as text
+    # rather than a database enum for the same reason every other status column
+    # here is: the vocabulary is the contract's, and widening a database enum is
+    # a migration where widening a frozenset is not.
+    type: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(String(255))
+    version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    # Lowercase hex SHA-256 of the bytes. Reported *before* a download so a
+    # client can verify what it received — issue #11's "checksums and signing
+    # metadata are included before download/install".
+    sha256: Mapped[str] = mapped_column(String(64))
+    origin: Mapped[str] = mapped_column(String(32))
+    content_type: Mapped[str] = mapped_column(String(255), default="application/octet-stream")
+    # NEVER serialized. See the class docstring.
+    storage_path: Mapped[str] = mapped_column(String(512))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Retention metadata, and load-bearing: past this instant the gateway
+    # refuses to mint a download token or serve the bytes (`409 conflict`),
+    # while the catalogue still lists the row so a client can say why. Null
+    # means "kept until an operator removes it".
+    retained_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AndroidBuildModel(Base):
+    """APK metadata for one artifact — issue #11's Android half.
+
+    One row per `apk` artifact, keyed by the artifact's own id: an Android build
+    *is* an artifact plus this metadata, so inventing a second identifier would
+    give the mobile client two ids for one thing and a mapping to keep. That is
+    why `GET /api/v1/builds/android/{buildId}` takes an `ArtifactId`.
+
+    `signing_fingerprint` is the SHA-256 certificate fingerprint in the
+    colon-separated form `apksigner` prints, normalized on write
+    (`artifact_types.normalize_fingerprint`) so one certificate has one
+    spelling. It is not a credential: a certificate fingerprint is public by
+    construction, and publishing it is what lets an operator refuse an APK
+    signed by something else before installing it.
+    """
+
+    __tablename__ = "android_builds"
+
+    artifact_id: Mapped[str] = mapped_column(String(128), ForeignKey("artifacts.id"), primary_key=True)
+    package_name: Mapped[str] = mapped_column(String(255))
+    version_name: Mapped[str] = mapped_column(String(64))
+    version_code: Mapped[int] = mapped_column(Integer)
+    environment: Mapped[str] = mapped_column(String(32))
+    min_sdk_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
+    signing_fingerprint: Mapped[str] = mapped_column(String(128))
+
+
+class ArtifactDownloadTokenModel(Base):
+    """A short-lived bearer credential for the bytes of exactly one artifact.
+
+    Stored **hashed**, the same way `OAuthAccessTokenModel` is and through the
+    same `shared.security.hash_token`: a reader of the database must not be able
+    to download anything. The plaintext exists once, in the response to
+    `POST /api/v1/artifacts/{artifactId}/download-token`.
+
+    Three bindings make it narrow. `artifact_id` — presenting it on another
+    artifact is refused, so a token minted for a public report cannot fetch a
+    signed APK. `user_id` — the download re-reads that account at request time
+    and re-checks project visibility, so an account disabled a minute after
+    minting cannot still pull the bytes, the same rule refresh-token rotation
+    already applies. `expires_at` — minutes, not hours
+    (`settings.artifact_download_token_ttl_seconds`).
+
+    It is deliberately **not** single-use. Issue #11 asks for range and
+    resumable downloads in the same breath as short-lived authorization, and a
+    token consumed by the first request makes a resumed download impossible: the
+    client would have to re-authenticate mid-transfer, which is exactly what a
+    download token exists to avoid. The lifetime is the control, and it is short
+    for that reason.
+    """
+
+    __tablename__ = "artifact_download_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(String(128), ForeignKey("artifacts.id"))
+    user_id: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class TaskLogModel(Base):
     __tablename__ = "task_logs"
 

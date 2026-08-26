@@ -45,6 +45,12 @@ REQUIRED_TABLES: dict[str, str] = {
     "conversations": "0007_conversations.sql",
     "conversation_messages": "0007_conversations.sql",
     "conversation_read_states": "0007_conversations.sql",
+    "artifacts": "0008_artifacts.sql",
+    "android_builds": "0008_artifacts.sql",
+    # Without this one the gateway starts and every download-token mint fails at
+    # request time — the same "reads like a code bug" failure this module exists
+    # to turn into a startup failure that names the migration.
+    "artifact_download_tokens": "0008_artifacts.sql",
 }
 
 REQUIRED_COLUMNS: dict[str, dict[str, str]] = {

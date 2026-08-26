@@ -13,6 +13,7 @@ from gateway.app.api.idempotency import purge_expired
 from gateway.app.api.rate_limit import RateLimitDependency, client_key
 from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import decisions, missions, probes, projects, sessions
+from gateway.app.api.routes import artifacts as artifacts_routes
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import epics as epics_routes
 from gateway.app.api.routes import issues as issues_routes
@@ -135,6 +136,12 @@ app.include_router(issues_routes.router, dependencies=[Depends(RateLimitDependen
 # projects, sessions/decisions/missions and issues. Same limiter, same
 # authorization plumbing as epics and issues above.
 app.include_router(conversations_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# The artifact catalogue, Android build metadata and the download flow (issue
+# #11). The limiter matters on `/artifacts/{id}/download` in particular: it is
+# the one route on this surface that authenticates with a token minted for it
+# rather than with a session bearer, and it streams bytes off disk.
+app.include_router(artifacts_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:

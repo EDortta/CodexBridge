@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-22 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-08-26 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 95 file(s) · 876 symbol(s) indexed
-- Languages: config (2), python (91), shell (2)
+- 99 file(s) · 960 symbol(s) indexed
+- Languages: config (2), python (95), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -20,7 +20,7 @@
 ## Ignored Paths
 
 - Built-in: `.docs-migration-bak`, `.git`, `.idea`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`, `.venv`, `.vscode`, `__pycache__`, `build`, `dist`, `env`, `node_modules`, `venv`
-- `.gitignore`: `__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.coverage`, `codex_bridge.db`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `venv/`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md`, `.windsurfrules`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/ai-agents.md`, `.credentials`, `handoff.md`, `new-tag.sh`, `scripts/install-agents-kit.sh`, `scripts/agent-worktree.sh`, `.docs-migration-bak/`, `.gk/operator.json`, `.gk/secrets.json`, `.gk/context-telemetry.jsonl`, `.gk/overwritten/`, `.env`, `.env.*`, `.envrc`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, `.credentials/*`, `!.env.example`, `!.env.sample`, `!.env.template`, `!.env.dist`, `!.env-example`, `!.env.missing`, `!.credentials/.gitignore`, `!.credentials/.keep`, `!.credentials/README*`, `!.credentials/*.example`, `!.credentials/*.sample`, `!.credentials/*.template`, `!.credentials/*.dist`
+- `.gitignore`: `__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.coverage`, `codex_bridge.db`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `venv/`, `.governancekit-identity.json`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md`, `.windsurfrules`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/ai-agents.md`, `handoff.md`, `new-tag.sh`, `scripts/install-agents-kit.sh`, `scripts/agent-worktree.sh`, `.docs-migration-bak/`, `.gk/operator.json`, `.gk/secrets.json`, `.gk/context-telemetry.jsonl`, `.gk/overwritten/`, `.gk/pre-upgrade/`, `.gk/pre-migrate/`, `.gk/remove-agents-backup/`, `.gk/remove-agents-plan.json`, `.gk/context-proposal/`, `*.kit-new`, `*.pre-draft`, `.env`, `.env.*`, `.envrc`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, `.credentials/*`, `!.env.example`, `!.env.sample`, `!.env.template`, `!.env.dist`, `!.env-example`, `!.env.missing`, `!.credentials/.gitignore`, `!.credentials/.keep`, `!.credentials/README*`, `!.credentials/*.example`, `!.credentials/*.sample`, `!.credentials/*.template`, `!.credentials/*.dist`
 
 ## Entry Points
 
@@ -58,6 +58,7 @@ gateway/
       request_context.py  — "Per-request identifier, carried from the middleware to the error envelope."
       routes/
         __init__.py  — "HTTP routers for the mobile contract surface."
+        artifacts.py  — "The artifact catalogue, Android build metadata, and the download flow — issue #11."
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
         conversations.py  — "Conversations and contextual messaging — issue #10."
         decisions.py  — "Operational decisions: sensitive tasks held for a human to resolve — issue #6."
@@ -91,6 +92,8 @@ gateway/
     services/
       __init__.py
       agent_hub.py
+      artifact_storage.py  — "Where an artifact's bytes live, and which of them a request may read."
+      artifact_types.py  — "The closed vocabulary an artifact row may use, and the one error it raises."
       audit.py
       conversation_types.py  — "Closed vocabulary for conversation context references, and their error."
       issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
@@ -118,6 +121,7 @@ tests/
     test_agent_hub.py
     test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
+    test_artifacts.py  — "Artifacts, Android build metadata and the download flow — issue #11."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
     test_codex_runner_real_process.py  — "CodexRunner against a REAL `codex` subprocess — not the fake used everywhere else."
     test_conversations.py  — "Conversations and contextual messaging — issue #10."
@@ -268,6 +272,17 @@ tests/
   - `__init__(self, app, on_unhandled)` *(method)*
   - `dispatch(self, request, call_next)` *(async method)*
 
+### `gateway/app/api/routes/artifacts.py`
+
+> The artifact catalogue, Android build metadata, and the download flow — issue #11.
+
+- `list_artifacts(response, project, type, origin, cursor, limit, principal, session)` *(async function)* — "Artifacts the caller may see, newest first."
+- `get_artifact(artifact_id, principal, session)` *(async function)*
+- `mint_download_token(artifact_id, response, principal, session)` *(async function)* — "Mint a short-lived bearer credential for this artifact's bytes."
+- `download_artifact(artifact_id, request, session)` *(async function)* — "Stream an artifact's bytes to the holder of a live download token."
+- `list_android_builds(project, environment, package_name, cursor, limit, principal, session)` *(async function)* — "APK artifacts with their build metadata, newest first."
+- `get_android_build(build_id, principal, session)` *(async function)* — "One Android build, addressed by the id of the artifact it is."
+
 ### `gateway/app/api/routes/auth.py`
 
 > Sign-in, renewal, revocation, and what the actor may actually do.
@@ -399,6 +414,7 @@ tests/
 ### `gateway/app/core/config.py`
 
 - **`Settings`** *(class)*
+  - `effective_artifact_download_token_ttl_seconds(self)` *(method)*
   - `effective_ready_cache_seconds(self)` *(method)*
   - `accepted_mcp_tokens(self)` *(method)*
   - `oauth_client_ids(self)` *(method)*
@@ -415,6 +431,7 @@ tests/
 - `generate_authorization_code()`
 - `generate_access_token()`
 - `generate_refresh_token()` — "A refresh token is longer-lived than an access token, so it is longer."
+- `generate_artifact_download_token()` — "A bearer credential for the bytes of one artifact (issue #11)."
 - `generate_grant_id()` — "Identifier of one sign-in and every rotation descended from it."
 - `now_utc()`
 - `expires_in(seconds)`
@@ -507,6 +524,9 @@ tests/
 - **`ConversationModel`** *(class)* — "A contextual thread linked to at least one product entity — issue #10."
 - **`ConversationMessageModel`** *(class)* — "One message in a conversation. Immutable once written — no update path."
 - **`ConversationReadStateModel`** *(class)* — "How far one actor has read into one conversation."
+- **`ArtifactModel`** *(class)* — "A retained file this gateway can hand to CodexBridgeMobile — issue #11."
+- **`AndroidBuildModel`** *(class)* — "APK metadata for one artifact — issue #11's Android half."
+- **`ArtifactDownloadTokenModel`** *(class)* — "A short-lived bearer credential for the bytes of exactly one artifact."
 - **`TaskLogModel`** *(class)*
 - **`AuditEventModel`** *(class)*
 - **`MessageReceiptModel`** *(class)*
@@ -528,6 +548,28 @@ tests/
   - `dispatch_available(self, executor_id)` *(async method)* — "Dispatches the next queued/waiting task to `executor_id`, if one is"
   - `mark_task_finished(self, executor_id, task_id)` *(async method)* — "Releases the slot `task_id` held and, if the executor is still"
 - `hub_envelope(executor_id, message_type, payload)` — "Build a message for an executor."
+
+### `gateway/app/services/artifact_storage.py`
+
+> Where an artifact's bytes live, and which of them a request may read.
+
+- **`UnsatisfiableRange`** *(class)* — "A well-formed `Range` whose first byte lies past the end of the file."
+- **`ArtifactContentMissing`** *(class)* — "The row exists and its bytes do not."
+- **`ByteRange`** *(class)* — "A resolved, satisfiable range: `[start, end]` inclusive, as HTTP means it."
+  - `length` *(property)*
+- `artifacts_root()` — "The one directory artifact bytes may live under."
+- `validate_storage_path(storage_path)` — "The stored form of a relative artifact path, or `ArtifactError`."
+- `resolve_artifact_file(storage_path)` — "The file `storage_path` names, proven to be inside the artifacts root."
+- `parse_range_header(value, size)` — "The single byte range `value` asks for, or None to serve the whole file."
+- `read_chunks(path, byte_range)` — "Yield the requested bytes of `path`, `chunk_size` at a time."
+
+### `gateway/app/services/artifact_types.py`
+
+> The closed vocabulary an artifact row may use, and the one error it raises.
+
+- **`ArtifactError`** *(class)* — "A rejected artifact field, carrying what the API must report."
+  - `__init__(self, field, code, message)` *(method)*
+- `normalize_fingerprint(value)` — "Colon-separated uppercase form of a SHA-256 certificate fingerprint."
 
 ### `gateway/app/services/audit.py`
 
@@ -618,6 +660,15 @@ tests/
 - `mark_conversation_read(session)` *(async function)* — "Advance (never retreat) one actor's read cursor on one conversation."
 - `create_conversation_message(session)` *(async function)* — "Append a message. Immutable once written — there is no update path."
 - `list_conversation_messages_page(session)` *(async function)* — "A conversation's messages, oldest first — the order a thread reads in."
+- `create_artifact(session)` *(async function)* — "Record an artifact and, for an APK, its build metadata."
+- `artifact_is_retained(artifact, now)` — "Whether the artifact is still inside its retention window."
+- `get_artifact_for_projects(session, artifact_id, project_ids)` *(async function)* — "An artifact the caller may see, or None. Mirrors `get_conversation_for_projects`."
+- `list_artifacts_page(session)` *(async function)* — "Artifacts the caller may see, newest first, over-fetched by one."
+- `android_builds_for(session, artifact_ids)` *(async function)* — "`{artifact_id: AndroidBuildModel}` for a whole page in one query."
+- `get_android_build(session, artifact_id)` *(async function)*
+- `list_android_builds_page(session)` *(async function)* — "APK artifacts with their build metadata, newest first, over-fetched by one."
+- `create_artifact_download_token(session)` *(async function)* — "Store the hash of a freshly minted download token."
+- `get_artifact_download_token(session, token)` *(async function)* — "The live token row for `token`, or None when it is unknown or expired."
 
 ### `scripts/apply_migrations.py`
 
@@ -791,6 +842,63 @@ tests/
 - `test_completing_a_lost_reservation_still_records_the_write(db_session)` *(async function)* — "Otherwise the next identical request executes the side effect again."
 - `test_a_completed_record_is_final(db_session)` *(async function)* — "Replacing a recorded 200 with a later 500 defeats the whole mechanism."
 - `test_non_contract_unhandled_error_is_logged_once(client, caplog)` — "Two full tracebacks for one failure, on the highest-volume transport."
+
+### `tests/integration/test_artifacts.py`
+
+> Artifacts, Android build metadata and the download flow — issue #11.
+
+- `users_file(tmp_path)`
+- `artifacts_root(tmp_path, monkeypatch)` — "The one directory artifact bytes may be read from, for this test run."
+- `api(users_file, artifacts_root, monkeypatch)` *(async function)*
+- `auth(token)`
+- `android_metadata(**overrides)`
+- `make_artifact(api)` *(async function)* — "Record one artifact and, unless told otherwise, write its bytes."
+- `mint(api, artifact_id, token)`
+- `download(api, artifact_id, download_token, **kwargs)`
+- `test_the_list_carries_the_checksum_and_the_signing_metadata(api)` *(async function)* — "Issue #11's "checksums and signing metadata before download/install"."
+- `test_detail_reports_the_same_shape_as_the_list(api)` *(async function)*
+- `test_a_non_apk_artifact_carries_no_android_block(api)` *(async function)* — "`android` is absent, not null: an archive has no build metadata to show."
+- `test_pagination_walks_every_artifact_exactly_once(api)` *(async function)* — "Stable ordering across a paged walk — the issue's pagination criterion."
+- `test_an_artifact_in_another_project_is_absent_from_the_list(api)` *(async function)*
+- `test_an_artifact_in_another_project_is_indistinguishable_from_a_missing_one(api)` *(async function)* — "The exact cross-project answer every other resource in this contract gives."
+- `test_minting_a_token_for_a_hidden_artifact_gives_the_same_404(api)` *(async function)* — "The mint endpoint must not be the oracle the read endpoint refuses to be."
+- `test_the_project_query_cannot_widen_what_the_caller_may_see(api)` *(async function)* — "`?project=p2` from a p1-only actor narrows to nothing, never widens."
+- `test_an_admin_sees_every_project(api)` *(async function)*
+- `test_a_download_token_cannot_reach_across_projects(api)` *(async function)* — "The bytes are behind the same project scope the metadata is."
+- `test_mint_then_download_returns_the_bytes(api)` *(async function)*
+- `test_the_minted_credential_never_travels_in_the_url(api)` *(async function)* — "`security-standards.md` §2: a credential in a query string reaches logs."
+- `test_a_session_bearer_token_does_not_download(api)` *(async function)* — "The session credential is not what fetches the bytes."
+- `test_a_download_with_no_credential_is_refused(api)` *(async function)*
+- `test_an_expired_token_is_refused_with_the_typed_error(api)` *(async function)*
+- `test_a_token_minted_for_one_artifact_is_refused_on_another(api)` *(async function)*
+- `test_an_unknown_token_is_refused(api)` *(async function)*
+- `test_every_download_refusal_is_the_same_refusal(api)` *(async function)* — "Absent, unknown, expired and wrong-artifact must be indistinguishable."
+- `test_minting_for_an_unknown_artifact_is_a_typed_404(api)` *(async function)*
+- `test_a_token_survives_reuse_inside_its_lifetime(api)` *(async function)* — "Deliberately **not** single-use — the lifetime is the control."
+- `test_a_token_whose_account_was_disabled_stops_working(api)` *(async function)* — "The account is re-read at download time, not trusted from minting time."
+- `test_a_satisfiable_range_is_a_206_with_content_range(api)` *(async function)*
+- `test_a_suffix_range_returns_the_tail(api)` *(async function)*
+- `test_an_unsatisfiable_range_is_a_416_naming_the_size(api)` *(async function)*
+- `test_a_range_this_endpoint_does_not_serve_falls_back_to_the_whole_file(api, header)` *(async function)* — "RFC 9110 §14.2 lets a server ignore a `Range` it will not honour."
+- `test_parse_range_header_agrees_with_the_endpoint()` — "The unit-level statement of the same rule, over sizes the API cannot reach."
+- `test_a_retired_artifact_is_still_listed_and_says_so(api)` *(async function)*
+- `test_a_retired_artifact_mints_no_token_and_serves_no_bytes(api)` *(async function)*
+- `test_no_response_body_carries_the_storage_path(api)` *(async function)* — "`storage_path` is this table's `ProjectModel.path`."
+- `test_a_traversing_storage_path_cannot_be_stored_at_all(api)` *(async function)* — "The lexical half of the confinement rule, at the write."
+- `test_a_symlink_inside_the_root_does_not_escape_it(api)` *(async function)* — "The half the string check cannot see."
+- `test_a_row_whose_bytes_are_gone_is_a_typed_404_naming_no_path(api)` *(async function)*
+- `test_resolve_refuses_before_it_reports_missing()` — "A missing file and a rejected path are different exceptions, not one."
+- `test_the_android_list_shows_only_apks(api)` *(async function)*
+- `test_the_android_list_filters_on_metadata_the_catalogue_cannot(api)` *(async function)*
+- `test_a_build_is_addressed_by_the_artifacts_own_id(api)` *(async function)*
+- `test_an_artifact_that_is_not_a_build_is_not_a_build(api)` *(async function)* — "Same `404` as an id that does not exist: from this endpoint's vocabulary"
+- `test_a_build_in_another_project_answers_the_same_404(api)` *(async function)*
+- `test_the_android_list_is_project_scoped(api)` *(async function)*
+- `test_an_apk_must_carry_build_metadata_and_nothing_else_may(api)` *(async function)*
+- `test_a_fingerprint_has_one_spelling(api)` *(async function)* — "A bare 64-hex fingerprint and the colon-separated form are one certificate."
+- `test_a_name_that_could_forge_a_header_is_refused(api)` *(async function)* — "`name` is interpolated into `Content-Disposition`."
+- `test_an_artifact_needs_a_real_checksum(api)` *(async function)*
+- `test_an_unknown_project_is_refused_at_the_write(api)` *(async function)*
 
 ### `tests/integration/test_auth.py`
 
