@@ -83,7 +83,23 @@ class AgentService:
         query = urlencode({"executor_id": self.settings.executor_id})
         url = f"{self.settings.gateway_ws_url}?{query}"
         headers = {EXECUTOR_TOKEN_HEADER: self.settings.machine_token}
-        async with websockets.connect(url, max_size=2_000_000, extra_headers=headers) as websocket:
+        # `additional_headers` -- confirmed live against the installed
+        # `websockets` 16.1.1 (2026-08-30). The older `extra_headers` kwarg
+        # this line used to pass is accepted by `connect()`'s own signature
+        # (absorbed into `**kwargs`) but is no longer a real parameter
+        # anywhere in the chain beneath it; it reaches asyncio's raw
+        # `loop.create_connection(factory, **kwargs)` unconsumed and raises
+        # `TypeError: got an unexpected keyword argument 'extra_headers'` on
+        # every single connection attempt. `run_forever`'s own bare
+        # `except Exception` (below) caught and silently retried that
+        # TypeError forever, so the executor looked "active (running)"
+        # under systemd for 16 days while never once successfully
+        # connecting to the gateway (`executors.last_seen_at` stuck at
+        # 2026-08-14 in the gateway's own database, discovered live while
+        # verifying this session's delivery). No test in this suite ever
+        # caught it because every existing test replaces
+        # `websockets.connect` with a fake before this line runs.
+        async with websockets.connect(url, max_size=2_000_000, additional_headers=headers) as websocket:
             await websocket.send(self._envelope(AgentMessageType.HELLO, {"version": "0.1.0"}).model_dump_json())
             heartbeat_task = asyncio.create_task(self._heartbeat_loop(websocket))
             try:

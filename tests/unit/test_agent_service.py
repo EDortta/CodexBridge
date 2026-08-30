@@ -171,7 +171,48 @@ async def test_machine_token_travels_in_a_header_not_the_url(monkeypatch) -> Non
     assert "s3cr3t" not in recorder.url
     assert "token=" not in recorder.url
     assert "executor_id=devel3" in recorder.url
-    assert recorder.kwargs["extra_headers"][EXECUTOR_TOKEN_HEADER] == "s3cr3t"
+    # `additional_headers`, not the old `extra_headers` -- websockets>=15.0's
+    # asyncio client renamed it, and passing the old name is accepted by
+    # `connect()`'s own signature (absorbed into **kwargs) only to raise
+    # TypeError two calls deeper, inside asyncio's raw create_connection(),
+    # every single time. A fake connect() -- which is everything this file
+    # uses -- cannot ever catch that: the assertion below on the WRONG key
+    # name would have passed for 16 days, exactly as it did, while the real
+    # `websockets.connect` call in production raised TypeError on every
+    # attempt (caught and silently retried forever by run_forever's own
+    # bare except). Discovered live, not from this test, while verifying
+    # WK-20260830-chatgpt-entry-provider-and-delivery's own delivery.
+    assert recorder.kwargs["additional_headers"][EXECUTOR_TOKEN_HEADER] == "s3cr3t"
+
+
+@pytest.mark.asyncio
+async def test_connect_kwargs_are_accepted_by_the_real_installed_websockets_library() -> None:
+    """Drives the REAL `websockets.connect`, not a fake -- every other test in
+
+    this file replaces it, which is exactly how a real production bug
+    (`extra_headers` renamed to `additional_headers` in websockets>=15.0's
+    asyncio client) went undetected for 16 days: `run_forever`'s own bare
+    `except Exception` silently caught and retried the resulting `TypeError`
+    forever, and no test ever exercised the real library's signature to
+    catch it. This test points at a port nothing listens on so it fails
+    FAST on a real connection-refused error -- proving `additional_headers`
+    is a real, accepted keyword this installed version's call chain
+    actually consumes, never raising `TypeError: unexpected keyword
+    argument` on the way there. If this test starts failing with a
+    TypeError instead of a connection error, the installed `websockets`
+    version has changed its API again.
+    """
+    import websockets
+
+    with pytest.raises(OSError) as raised:
+        async with websockets.connect(
+            "ws://127.0.0.1:1",
+            max_size=2_000_000,
+            additional_headers={"X-Executor-Token": "irrelevant"},
+            open_timeout=2,
+        ):
+            pass
+    assert not isinstance(raised.value, TypeError)
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@
 
 ## Summary
 
-- 115 file(s) · 1083 symbol(s) indexed
+- 115 file(s) · 1086 symbol(s) indexed
 - Languages: config (2), python (111), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -1393,6 +1393,7 @@ tests/
 - `test_allow_push_on_a_valid_branch_creates_a_preauthorized_task(db_session)` *(async function)*
 - `test_issue_ref_invalid_shape_is_refused(db_session)` *(async function)*
 - `test_github_issue_reference_is_explicitly_unsupported(db_session)` *(async function)*
+- `test_an_unimplemented_engine_is_refused_before_dispatch(db_session)` *(async function)* — "Council round 1, "the second caller": the tool's own JSON Schema"
 - `test_neither_request_nor_issue_is_refused(db_session)` *(async function)*
 - `test_local_issue_reference_builds_a_default_request_from_its_title(db_session)` *(async function)*
 - `test_local_issue_reference_in_another_project_is_unknown(db_session)` *(async function)*
@@ -1425,6 +1426,7 @@ tests/
 - `test_mcp_approve_dispatches_to_a_connected_idle_executor(mcp_hub_factory)` *(async function)* — "Issue #20 asks this of the REST path specifically because the MCP"
 - `test_mcp_approve_records_the_deciding_actor(mcp_hub_factory)` *(async function)* — "Issue #19: only the generic `task.approval_decision` (written inside"
 - `test_mcp_reject_and_request_revision_do_not_dispatch(mcp_hub_factory)` *(async function)*
+- `test_mcp_continue_codex_session_carries_the_parents_engine_forward(mcp_hub_factory)` *(async function)* — "Council round 1, "the sweep skeptic": before this fix, every"
 - `test_mcp_continue_codex_session_succeeds_without_datetime_crash(mcp_hub_factory)` *(async function)* — "Issue #23: `continue_codex_session` forwards `parent.expires_at` —"
 - `test_mcp_continue_codex_session_dispatches_to_a_connected_idle_executor(mcp_hub_factory)` *(async function)* — "Issue #24: unlike its sibling `submit_codex_task` (same file), this"
 - `test_mcp_continue_codex_session_leaves_task_queued_when_the_executor_is_offline(mcp_hub_factory)` *(async function)* — "No regression on the pre-existing (disconnected) case: an offline"
@@ -1458,6 +1460,7 @@ tests/
   - `restart(self, _)` *(async method)*
 - `test_dispatch_failure_returns_task_result(tmp_path)` *(async function)*
 - `test_machine_token_travels_in_a_header_not_the_url(monkeypatch)` *(async function)* — "The token in the query string was logged verbatim 107 times (#15)."
+- `test_connect_kwargs_are_accepted_by_the_real_installed_websockets_library()` *(async function)* — "Drives the REAL `websockets.connect`, not a fake -- every other test in"
 - `test_pause_resume_and_restart_controls_acknowledge_over_the_socket(monkeypatch)` *(async function)* — "Drives the real `_run_once` dispatch loop, not a copy of it."
 - `test_cancel_of_an_unknown_task_still_acks_over_the_socket(monkeypatch)` *(async function)* — "issue #17 council round 1, "the claim auditor" / "the second caller":"
 - `test_pause_of_an_unknown_task_reports_known_false(monkeypatch)` *(async function)* — "The control-message sibling of the cancel case above (issue #17"
