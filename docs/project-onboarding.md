@@ -14,6 +14,12 @@ A allowlist é dupla e vive em máquinas diferentes.
 | `/etc/codex-bridge/registry.json` | `frida` | gateway | `Registry` (`gateway/app/core/registry.py`) |
 | `/etc/codex-bridge-agent/projects.json` | `devel3` | agente | `AgentProjectConfig` (`agent/codex_bridge_agent/config.py`) |
 
+O `devel3` real, ao contrário do template aspiracional acima, roda o serviço de
+usuário (`~/.config/systemd/user/`, não o hardened de `deploy/systemd/`) e a sua
+allowlist real hoje está em `~/.config/codex-bridge-agent/allowed-projects.json`
+(`CODEX_BRIDGE_AGENT_ALLOWED_PROJECTS_FILE`), mesmo formato, path diferente —
+mesmo padrão já registrado em `docs/napkin-lessons.md` para o executor.
+
 **O `project_id` precisa existir nos dois.** Se estiver só no gateway, a tarefa é
 aceita, despachada e o agente responde `unknown_project` — a tarefa falha depois de
 já ter sido enfileirada. Se estiver só no agente, o gateway rejeita na submissão.
@@ -37,6 +43,29 @@ Modelos de referência versionados no repositório: `examples/registry.json` e
    `project_id` em `allowed_projects` do usuário em `/etc/codex-bridge/users.json`.
 6. Reiniciar gateway e agente. Ambos carregam os arquivos na inicialização.
 7. Validar com `list_projects` e uma tarefa em modo `analyze`.
+
+## Cadastro em lote, com aprovação (WK-20260830, Fase C)
+
+Para expandir o acesso a muitos projetos de uma vez (o objetivo declarado é
+alcançar todos os repositórios sob `~/Sync/Projects`), dois scripts
+somente-leitura/só-diff, sem allowlist automática:
+
+1. `python3 scripts/discover_projects.py --root ~/Sync/Projects --format table`
+   — varre a árvore, encontra todo `.git` real (inclusive submódulos de
+   monorepo), sugere um `project_id`. **Não escreve em lugar nenhum.** A
+   lista candidata pode ter centenas de entradas (achados: 247 em
+   `~/Sync/Projects`, atravessando ~40 pastas de topo, várias com dados
+   pessoais/financeiros) — revisão humana, linha a linha, é o próprio
+   ponto do passo 2 existir.
+2. O operador edita essa lista até uma lista aprovada (`aprovados.json`:
+   array de `{"project_id", "name", "path"}`).
+3. `python3 scripts/register_projects.py --from aprovados.json --registry-file ... --local-allowed-projects-file ... [--executor-id ...] [--user-registry-file ... --user-id ...]`
+   — gera o diff exato para cada um dos quatro pontos de allowlist acima,
+   nunca aplica. Só adiciona; nunca remove ou modifica uma entrada
+   existente (revogar acesso é uma decisão distinta, sempre manual).
+4. O operador aplica o diff manualmente, nos arquivos reais, na mesma
+   janela de manutenção do passo a passo acima — reinício e validação
+   continuam iguais.
 
 ## Schema de projeto
 

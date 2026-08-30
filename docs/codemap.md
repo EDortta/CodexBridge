@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 119 file(s) · 1113 symbol(s) indexed
-- Languages: config (2), python (115), shell (2)
+- 123 file(s) · 1145 symbol(s) indexed
+- Languages: config (2), python (119), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -114,7 +114,9 @@ pyproject.toml
 scripts/
   apply_migrations.py  — "Apply the SQL files in `migrations/`, once each, in filename order."
   diagnose.sh
+  discover_projects.py  — "Read-only scan of a directory tree for real git repositories."
   install.sh
+  register_projects.py  — "Turn an operator-approved project list into a diff against the real"
 shared/
   __init__.py  — "Shared contracts for the gateway and the agent."
   policy.py
@@ -156,6 +158,7 @@ tests/
     test_claude_runner.py  — "ClaudeRunner's pure logic: command assembly, NDJSON extraction, sandbox mapping."
     test_codex_runner.py  — "CodexRunner's pause/resume/restart/cancel state machine — issue #16 council."
     test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
+    test_discover_projects.py  — "`scripts/discover_projects.py` -- read-only repo discovery."
     test_email_templates.py  — "`gateway.app.services.email_templates` -- pure rendering, no I/O."
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
     test_google_calendar.py  — "`gateway.app.services.google_calendar`, without ever touching Google."
@@ -164,6 +167,7 @@ tests/
     test_notify.py  — "`gateway.app.services.notify` -- the task-finished completion email."
     test_policy.py
     test_rate_limiter_bounds.py  — "The limiter's key space must be bounded, or it becomes the resource exhausted."
+    test_register_projects.py  — "`scripts/register_projects.py` -- diff-only, never applies anything."
     test_runner_registry.py  — "The runner abstraction itself: capability declarations and the pool's"
     test_schema_guard.py  — "The guard that refuses to serve a database the code has outgrown."
     test_security.py
@@ -757,6 +761,25 @@ tests/
 > Apply the SQL files in `migrations/`, once each, in filename order.
 
 - `main()`
+
+### `scripts/discover_projects.py`
+
+> Read-only scan of a directory tree for real git repositories.
+
+- **`Candidate`** *(class)*
+- `discover(root)`
+- `main(argv)`
+
+### `scripts/register_projects.py`
+
+> Turn an operator-approved project list into a diff against the real
+
+- **`ApprovedProject`** *(class)*
+- `diff_registry_projects(approved, registry_file)` — "Additions to the gateway registry's top-level `projects` list."
+- `diff_executor_allowed_projects(approved, registry_file, executor_id)` — "Additions to one executor's `allowed_projects` list inside the gateway registry."
+- `diff_local_allowed_projects(approved, allowed_projects_file)`
+- `diff_user_allowed_projects(approved, user_registry_file, user_id)`
+- `main(argv)`
 
 ### `shared/policy.py`
 
@@ -1566,6 +1589,21 @@ tests/
 - `test_a_replay_window_at_the_documented_ceiling_is_accepted(field)`
 - `test_a_negative_replay_window_is_rejected(field)`
 
+### `tests/unit/test_discover_projects.py`
+
+> `scripts/discover_projects.py` -- read-only repo discovery.
+
+- `test_finds_a_top_level_repo(tmp_path)`
+- `test_descends_past_a_repo_root_to_find_a_submodule(tmp_path)` — "CLAUDE.md: "Vale monorepo e submódulos (web, api, etc.)" -- a nested"
+- `test_never_descends_into_excluded_directory_names(tmp_path)`
+- `test_max_depth_stops_descent(tmp_path)`
+- `test_suggested_project_ids_are_unique_on_a_name_collision(tmp_path)` — "The first `api` seen keeps the plain name; only the later collision"
+- `test_flags_a_candidate_already_in_the_local_allowlist(tmp_path)`
+- `test_a_malformed_local_allowlist_is_treated_as_empty_not_a_crash(tmp_path)`
+- `test_cli_writes_json_to_the_requested_output_file(tmp_path)`
+- `test_cli_never_writes_anywhere_but_the_requested_output_file(tmp_path)` — "Read-only by contract: the script's own docstring promises this."
+- `test_cli_rejects_a_root_that_is_not_a_directory(tmp_path)`
+
 ### `tests/unit/test_email_templates.py`
 
 > `gateway.app.services.email_templates` -- pure rendering, no I/O.
@@ -1687,6 +1725,24 @@ tests/
 - `test_idle_buckets_are_dropped()` *(async function)* — "A window that emptied leaves an entry behind unless something removes it."
 - `test_an_honest_caller_is_still_limited_while_the_table_churns()` *(async function)* — "Eviction must not become a way to escape the limit."
 - `test_the_limit_still_fires_for_a_single_key()` *(async function)*
+
+### `tests/unit/test_register_projects.py`
+
+> `scripts/register_projects.py` -- diff-only, never applies anything.
+
+- `test_registry_diff_adds_only_the_missing_projects(tmp_path)`
+- `test_registry_diff_flags_a_path_collision_instead_of_silently_skipping(tmp_path)`
+- `test_registry_diff_treats_a_missing_file_as_an_empty_registry(tmp_path)`
+- `test_executor_diff_adds_only_ids_not_already_allowed(tmp_path)`
+- `test_executor_diff_notes_an_unknown_executor_id(tmp_path)`
+- `test_local_allowed_projects_diff_matches_registry_diff_shape(tmp_path)`
+- `test_user_diff_adds_only_ids_not_already_allowed(tmp_path)`
+- `test_user_diff_matches_by_email_case_insensitively(tmp_path)`
+- `test_duplicate_project_id_in_the_approved_list_is_rejected(tmp_path)`
+- `test_cli_never_writes_to_any_file_it_reads(tmp_path)`
+- `test_cli_writes_only_the_report_when_out_is_given(tmp_path)`
+- `test_cli_requires_at_least_one_target_file(tmp_path)`
+- `test_cli_rejects_user_id_without_user_registry_file(tmp_path)`
 
 ### `tests/unit/test_runner_registry.py`
 
