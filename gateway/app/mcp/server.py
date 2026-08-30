@@ -20,6 +20,7 @@ from shared.protocol import (
     AgentMessageType,
     ApprovalDecision,
     DeliveryRequest,
+    IMPLEMENTED_ENGINES,
     ISSUE_REF_PATTERN,
     PUSHABLE_BRANCH_PATTERN,
     STOPPABLE_TASK_STATES,
@@ -214,6 +215,18 @@ async def handle_mcp_call(
             priority=TaskPriority(parent.priority),
             run_when_available=True,
             expires_at=parent.expires_at,
+            # WK-20260830-chatgpt-entry-provider-and-delivery / council round 1,
+            # "the sweep skeptic": without this, every continuation silently
+            # defaulted to AgentEngine.CODEX regardless of which engine the
+            # parent task actually ran on. A parent dispatched with
+            # engine="claude" captures a Claude session id in
+            # parent.session_id (store_result's provider_run_ref); a
+            # continuation that then defaults to "codex" would try
+            # `codex exec resume <claude-session-uuid>` on the wrong CLI.
+            # Before this migration every task was implicitly "codex", so
+            # there was nothing to lose -- this session's own engine
+            # plumbing is what made the gap reachable.
+            engine=AgentEngine(parent.engine),
         )
         task = await store.create_task(
             session,
@@ -400,6 +413,15 @@ async def handle_mcp_call(
             executor_id = (connected[0] if connected else onboarded[0]).id
 
         engine_value = arguments.get("engine", "claude")
+        if engine_value not in IMPLEMENTED_ENGINES:
+            # Council round 1, "the second caller": without this, the gateway
+            # accepted any of the six candidate engines in the tool's own
+            # JSON Schema, created the task, and dispatched it -- only for
+            # the executor's RunnerPool.for_engine to reject it with
+            # engine_not_implemented, after already spending a dispatch
+            # cycle and the executor's one concurrency slot. Refuse before
+            # any of that happens.
+            raise HTTPException(status_code=400, detail=f"engine_not_implemented:{engine_value}")
         mode_value = arguments.get("mode", "implement")
         allow_push = bool(arguments.get("allow_push", False))
         branch = arguments.get("branch")

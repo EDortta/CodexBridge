@@ -212,6 +212,27 @@ async def test_github_issue_reference_is_explicitly_unsupported(db_session: Asyn
 
 
 @pytest.mark.asyncio
+async def test_an_unimplemented_engine_is_refused_before_dispatch(db_session: AsyncSession):
+    """Council round 1, "the second caller": the tool's own JSON Schema
+
+    accepts six candidate engines (shared.protocol.AgentEngine), but only
+    "codex" and "claude" have a real Runner (shared.protocol.
+    IMPLEMENTED_ENGINES). Without this check, the gateway would create and
+    dispatch the task anyway, burning a dispatch cycle and the executor's
+    one concurrency slot before the executor's own RunnerPool.for_engine
+    rejects it asynchronously.
+    """
+    hub = DummyHub()
+    with pytest.raises(Exception) as raised:
+        await _call(db_session, hub, ADMIN, {"project": "p1", "request": "x", "engine": "gemini"})
+    assert "engine_not_implemented:gemini" in str(raised.value)
+
+    # And the task must never have been created at all.
+    tasks = await store.list_recent_tasks(db_session, 10)
+    assert tasks == []
+
+
+@pytest.mark.asyncio
 async def test_neither_request_nor_issue_is_refused(db_session: AsyncSession):
     hub = DummyHub()
     with pytest.raises(Exception) as raised:

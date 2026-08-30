@@ -620,6 +620,73 @@ async def test_mcp_reject_and_request_revision_do_not_dispatch(mcp_hub_factory):
 # --------------------------------------------------------------------------
 
 
+async def _make_parent_task_on_engine(factory, *, engine: str, session_id: str):
+    """Same shape as `_make_parent_task`, but on a specific engine with a
+
+    resumable session id already captured -- what a REAL finished
+    non-Codex task looks like (`store.store_result`'s
+    `task.session_id = result.get("provider_run_ref") or ...`).
+    """
+    async with factory() as session:
+        task = await store.create_task(
+            session,
+            SubmitTaskRequest(
+                executor_id="T610",
+                project_id="p1",
+                instruction="explore the repository",
+                mode=TaskMode.ANALYZE,
+                timeout_seconds=300,
+                priority=TaskPriority.NORMAL,
+                run_when_available=True,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                engine=engine,
+            ),
+            executor_online=True,
+        )
+        task = await store.store_result(
+            session, task.id, {"final_state": "completed", "provider_run_ref": session_id}, TaskState.COMPLETED
+        )
+    return task
+
+
+@pytest.mark.asyncio
+async def test_mcp_continue_codex_session_carries_the_parents_engine_forward(mcp_hub_factory):
+    """Council round 1, "the sweep skeptic": before this fix, every
+
+    continuation silently defaulted to `AgentEngine.CODEX` regardless of
+    which engine the parent task actually ran on. A parent dispatched with
+    `engine="claude"` captures a Claude session id in `parent.session_id`; a
+    continuation that defaulted to "codex" would try
+    `codex exec resume <claude-session-uuid>` against the wrong CLI instead
+    of actually resuming the conversation.
+    """
+    parent = await _make_parent_task_on_engine(mcp_hub_factory, engine="claude", session_id="claude-session-uuid-xyz")
+    assert parent.engine == "claude"
+    hub = AgentHub(mcp_hub_factory)  # T610 left offline; this test is only about engine propagation
+
+    async with mcp_hub_factory() as session:
+        response = await handle_mcp_call(
+            {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "tools/call",
+                "params": {
+                    "name": "continue_codex_session",
+                    "arguments": {"task_id": parent.id, "instruction": "keep going", "timeout_seconds": 300},
+                },
+            },
+            session,
+            hub,
+            ADMIN,
+        )
+
+    structured = response["result"]["structuredContent"]
+    async with mcp_hub_factory() as session:
+        child = await store.get_task(session, structured["task_id"])
+    assert child.engine == "claude"
+    assert child.session_id == "claude-session-uuid-xyz"
+
+
 async def _make_parent_task(factory):
     """A finished task with a session to continue from.
 

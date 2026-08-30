@@ -1022,3 +1022,58 @@ It expects `state_version`, `values`, and `refs`; a hand-written flat JSON with
 shared-contract kit refreshes, stage the real delivery first and record the
 council round against that staged diff, because the fingerprint binding is what
 actually clears the gate.
+
+## 2026-08-30 — WK-20260830-chatgpt-entry-provider-and-delivery: council round 1,
+three real findings, all caught by a fork the implementer would not have run alone
+
+Delivered a 6-PR slice (push pre-authorization, a Runner/RunnerPool provider
+abstraction with Codex+Claude, a git commit/push delivery step,
+`start_development_task`, Google Calendar reminders) plus an epic and 17
+issues across CodexBridge and CodexBridgeMobile. Ran the mandated council
+(`.docs/agents/council.md`) as three parallel forks, one lens each, against
+the full session diff (`git diff 2e18820..HEAD`) rather than as a formality
+after the fact — and it earned its keep:
+
+- **the sweep skeptic** found that `continue_codex_session` never propagated
+  `engine` from the parent task to the continuation's `SubmitTaskRequest`,
+  silently defaulting every continuation to `codex` regardless of which
+  engine actually ran the parent. Before this session every task WAS
+  implicitly `codex`, so there was nothing to lose; this session's own
+  engine plumbing (PR2/PR3) is exactly what made the gap reachable, and nine
+  earlier `continue_codex_session` tests never exercised a non-default
+  engine so none of them could have caught it. Confirmed red before the
+  fix, green after (`test_mcp_continue_codex_session_carries_the_parents_engine_forward`).
+- **the second caller** found two gaps: `start_development_task` let a
+  caller pick any of six candidate engines from its own JSON Schema but
+  only validated the two *implemented* ones on the EXECUTOR side, after
+  already spending a dispatch cycle and the executor's one concurrency
+  slot; and `.env.example` documented the new gateway-side calendar
+  settings (PR6) but silently missed every new agent-side setting from
+  PR3/PR4 (`claude_bin`, `allow_git_delivery`, git author identity, push
+  timeout) — an operator following the example file would never learn the
+  new capability existed to turn on.
+- **the claim auditor** found no surviving claim-accuracy findings (every
+  "Tests:"/"Not validated:" line, every "testado explicitamente" reference,
+  and the PR5 live-smoke-test description all held up against the actual
+  code and test names) — but, working outside its own lens, it also found
+  and fixed a piece of dead code the sweep-skeptic's own PR2 rename should
+  have caught: `tests/integration/test_reconnect_replay_resolves.py` still
+  assigned to the retired `service.runner` attribute, silently harmless
+  only because Python allows assigning to any attribute name and
+  `AgentService.__init__` already built an equivalent default `CodexRunner`
+  regardless. Verified and kept.
+
+Lesson for next time a provider/engine dimension is threaded through an
+existing single-provider system: **grep every `SubmitTaskRequest(` and every
+bare `AgentService`/fake-runner attribute reference by name before
+declaring a rename sweep done** — the two real bugs here were both exactly
+that shape (a second construction site the primary sweep didn't visit), and
+both were the kind of thing a lens *looking for the sweep's own blind spot*
+catches on the first pass while the implementer, reading their own diff,
+does not.
+
+Process note: one fork's final turn returned a non-answer ("I'll stop
+polling here") instead of its report despite having done the real work
+(731K tokens, real findings later recovered via `SendMessage` resuming the
+same fork). Treat a fork's terminal non-answer as incomplete, not as "no
+findings" — resume it rather than accepting silence.

@@ -27,7 +27,6 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import gateway.app.main as main_module
-from agent.codex_bridge_agent.codex_runner import CodexRunner
 from agent.codex_bridge_agent.config import AgentSettings
 from agent.codex_bridge_agent.service import AgentService
 from gateway.app.db.base import Base
@@ -145,9 +144,18 @@ async def _submit(factory, *, instruction: str) -> str:
 async def _run_agent_over(hub: AgentHub, executor_id: str, sent_from_gateway: list[dict]) -> list[str]:
     """Feeds what `AgentHub.register` sent into a real `AgentService`
     running a real, empty `CodexRunner` (an executor that just restarted),
-    and returns whatever the agent sent back."""
+    and returns whatever the agent sent back.
+
+    WK-20260830-chatgpt-entry-provider-and-delivery: `AgentService.__init__`
+    already builds a fresh `RunnerPool`, which itself constructs a fresh,
+    empty `CodexRunner` for "codex" -- there is nothing left to assign here.
+    A `service.runner = CodexRunner(...)` line used to sit here (dead as
+    soon as `service.runner` stopped being the attribute name in PR2 of that
+    work item), silently discarded because Python allows assigning to any
+    attribute name; the test passed regardless because the default already
+    provided what the line thought it needed to construct.
+    """
     service = AgentService(AgentSettings(executor_id=executor_id))
-    service.runner = CodexRunner(AgentSettings())
     incoming = [
         AgentEnvelope.model_validate(envelope).model_dump_json() for envelope in sent_from_gateway
     ]
