@@ -9,6 +9,11 @@ description = "Secure MCP gateway and reverse executor bridge for Codex CLI"
 requires-python = ">=3.10"
 dependencies = [
   "aiomysql>=0.2.0",
+  # Task-finished email notification (issue #70). Not stdlib smtplib: a
+  # blocking SMTP call inside an async handler stalls the event loop for
+  # every other request — the same trap already documented and fixed once
+  # for users.authenticate (see docs/napkin-lessons.md).
+  "aiosmtplib>=3.0.0",
   "aiosqlite>=0.20.0",
   # >=0.141.1: tests/contract and tests/integration route-inventory helpers
   # import fastapi.routing.iter_route_contexts() to see through

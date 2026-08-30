@@ -56,6 +56,19 @@ class Settings(BaseSettings):
     # scope, with an actionable error rather than a silent no-op or a crash.
     google_calendar_credentials_file: str | None = None
     google_calendar_id: str | None = None
+    # WK-20260830-chatgpt-entry-provider-and-delivery, issue #70. A path
+    # reference, never the secret itself — points at a `key=value` file in
+    # this ecosystem's existing `~/.config/credentials/email/*.conf` shape
+    # (`account`, `app_password`, `smtp_host`, `smtp_port`).
+    # `notify.notify_task_finished` refuses a file with any group/other
+    # permission bit set. Unset — either of the two — disables the
+    # completion email with no other effect: the rest of the gateway is
+    # unaffected either way (`gateway/app/services/notify.py`).
+    notification_email_config_file: str | None = None
+    # Fixed recipient for task-finished notifications, set by the operator —
+    # deliberately not `task.requested_by_email`: see
+    # `docs/required-reading.md`, "Fontes locais — fora do checkout".
+    notification_to: str | None = None
     oauth_access_token_ttl_seconds: int = 3600
     oauth_authorization_code_ttl_seconds: int = 600
     # Absolute lifetime of a mobile sign-in (issue #4). Rotation carries this

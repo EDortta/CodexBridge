@@ -350,3 +350,63 @@ async def test_an_older_agent_with_no_known_field_keeps_the_pre_existing_fallbac
 
     assert task.state == TaskState.RUNNING.value
     assert task_id in hub.running_tasks["E1"]
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_ack_from_a_runner_that_lost_the_task_triggers_notification(
+    factory, monkeypatch
+) -> None:
+    """issue #70: the "reconnect with no record" branch is the one path
+    through `handle_task_ack` that lands a task in a terminal state
+    (CANCELLED) -- it must call `notify_task_finished` with that task, once,
+    after the branch's own commit. The other ack branches (pause/resume/
+    restart acks, accepted or rejected) never reach a terminal state and must
+    not call it at all -- covered by the negative test below.
+    """
+    task_id = await _make_task(factory, executor_id="E1", project_id="p1", state=TaskState.PAUSING)
+
+    hub = AgentHub(factory)
+    hub.running_tasks["E1"] = {task_id}
+    monkeypatch.setattr(main_module, "hub", hub, raising=False)
+
+    calls = []
+
+    async def _fake_notify(session, task, settings) -> None:
+        calls.append(task.id)
+
+    monkeypatch.setattr(main_module, "notify_task_finished", _fake_notify)
+
+    async with factory() as session:
+        await handle_task_ack(
+            session,
+            _ack_envelope(executor_id="E1", task_id=task_id, control="pause", accepted=False, state=None, known=False),
+        )
+
+    assert calls == [task_id]
+
+    async with factory() as session:
+        task = await store.get_task(session, task_id)
+    assert task.state == TaskState.CANCELLED.value
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_ack_does_not_trigger_notification(factory, monkeypatch) -> None:
+    """A normal pause/resume/restart ack never lands a task in a terminal
+    state, so it must never call `notify_task_finished` -- that call belongs
+    only to the branch covered by the test above."""
+    task_id = await _make_task(factory, executor_id="E1", project_id="p1", state=TaskState.PAUSING)
+
+    calls = []
+
+    async def _fake_notify(session, task, settings) -> None:
+        calls.append(task.id)
+
+    monkeypatch.setattr(main_module, "notify_task_finished", _fake_notify)
+
+    async with factory() as session:
+        await handle_task_ack(
+            session,
+            _ack_envelope(executor_id="E1", task_id=task_id, control="pause", accepted=True, state="paused"),
+        )
+
+    assert calls == []

@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 115 file(s) · 1086 symbol(s) indexed
-- Languages: config (2), python (111), shell (2)
+- 119 file(s) · 1113 symbol(s) indexed
+- Languages: config (2), python (115), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -103,9 +103,11 @@ gateway/
       agent_hub.py
       audit.py
       conversation_types.py  — "Closed vocabulary for conversation context references, and their error."
+      email_templates.py  — "Branded HTML for every CodexBridge transactional email."
       google_calendar.py  — "A Google Calendar client for reminders, built to be tested without ever"
       issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
       metrics.py
+      notify.py  — "Out-of-band completion notification by email."
       store.py
     version.py  — "The single statement of this application's version."
 pyproject.toml
@@ -154,10 +156,12 @@ tests/
     test_claude_runner.py  — "ClaudeRunner's pure logic: command assembly, NDJSON extraction, sandbox mapping."
     test_codex_runner.py  — "CodexRunner's pause/resume/restart/cancel state machine — issue #16 council."
     test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
+    test_email_templates.py  — "`gateway.app.services.email_templates` -- pure rendering, no I/O."
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
     test_google_calendar.py  — "`gateway.app.services.google_calendar`, without ever touching Google."
     test_instructions.py  — "`resolve_issue_text` and `build_task_instruction`."
     test_main_import.py
+    test_notify.py  — "`gateway.app.services.notify` -- the task-finished completion email."
     test_policy.py
     test_rate_limiter_bounds.py  — "The limiter's key space must be bounded, or it becomes the resource exhausted."
     test_runner_registry.py  — "The runner abstraction itself: capability declarations and the pool's"
@@ -636,6 +640,14 @@ tests/
 - **`ConversationPlanningError`** *(class)* — "A create input that fails validation inside the store itself."
   - `__init__(self, field, code, message)` *(method)*
 
+### `gateway/app/services/email_templates.py`
+
+> Branded HTML for every CodexBridge transactional email.
+
+- **`EmailKind`** *(class)*
+- `subject_prefix(kind)` — "The bracketed tag this ecosystem's other notifications already use."
+- `render_email(kind)` — "Render one full HTML document for `kind`. Every text argument is"
+
 ### `gateway/app/services/google_calendar.py`
 
 > A Google Calendar client for reminders, built to be tested without ever
@@ -659,6 +671,14 @@ tests/
 ### `gateway/app/services/metrics.py`
 
 - `render_metrics()`
+
+### `gateway/app/services/notify.py`
+
+> Out-of-band completion notification by email.
+
+- **`NotifyConfigError`** *(class)* — "The gateway itself is not set up for notification email -- an operator"
+- **`EmailCredentials`** *(class)*
+- `notify_task_finished(session, task, settings)` *(async function)* — "Send exactly one completion email for `task` when configured, and"
 
 ### `gateway/app/services/store.py`
 
@@ -823,6 +843,8 @@ tests/
 - `test_a_rejected_ack_from_a_runner_that_lost_the_task_is_not_replayed_again(factory, monkeypatch, control)` *(async function)* — "finding 11 (council round 2 on #17, "the claim auditor"): the branch"
 - `test_a_rejected_ack_from_a_runner_that_lost_the_task_dispatches_the_queue(factory, monkeypatch)` *(async function)* — "finding 10 (council round 2 on #17, "the sweep skeptic"): freeing the"
 - `test_an_older_agent_with_no_known_field_keeps_the_pre_existing_fallback(factory, monkeypatch)` *(async function)* — "Additive per design-standards.md §4: an agent build that predates the"
+- `test_a_rejected_ack_from_a_runner_that_lost_the_task_triggers_notification(factory, monkeypatch)` *(async function)* — "issue #70: the "reconnect with no record" branch is the one path"
+- `test_an_accepted_ack_does_not_trigger_notification(factory, monkeypatch)` *(async function)* — "A normal pause/resume/restart ack never lands a task in a terminal"
 
 ### `tests/integration/test_agent_hub.py`
 
@@ -1324,6 +1346,7 @@ tests/
 - `test_issue_17_headline_scenario_no_longer_stalls_the_queue(factory, monkeypatch)` *(async function)*
 - `test_rejected_approval_of_a_never_dispatched_task_does_not_pin_the_slot(factory, monkeypatch)` *(async function)* — "The second scenario in finding 1: a task that was never dispatched at"
 - `test_cancel_ack_immediately_dispatches_the_next_queued_task(factory, monkeypatch)` *(async function)* — "finding 10 (council round 2 on #17, "the sweep skeptic"): the two tests"
+- `test_handle_task_cancelled_triggers_notification(factory, monkeypatch)` *(async function)* — "issue #70: `handle_task_cancelled` lands a task in CANCELLED -- a"
 
 ### `tests/integration/test_sessions.py`
 
@@ -1543,6 +1566,19 @@ tests/
 - `test_a_replay_window_at_the_documented_ceiling_is_accepted(field)`
 - `test_a_negative_replay_window_is_rejected(field)`
 
+### `tests/unit/test_email_templates.py`
+
+> `gateway.app.services.email_templates` -- pure rendering, no I/O.
+
+- `test_every_kind_renders_a_complete_html_document()`
+- `test_every_kind_has_a_distinct_accent_color_and_badge_label()` — "Approved on the design canvas: no two kinds should read as the same"
+- `test_subject_prefix_is_bracketed_and_kind_specific()`
+- `test_every_text_field_is_html_escaped(value)` — "Every argument is caller-controlled text -- some of it, per `render_email`'s"
+- `test_a_cta_link_escapes_its_href_and_label()`
+- `test_no_style_block_and_no_class_attribute()` — "Email clients strip <style> blocks and class selectors unpredictably"
+- `test_no_inline_svg_shipped_in_a_real_email()` — "Outlook's desktop renderer does not support <svg> -- a broken icon in"
+- `test_no_rows_and_no_cta_omits_the_highlight_card()`
+
 ### `tests/unit/test_git_delivery.py`
 
 > `git_delivery.deliver_changes` against real throwaway git repos.
@@ -1617,6 +1653,21 @@ tests/
 ### `tests/unit/test_main_import.py`
 
 - `test_main_app_imports()`
+
+### `tests/unit/test_notify.py`
+
+> `gateway.app.services.notify` -- the task-finished completion email.
+
+- `session()` *(async function)*
+- `test_no_config_is_a_silent_no_op(session, monkeypatch)` *(async function)*
+- `test_a_non_terminal_state_is_a_no_op(session, tmp_path, monkeypatch)` *(async function)*
+- `test_a_world_readable_config_file_is_refused(session, tmp_path, monkeypatch)` *(async function)*
+- `test_a_missing_config_file_is_refused(session, tmp_path, monkeypatch)` *(async function)*
+- `test_a_sender_that_raises_never_fails_the_task_and_records_only_the_exception_type(session, tmp_path, monkeypatch)` *(async function)*
+- `test_a_config_file_with_spaces_around_equals_parses_correctly(session, tmp_path, monkeypatch)` *(async function)* — "This ecosystem's own credential files are inconsistent: most are"
+- `test_task_last_error_is_never_included_in_the_email(session, tmp_path, monkeypatch)` *(async function)* — "Issue #70 enumerates exactly what the body may carry -- task id,"
+- `test_a_delivery_refusal_reason_is_redacted(session, tmp_path, monkeypatch, delivery_reason)` *(async function)* — "`reason` is the one delivery field allowed to carry free text (issue"
+- `test_a_successful_send_writes_no_audit_event(session, tmp_path, monkeypatch)` *(async function)*
 
 ### `tests/unit/test_policy.py`
 

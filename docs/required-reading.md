@@ -40,6 +40,22 @@ a toca. Use `- (none)` se genuinamente não houver nenhum.
 - `docs/project-rules.md` — regras específicas deste projeto (também na tabela acima)
 - `docs/napkin-lessons.md` — lições curtas; leia ao retomar trabalho relacionado
 
+## Fontes locais — fora do checkout
+
+Credenciais e destinos vivem fora do repositório (nunca versionados), mas um agente
+precisa saber onde estão e para que servem — path e propósito, nunca o conteúdo. Ver
+`.docs/workflows/sending-email.md` antes de qualquer envio de e-mail.
+
+| Fonte | Propósito | Symlink no projeto |
+|---|---|---|
+| `~/.config/credentials/email/dortta-yahoo.conf` | transporte SMTP (conta Yahoo) para notificação de conclusão de tarefa | `.credentials/yahoo-email.conf` |
+| `~/.config/credentials/job-outreach/calendar/service-account.json` | service account Google Calendar (`create_reminder`/`cancel_reminder`), compartilhada com job-outreach e igreja-pequena | `.credentials/google-calendar-sa.json` |
+
+**Destinatário fixo das notificações de conclusão de tarefa: `edortta71@gmail.com`.**
+Definido pelo operador nesta sessão (2026-08-30) — nunca resolver de
+`requested_by_email` nem do `userEmail` do harness; ver `CODEX_BRIDGE_NOTIFICATION_TO`
+em `.env.example`.
+
 ## Por área
 
 Leitura escopada: só quem for mexer na área precisa.

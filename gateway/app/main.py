@@ -42,9 +42,11 @@ from gateway.app.db.base import Base
 from gateway.app.db.schema_guard import check_schema
 from gateway.app.db.session import SessionLocal, engine, get_session
 from gateway.app.mcp.server import handle_mcp_call
+from gateway.app.models.entities import TaskModel
 from gateway.app.services import metrics, store
 from gateway.app.services.audit import record_event
 from gateway.app.services.agent_hub import AgentHub
+from gateway.app.services.notify import notify_task_finished
 from shared.protocol import EXECUTOR_TOKEN_HEADER, AgentEnvelope, AgentMessageType, TaskState
 from shared.security import sanitize_log_line, secure_compare
 
@@ -595,6 +597,13 @@ async def handle_task_ack(session: AsyncSession, envelope: AgentEnvelope) -> Non
         await session.commit()
         return
 
+    # Set only by the "reconnect with no record" branch below, the one path
+    # through this function that can land a task in a terminal state
+    # (CANCELLED) — task.ack otherwise only ever carries pause/resume/restart
+    # control acks. Notified after the shared commit at the end of this
+    # function, same ordering as the TASK_RESULT branch (issue #70).
+    finished_task: TaskModel | None = None
+
     resolved_state: TaskState | None = None
     if accepted:
         try:
@@ -646,7 +655,7 @@ async def handle_task_ack(session: AsyncSession, envelope: AgentEnvelope) -> Non
         # pinned by an id nothing will ever acknowledge again
         # (`gateway/app/services/agent_hub.py`, `mark_task_finished` is the
         # only remover).
-        await store.update_task_state(
+        finished_task = await store.update_task_state(
             session,
             task_id,
             TaskState.CANCELLED,
@@ -680,6 +689,8 @@ async def handle_task_ack(session: AsyncSession, envelope: AgentEnvelope) -> Non
         },
     )
     await session.commit()
+    if finished_task is not None:
+        await notify_task_finished(session, finished_task, settings)
 
 
 async def handle_task_cancelled(session: AsyncSession, envelope: AgentEnvelope) -> None:
@@ -694,7 +705,7 @@ async def handle_task_cancelled(session: AsyncSession, envelope: AgentEnvelope) 
     `hub.running_tasks`, not just that the agent sent it.
     """
     task_id = envelope.payload["task_id"]
-    await store.update_task_state(session, task_id, TaskState.CANCELLED)
+    task = await store.update_task_state(session, task_id, TaskState.CANCELLED)
     await record_event(
         session,
         "task",
@@ -703,6 +714,9 @@ async def handle_task_cancelled(session: AsyncSession, envelope: AgentEnvelope) 
         {"executor_id": envelope.executor_id},
     )
     await session.commit()
+    # After the commit: the task's own state is already final, so a
+    # notification failure here cannot roll anything back (issue #70).
+    await notify_task_finished(session, task, settings)
     await hub.mark_task_finished(envelope.executor_id, task_id)
 
 
@@ -783,13 +797,17 @@ async def agent_ws(
                     )
                 elif envelope.type == AgentMessageType.TASK_RESULT:
                     final_state = TaskState(envelope.payload["final_state"])
-                    await store.store_result(session, envelope.payload["task_id"], envelope.payload, final_state)
+                    task = await store.store_result(session, envelope.payload["task_id"], envelope.payload, final_state)
                     # `mark_task_finished` dispatches the next queued task
                     # itself now (`AgentHub.mark_task_finished`) — this used
                     # to be the one branch that remembered to do it by hand,
                     # which is exactly the shape design-standards.md §3 warns
                     # about: the other callers that free a slot did not.
                     await hub.mark_task_finished(envelope.executor_id, envelope.payload["task_id"])
+                    # After both of the above: the task's own state is
+                    # already committed, so a notification failure here
+                    # cannot roll anything back (issue #70).
+                    await notify_task_finished(session, task, settings)
                 elif envelope.type == AgentMessageType.TASK_CANCELLED:
                     await handle_task_cancelled(session, envelope)
     except WebSocketDisconnect:

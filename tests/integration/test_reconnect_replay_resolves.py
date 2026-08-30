@@ -35,6 +35,7 @@ from gateway.app.services import store
 from gateway.app.services.agent_hub import AgentHub
 from shared.protocol import (
     AgentEnvelope,
+    AgentMessageType,
     ApprovalDecision,
     ExecutorRegistration,
     ProjectRegistration,
@@ -300,3 +301,37 @@ async def test_cancel_ack_immediately_dispatches_the_next_queued_task(factory, m
     dispatch_messages = [payload for payload in gateway_socket.sent if payload["type"] == "task.dispatch"]
     assert len(dispatch_messages) == 1
     assert dispatch_messages[0]["payload"]["task_id"] == queued_id
+
+
+@pytest.mark.asyncio
+async def test_handle_task_cancelled_triggers_notification(factory, monkeypatch) -> None:
+    """issue #70: `handle_task_cancelled` lands a task in CANCELLED -- a
+    terminal state -- and must call `notify_task_finished` with that task
+    exactly once, after its own commit (so a notification failure can never
+    roll back the cancellation itself).
+    """
+    task_id = await _submit(factory, instruction="cancel me")
+
+    calls = []
+
+    async def _fake_notify(session, task, settings) -> None:
+        calls.append(task.id)
+
+    monkeypatch.setattr(main_module, "notify_task_finished", _fake_notify)
+
+    ack_envelope = AgentEnvelope(
+        message_id="cancelled-1",
+        executor_id="E1",
+        sent_at=datetime.now(timezone.utc),
+        type=AgentMessageType.TASK_CANCELLED,
+        payload={"task_id": task_id},
+    )
+
+    async with factory() as session:
+        await handle_task_cancelled(session, ack_envelope)
+
+    assert calls == [task_id]
+
+    async with factory() as session:
+        task = await store.get_task(session, task_id)
+    assert task.state == TaskState.CANCELLED.value

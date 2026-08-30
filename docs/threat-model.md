@@ -178,6 +178,54 @@ tratamento de uma chamada MCP: `oauth2.googleapis.com` (troca de token) e
   reaproveitada de outro projeto — revogar a chave de uma SA compartilhada
   quebraria os outros consumidores dela
 
+### Egresso novo do gateway por e-mail (WK-20260830, issue #70)
+
+`notify.notify_task_finished` é o segundo caso em que o gateway disca para
+fora: ao SMTP configurado em `CODEX_BRIDGE_NOTIFICATION_EMAIL_CONFIG_FILE`,
+depois que `TASK_RESULT` já comitou o resultado real da tarefa.
+
+* controle: credencial só por referência — a variável de ambiente aponta
+  para um arquivo (`~/.config/credentials/email/*.conf` em dev, obrigatoriamente
+  fora de qualquer home em produção por causa de `ProtectHome=true` na unit
+  systemd), nunca a senha inline em configuração versionada
+* controle: o arquivo de credencial é recusado se tiver qualquer bit de
+  grupo/outro (`mode & 0o077`) — testado explicitamente
+  (`test_a_world_readable_config_file_is_refused`, `tests/unit/test_notify.py`)
+* controle: `aiosmtplib`, não `smtplib` bloqueante — a mesma classe de
+  problema já documentada e corrigida uma vez para `users.authenticate`
+* controle: uma falha de envio (config ausente, arquivo inseguro, erro de
+  rede, credencial rejeitada pelo servidor) nunca falha a tarefa — o estado
+  final já foi comitado antes desta chamada; toda falha vira um evento
+  `task.notification_failed` com **apenas o nome do tipo da exceção**, nunca
+  a mensagem (que rotineiramente ecoa o banner do servidor e às vezes a
+  própria credencial) — testado explicitamente
+  (`test_a_sender_that_raises_never_fails_the_task_and_records_only_the_exception_type`)
+* controle: o corpo do e-mail nunca inclui diff, linha de log, conteúdo de
+  arquivo do repositório, ou caminho absoluto. Duas escolhas deliberadas: (1)
+  `task.last_error` **nunca** entra no corpo — não está na lista de campos
+  que a issue #70 permite, e `redact()` só reconhece formas conhecidas de
+  segredo/caminho, não "isto é um log ou um diff" em geral, então um
+  `last_error` "redigido" ainda não seria uma garantia real contra a issue
+  (`test_task_last_error_is_never_included_in_the_email`); (2) o único campo
+  de texto livre que o corpo carrega — o motivo de recusa da entrega — passa
+  pelo mesmo `redact()` já usado nas respostas da API
+  (`gateway/app/api/routes/sessions.py`) antes de entrar no corpo
+  (`test_a_delivery_refusal_reason_is_redacted`) — ambos em
+  `tests/unit/test_notify.py`
+* controle: destinatário fixo por configuração do operador
+  (`CODEX_BRIDGE_NOTIFICATION_TO`), nunca `requested_by_email` nem qualquer
+  noção de "o usuário" vinda do harness — ver
+  `docs/required-reading.md`, "Fontes locais — fora do checkout"
+* risco aceito, escopo explícito (finding F27 do concílio, parcial): dispara
+  em `TASK_RESULT` (concluída/falhou), `task.cancelled`, e no cancelamento
+  por reconexão órfã (issue #17) — testado em
+  `tests/integration/test_agent_ack_handling.py` e
+  `tests/integration/test_reconnect_replay_resolves.py`. Só a varredura de
+  recuperação no startup (`store.recover_tasks_after_startup`, que resolve
+  tarefas expiradas ou perdidas após uma queda do gateway) ainda não dispara
+  e-mail — esse único caminho continua coberto apenas pelo polling descrito
+  em `docs/chatgpt-registration.md`
+
 ### Fila inconsistente após reinício
 
 * controle: banco transacional
