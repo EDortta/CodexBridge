@@ -9,8 +9,10 @@ from uuid import uuid4
 
 import websockets
 
-from agent.codex_bridge_agent.codex_runner import SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE, CodexRunner
 from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects
+from agent.codex_bridge_agent.runners.base import EngineNotImplementedError
+from agent.codex_bridge_agent.runners.codex import SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE
+from agent.codex_bridge_agent.runners.pool import RunnerPool
 from shared.policy import evaluate_task_policy
 from shared.protocol import (
     EXECUTOR_TOKEN_HEADER,
@@ -55,7 +57,11 @@ class AgentService:
     def __init__(self, settings: AgentSettings):
         self.settings = settings
         self.projects = load_agent_projects(settings.allowed_projects_file)
-        self.runner = CodexRunner(settings)
+        # WK-20260830-chatgpt-entry-provider-and-delivery: was a single
+        # `CodexRunner`; `RunnerPool` routes to the engine a dispatch names,
+        # defaulting to "codex" for a payload that predates the `engine`
+        # field so an unmodified gateway keeps dispatching correctly.
+        self.runners = RunnerPool(settings)
 
     async def run_forever(self) -> None:
         delay = self.settings.reconnect_min_seconds
@@ -84,7 +90,7 @@ class AgentService:
                         asyncio.create_task(self._handle_dispatch(websocket, envelope))
                     elif envelope.type == AgentMessageType.TASK_CANCEL:
                         task_id = envelope.payload["task_id"]
-                        await self.runner.cancel(task_id)
+                        await self.runners.cancel(task_id)
                         # Unconditional ack. A cancel's postcondition — "not
                         # running here" — holds whether a live process was
                         # actually terminated or the runner never heard of
@@ -102,8 +108,8 @@ class AgentService:
                         )
                     elif envelope.type == AgentMessageType.TASK_PAUSE:
                         task_id = envelope.payload["task_id"]
-                        known = self.runner.is_known(task_id)
-                        paused = await self.runner.pause(task_id)
+                        known = self.runners.is_known(task_id)
+                        paused = await self.runners.pause(task_id)
                         await websocket.send(
                             self._envelope(
                                 AgentMessageType.TASK_ACK,
@@ -118,8 +124,8 @@ class AgentService:
                         )
                     elif envelope.type == AgentMessageType.TASK_RESUME:
                         task_id = envelope.payload["task_id"]
-                        known = self.runner.is_known(task_id)
-                        resumed = await self.runner.resume(task_id)
+                        known = self.runners.is_known(task_id)
+                        resumed = await self.runners.resume(task_id)
                         await websocket.send(
                             self._envelope(
                                 AgentMessageType.TASK_ACK,
@@ -134,8 +140,8 @@ class AgentService:
                         )
                     elif envelope.type == AgentMessageType.TASK_RESTART:
                         task_id = envelope.payload["task_id"]
-                        known = self.runner.is_known(task_id)
-                        restarted = await self.runner.restart(task_id)
+                        known = self.runners.is_known(task_id)
+                        restarted = await self.runners.restart(task_id)
                         await websocket.send(
                             self._envelope(
                                 AgentMessageType.TASK_ACK,
@@ -159,16 +165,37 @@ class AgentService:
     async def _handle_dispatch(self, websocket, envelope: AgentEnvelope) -> None:
         task_id = envelope.payload["task_id"]
         project_id = envelope.payload["project_id"]
-        # Known to the runner for the task's whole observable lifetime here —
+        # WK-20260830-chatgpt-entry-provider-and-delivery: `engine` is a new,
+        # optional dispatch field (`shared.protocol.AgentEngine`). Its
+        # absence -- any gateway that predates this migration -- defaults to
+        # "codex", which is exactly the one engine that existed before this
+        # runner abstraction, so an unmodified gateway keeps dispatching
+        # correctly against an upgraded executor.
+        engine = envelope.payload.get("engine", "codex")
+        try:
+            runner = self.runners.for_engine(engine)
+        except EngineNotImplementedError as exc:
+            await websocket.send(
+                self._envelope(
+                    AgentMessageType.TASK_RESULT,
+                    {
+                        "task_id": task_id,
+                        "final_state": TaskState.FAILED.value,
+                        "error": str(exc),
+                    },
+                ).model_dump_json()
+            )
+            return
+        # Known to the pool for the task's whole observable lifetime here —
         # from the moment this dispatch is accepted until its result has been
-        # sent — not just while `CodexRunner.running` holds a live process.
-        # `is_known` backs the gateway's `known=False` ghost-task branch: a
-        # `task.pause`/`task.restart` landing before `run_task` ever spawns a
-        # process, or after it exits but before this method reports the
-        # result, used to read as "runner never heard of this task" and got a
-        # live (or just-finished) task marked CANCELLED out from under it
-        # (issue #17 council round 2, "the second caller").
-        self.runner.mark_dispatched(task_id)
+        # sent — not just while the runner's own `running` dict holds a live
+        # process. `is_known` backs the gateway's `known=False` ghost-task
+        # branch: a `task.pause`/`task.restart` landing before `run_task`
+        # ever spawns a process, or after it exits but before this method
+        # reports the result, used to read as "runner never heard of this
+        # task" and got a live (or just-finished) task marked CANCELLED out
+        # from under it (issue #17 council round 2, "the second caller").
+        self.runners.mark_dispatched(task_id, engine)
         try:
             project = self.projects.get(project_id)
             if project is None:
@@ -221,7 +248,7 @@ class AgentService:
 
             sandbox = _sandbox_for(decision.level, allow_workspace_write=self.settings.allow_workspace_write)
             try:
-                result = await self.runner.run_task(
+                result = await runner.run_task(
                     task_id=task_id,
                     project_root=Path(root),
                     instruction=f"{BASE_PROMPT}\n\nUser task:\n{envelope.payload['instruction']}",
@@ -252,7 +279,7 @@ class AgentService:
                 }
             await websocket.send(self._envelope(AgentMessageType.TASK_RESULT, result).model_dump_json())
         finally:
-            self.runner.forget(task_id)
+            self.runners.forget(task_id)
 
     def _envelope(self, message_type: AgentMessageType, payload: dict) -> AgentEnvelope:
         return AgentEnvelope(

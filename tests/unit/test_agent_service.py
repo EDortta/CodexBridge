@@ -59,7 +59,7 @@ async def test_dispatch_failure_returns_task_result(tmp_path: Path) -> None:
             path=str(tmp_path),
         )
     }
-    service.runner = FailingRunner()
+    service.runners._runners["codex"] = FailingRunner()
     websocket = DummyWebSocket()
     envelope = AgentEnvelope(
         message_id="dispatch-1",
@@ -189,7 +189,11 @@ async def test_pause_resume_and_restart_controls_acknowledge_over_the_socket(mon
     from agent.codex_bridge_agent import service as service_module
 
     service = AgentService(AgentSettings())
-    service.runner = ControlRunner()
+    service.runners._runners["codex"] = ControlRunner()
+    # No TASK_DISPATCH happens in this test -- only control messages -- so
+    # the pool's task->engine routing table has to be seeded directly for
+    # `is_known`/`cancel`/`pause`/`resume`/`restart` to find "codex".
+    service.runners._task_engine["task-1"] = "codex"
 
     incoming = [
         service._envelope(message_type, {"task_id": "task-1"}).model_dump_json()
@@ -226,10 +230,11 @@ async def test_cancel_of_an_unknown_task_still_acks_over_the_socket(monkeypatch)
     life of the gateway process. A cancel's postcondition ("not running
     here") holds either way, so the ack must be unconditional."""
     from agent.codex_bridge_agent import service as service_module
-    from agent.codex_bridge_agent.codex_runner import CodexRunner
 
     service = AgentService(AgentSettings())
-    service.runner = CodexRunner(AgentSettings())  # empty: knows no tasks
+    # The pool's default "codex" runner (built in AgentService.__init__) is
+    # already empty here -- no dispatch ever ran for "ghost-task", so it is
+    # unknown to the pool's routing table by construction.
 
     incoming = [service._envelope(AgentMessageType.TASK_CANCEL, {"task_id": "ghost-task"}).model_dump_json()]
     socket = _FakeAgentSocket(incoming)
@@ -255,10 +260,11 @@ async def test_pause_of_an_unknown_task_reports_known_false(monkeypatch) -> None
     reason (already paused). The gateway could not tell "revert to RUNNING,
     the process is still alive" from "there is no process at all"."""
     from agent.codex_bridge_agent import service as service_module
-    from agent.codex_bridge_agent.codex_runner import CodexRunner
 
     service = AgentService(AgentSettings())
-    service.runner = CodexRunner(AgentSettings())  # empty: knows no tasks
+    # Same as the cancel case above: the pool's default "codex" runner has
+    # never heard of "ghost-task", so the pool's routing table has no entry
+    # for it -- `is_known` reports False by construction.
 
     incoming = [service._envelope(AgentMessageType.TASK_PAUSE, {"task_id": "ghost-task"}).model_dump_json()]
     socket = _FakeAgentSocket(incoming)
@@ -339,7 +345,7 @@ async def test_handle_dispatch_forgets_the_task_only_after_the_result_is_sent(tm
     """
     calls: list[str] = []
     service = AgentService(AgentSettings())
-    service.runner = _RecordingRunner(calls)
+    service.runners._runners["codex"] = _RecordingRunner(calls)
     service.projects = {
         "codexbridge": ProjectRegistration(
             project_id="codexbridge",
@@ -452,7 +458,7 @@ def _dispatch_envelope(*, task_id: str, mode: str, instruction: str = "do the th
 async def test_handle_dispatch_sends_read_only_for_a_read_mode_task(tmp_path: Path) -> None:
     service = AgentService(AgentSettings())
     runner = _SandboxRecordingRunner()
-    service.runner = runner
+    service.runners._runners["codex"] = runner
     service.projects = {
         "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
     }
@@ -466,7 +472,7 @@ async def test_handle_dispatch_sends_read_only_for_a_read_mode_task(tmp_path: Pa
 async def test_handle_dispatch_sends_workspace_write_for_a_write_mode_task(tmp_path: Path) -> None:
     service = AgentService(AgentSettings())
     runner = _SandboxRecordingRunner()
-    service.runner = runner
+    service.runners._runners["codex"] = runner
     service.projects = {
         "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
     }
@@ -483,7 +489,7 @@ async def test_handle_dispatch_honours_the_machine_level_read_only_override(tmp_
     just exist on `AgentSettings`."""
     service = AgentService(AgentSettings(allow_workspace_write=False))
     runner = _SandboxRecordingRunner()
-    service.runner = runner
+    service.runners._runners["codex"] = runner
     service.projects = {
         "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
     }

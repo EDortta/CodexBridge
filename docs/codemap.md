@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 96 file(s) · 892 symbol(s) indexed
-- Languages: config (2), python (92), shell (2)
+- 102 file(s) · 923 symbol(s) indexed
+- Languages: config (2), python (98), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -35,9 +35,15 @@ agent/
   codex_bridge_agent/
     __init__.py  — "codex-bridge-agent package."
     __main__.py
-    codex_runner.py
+    codex_runner.py  — "Re-export shim."
     config.py
     git_tools.py
+    runners/
+      __init__.py
+      base.py  — "The provider-neutral surface the executor dispatches a task through."
+      codex.py
+      pool.py  — "The facade `AgentService` talks to instead of a single hardcoded runner."
+      registry.py  — "Which `AgentEngine` values have a real `Runner` behind them."
     service.py
 deploy/
   incus/
@@ -141,6 +147,7 @@ tests/
     test_main_import.py
     test_policy.py
     test_rate_limiter_bounds.py  — "The limiter's key space must be bounded, or it becomes the resource exhausted."
+    test_runner_registry.py  — "The runner abstraction itself: capability declarations and the pool's"
     test_schema_guard.py  — "The guard that refuses to serve a database the code has outgrown."
     test_security.py
     test_users.py
@@ -148,20 +155,6 @@ tests/
 ```
 
 ## Symbol Index
-
-### `agent/codex_bridge_agent/codex_runner.py`
-
-- **`RunningTask`** *(class)*
-- **`CodexRunner`** *(class)*
-  - `__init__(self, settings)` *(method)*
-  - `is_known(self, task_id)` *(method)* — "Whether this runner has any record of the task at all."
-  - `mark_dispatched(self, task_id)` *(method)*
-  - `forget(self, task_id)` *(method)*
-  - `cancel(self, task_id)` *(async method)*
-  - `pause(self, task_id)` *(async method)*
-  - `resume(self, task_id)` *(async method)*
-  - `restart(self, task_id)` *(async method)*
-  - `run_task(self, task_id, project_root, instruction, timeout_seconds, continue_session_id, send_log, sandbox)` *(async method)* — "Issue #34: `sandbox` is now always explicit, never implicit."
 
 ### `agent/codex_bridge_agent/config.py`
 
@@ -172,6 +165,60 @@ tests/
 ### `agent/codex_bridge_agent/git_tools.py`
 
 - `collect_git_snapshot(project_root, diff_max_chars)` *(async function)*
+
+### `agent/codex_bridge_agent/runners/base.py`
+
+> The provider-neutral surface the executor dispatches a task through.
+
+- **`RunnerCapabilities`** *(class)* — "What a provider can and cannot do, declared rather than assumed."
+- **`Runner`** *(class)* — "One provider's implementation of "run this instruction, report back"."
+  - `capabilities(self)` *(method)*
+  - `is_known(self, task_id)` *(method)*
+  - `mark_dispatched(self, task_id)` *(method)*
+  - `forget(self, task_id)` *(method)*
+  - `cancel(self, task_id)` *(async method)*
+  - `pause(self, task_id)` *(async method)*
+  - `resume(self, task_id)` *(async method)*
+  - `restart(self, task_id)` *(async method)*
+  - `run_task(self, task_id, project_root, instruction, timeout_seconds, continue_session_id, send_log, sandbox)` *(async method)*
+- **`EngineNotImplementedError`** *(class)* — "A dispatch named an `AgentEngine` value with no real `Runner` behind it."
+  - `__init__(self, engine)` *(method)*
+
+### `agent/codex_bridge_agent/runners/codex.py`
+
+- **`RunningTask`** *(class)*
+- **`CodexRunner`** *(class)*
+  - `__init__(self, settings)` *(method)*
+  - `capabilities(self)` *(method)*
+  - `is_known(self, task_id)` *(method)* — "Whether this runner has any record of the task at all."
+  - `mark_dispatched(self, task_id)` *(method)*
+  - `forget(self, task_id)` *(method)*
+  - `cancel(self, task_id)` *(async method)*
+  - `pause(self, task_id)` *(async method)*
+  - `resume(self, task_id)` *(async method)*
+  - `restart(self, task_id)` *(async method)*
+  - `run_task(self, task_id, project_root, instruction, timeout_seconds, continue_session_id, send_log, sandbox)` *(async method)* — "Issue #34: `sandbox` is now always explicit, never implicit."
+
+### `agent/codex_bridge_agent/runners/pool.py`
+
+> The facade `AgentService` talks to instead of a single hardcoded runner.
+
+- **`RunnerPool`** *(class)*
+  - `__init__(self, settings)` *(method)*
+  - `for_engine(self, engine)` *(method)*
+  - `is_known(self, task_id)` *(method)*
+  - `mark_dispatched(self, task_id, engine)` *(method)*
+  - `forget(self, task_id)` *(method)*
+  - `cancel(self, task_id)` *(async method)*
+  - `pause(self, task_id)` *(async method)*
+  - `resume(self, task_id)` *(async method)*
+  - `restart(self, task_id)` *(async method)*
+
+### `agent/codex_bridge_agent/runners/registry.py`
+
+> Which `AgentEngine` values have a real `Runner` behind them.
+
+- **`EngineRegistration`** *(class)*
 
 ### `agent/codex_bridge_agent/service.py`
 
@@ -1348,6 +1395,17 @@ tests/
 - `test_idle_buckets_are_dropped()` *(async function)* — "A window that emptied leaves an entry behind unless something removes it."
 - `test_an_honest_caller_is_still_limited_while_the_table_churns()` *(async function)* — "Eviction must not become a way to escape the limit."
 - `test_the_limit_still_fires_for_a_single_key()` *(async function)*
+
+### `tests/unit/test_runner_registry.py`
+
+> The runner abstraction itself: capability declarations and the pool's
+
+- `test_codex_satisfies_the_runner_protocol()`
+- `test_codex_declares_an_os_enforced_sandbox()` — "The honest field from `RunnerCapabilities`: Codex's `-s read-only` is a"
+- `test_no_registered_engines_env_allowlist_overlaps_another()` — "Env custody must never be unioned across providers (council finding"
+- `test_unimplemented_engines_are_declared_not_absent()` — "Every `AgentEngine` value is a registered candidate, whether or not it"
+- `test_pool_defaults_to_codex_and_rejects_unknown_engines()`
+- `test_pool_routes_control_messages_only_to_dispatched_tasks()` *(async function)*
 
 ### `tests/unit/test_schema_guard.py`
 
