@@ -320,6 +320,7 @@ async def create_task(
     continue_session_id: str | None = None,
     requested_by_user_id: str | None = None,
     requested_by_email: str | None = None,
+    can_approve_push: bool = False,
 ) -> TaskModel:
     executor = await session.get(ExecutorModel, request.executor_id)
     if executor is None or not executor.enabled:
@@ -353,7 +354,25 @@ async def create_task(
     expires_at = _as_utc(request.expires_at)
     if expires_at <= datetime.now(timezone.utc):
         raise ValueError("task_already_expired")
-    if not policy.approved:
+    push_preauthorized = "push_preauthorized_by_request" in policy.reasons
+    # WK-20260830-chatgpt-entry-provider-and-delivery: a request whose OWN
+    # `delivery` block asks for a pushable branch lands here as SENSITIVE
+    # (`shared.policy.evaluate_task_policy`'s `delivery_requests_push`
+    # clause), and `policy.approved` may already read `True` when it also
+    # qualified for `push_preauthorized_by_request`. That is deliberately NOT
+    # allowed to skip this function creating the row as `AWAITING_APPROVAL`
+    # the same way any other SENSITIVE task would be: pre-authorization is
+    # resolved through the real `decide_task_approval` call below, in the
+    # SAME transaction, so it produces the same `task.approval_decision`
+    # audit event, the same `policy_level` column, and the same visibility on
+    # `/api/v1/decisions` a human's `approve_codex_task` call would -- never a
+    # shortcut that skips creating the record in the first place. Only
+    # `can_approve_push` (the caller's own approval authority, e.g.
+    # `principal.can_approve_sensitive`) decides whether that resolution
+    # happens automatically below or waits for a human's real
+    # `approve_codex_task` call -- pre-authorization is not a way to skip who
+    # is allowed to grant it.
+    if not policy.approved or push_preauthorized:
         state = TaskState.AWAITING_APPROVAL
     task = TaskModel(
         id=str(uuid4()),
@@ -371,6 +390,9 @@ async def create_task(
         requested_by_email=requested_by_email,
         correlation_id=str(uuid4()),
         session_id=continue_session_id,
+        engine=request.engine.value,
+        issue_ref=request.issue_ref,
+        delivery_json=request.delivery.model_dump_json() if request.delivery is not None else None,
         approval_state=policy.level.value if state == TaskState.AWAITING_APPROVAL else None,
         # Same condition as `approval_state` above, on purpose (issue #6): a task
         # that never needed a decision has no risk level to report on the
@@ -393,6 +415,34 @@ async def create_task(
     )
     await session.commit()
     await session.refresh(task)
+    # The pre-authorization IS an approval -- so it is resolved through the
+    # same audited path a human's `approve_codex_task` call uses
+    # (`decide_task_approval`), not by skipping approval outright. This gets
+    # `task.approval_decision`, `approval_state` and the actor trail for free
+    # from code already tested, and the decision shows up on
+    # `/api/v1/decisions` like any other one (WK-20260830, plan §1C).
+    if push_preauthorized and can_approve_push and task.state == TaskState.AWAITING_APPROVAL.value:
+        task = await decide_task_approval(
+            session,
+            task.id,
+            ApprovalDecision.APPROVED,
+            reason=f"pre-authorized in request by {requested_by_email or requested_by_user_id or 'unknown'}",
+        )
+        await record_event(
+            session,
+            "task",
+            task.id,
+            "task.push_preauthorized",
+            {
+                "actor_id": requested_by_user_id,
+                "actor_email": requested_by_email,
+                "branch": request.delivery.branch if request.delivery else None,
+                "base_branch": request.delivery.base_branch if request.delivery else None,
+                "remote": request.delivery.remote if request.delivery else None,
+            },
+        )
+        await session.commit()
+        await session.refresh(task)
     return task
 
 
@@ -559,7 +609,15 @@ async def store_result(session: AsyncSession, task_id: str, result: dict, final_
         raise ValueError("unknown_task")
     task.result_json = json.dumps(result, ensure_ascii=True)
     task.command_json = json.dumps(result.get("command", []), ensure_ascii=True)
-    task.session_id = result.get("codex_session_id")
+    # `provider_run_ref` is the engine-neutral name (WK-20260830); the `or`
+    # keeps a not-yet-upgraded codex agent -- which still only ever sends
+    # `codex_session_id` -- working unchanged. `tasks.session_id` itself is
+    # NOT renamed here: it is published API surface consumed by
+    # `continue_codex_session` and the mobile client, and that rename belongs
+    # to issue #41b, not to this slice.
+    task.session_id = result.get("provider_run_ref") or result.get("codex_session_id")
+    if "delivery" in result:
+        task.delivery_result_json = json.dumps(result["delivery"], ensure_ascii=True)
     task.state = final_state.value
     task.completed_at = datetime.now(timezone.utc)
     task.revision += 1
@@ -596,6 +654,12 @@ async def restart_finished_task(
     task.last_error = None
     task.result_json = None
     task.command_json = None
+    # WK-20260830-chatgpt-entry-provider-and-delivery: without this, a
+    # restarted task keeps the *previous* run's delivery outcome
+    # (branch/commit/pushed) and reports it as if it belonged to the new
+    # attempt. `delivery_json` (what was requested) is left alone -- a
+    # restart does not change what the operator authorized.
+    task.delivery_result_json = None
     task.revision += 1
     await record_event(
         session,

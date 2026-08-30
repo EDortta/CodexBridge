@@ -51,6 +51,10 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     "tasks": {
         "revision": "0002_api_foundation.sql",
         "policy_level": "0005_decision_policy_level.sql",
+        "engine": "0008_engine_and_delivery.sql",
+        "issue_ref": "0008_engine_and_delivery.sql",
+        "delivery_json": "0008_engine_and_delivery.sql",
+        "delivery_result_json": "0008_engine_and_delivery.sql",
     },
     # Without these two, every request authenticates against a table that
     # cannot express revocation — so a token the operator revoked keeps working

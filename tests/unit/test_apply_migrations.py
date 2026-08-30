@@ -272,3 +272,21 @@ def test_unknown_migration_name_is_refused(legacy_db: Path) -> None:
     result = run(legacy_db, "--mark-applied", "9999_not_a_file.sql")
     assert result.returncode == 1
     assert "No such migration" in result.stderr
+
+
+def test_engine_and_delivery_columns_default_existing_rows_to_codex(legacy_db: Path) -> None:
+    """0008: an existing row must read back as what it always was -- a plain
+
+    `codex exec` task -- not as a null engine that `RunnerPool.for_engine`
+    then has to special-case.
+    """
+    adopted = run(legacy_db, "--mark-applied", "0001_init.sql")
+    assert adopted.returncode == 0, adopted.stderr
+    applied = run(legacy_db)
+    assert applied.returncode == 0, applied.stderr
+
+    assert {"engine", "issue_ref", "delivery_json", "delivery_result_json"} <= columns(legacy_db, "tasks")
+    row = sqlite3.connect(legacy_db).execute(
+        "select engine, issue_ref, delivery_json, delivery_result_json from tasks where id = 't-old'"
+    ).fetchone()
+    assert row == ("codex", None, None, None)

@@ -127,6 +127,11 @@ async def handle_mcp_call(
             hub.is_connected(request.executor_id),
             requested_by_user_id=principal.user_id if principal else None,
             requested_by_email=principal.email if principal else None,
+            # WK-20260830: `submit_codex_task`'s own JSON Schema still names no
+            # `delivery` field, so this is inert today -- included so the one
+            # call site that DOES set `delivery` (`start_development_task`,
+            # issue TBD) is not the only place this authority check exists.
+            can_approve_push=bool(principal is not None and (principal.can_approve_sensitive or principal.is_admin())),
         )
         task = await store.get_task(session, task.id)
         if task.state == TaskState.QUEUED.value:

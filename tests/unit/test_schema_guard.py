@@ -79,3 +79,29 @@ def test_create_all_does_not_repair_an_existing_table(tmp_path) -> None:
         Base.metadata.create_all(connection)
         columns = {row[1] for row in connection.execute(text("PRAGMA table_info(tasks)"))}
     assert "revision" not in columns
+
+
+def test_engine_and_delivery_columns_are_required(tmp_path) -> None:
+    """Migration 0008: engine/issue_ref/delivery_json/delivery_result_json.
+
+    Without this entry, a database that predates 0008 starts successfully
+    and only fails the first time `start_development_task` (or any code
+    reading `task.engine`/`task.delivery_json`) touches one of these columns
+    — the exact "reads like a code bug" failure this module exists to turn
+    into a named startup refusal.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path/'pre-0008.db'}")
+    with engine.begin() as connection:
+        Base.metadata.create_all(connection)
+        connection.execute(text("alter table tasks drop column engine"))
+        connection.execute(text("alter table tasks drop column issue_ref"))
+        connection.execute(text("alter table tasks drop column delivery_json"))
+        connection.execute(text("alter table tasks drop column delivery_result_json"))
+        with pytest.raises(SchemaOutOfDate) as raised:
+            check_schema(connection)
+    message = str(raised.value)
+    assert "tasks.engine" in message
+    assert "tasks.issue_ref" in message
+    assert "tasks.delivery_json" in message
+    assert "tasks.delivery_result_json" in message
+    assert "0008_engine_and_delivery.sql" in message

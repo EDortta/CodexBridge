@@ -1,16 +1,17 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-22 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-08-30 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 95 file(s) · 876 symbol(s) indexed
-- Languages: config (2), python (91), shell (2)
+- 96 file(s) · 892 symbol(s) indexed
+- Languages: config (2), python (92), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
 
+- `AGENTS.md`
 - `docs/required-reading.md`
 - `docs/project-rules.md`
 - `docs/software-overview.md`
@@ -20,7 +21,7 @@
 ## Ignored Paths
 
 - Built-in: `.docs-migration-bak`, `.git`, `.idea`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`, `.venv`, `.vscode`, `__pycache__`, `build`, `dist`, `env`, `node_modules`, `venv`
-- `.gitignore`: `__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.coverage`, `codex_bridge.db`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `venv/`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md`, `.windsurfrules`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/ai-agents.md`, `.credentials`, `handoff.md`, `new-tag.sh`, `scripts/install-agents-kit.sh`, `scripts/agent-worktree.sh`, `.docs-migration-bak/`, `.gk/operator.json`, `.gk/secrets.json`, `.gk/context-telemetry.jsonl`, `.gk/overwritten/`, `.env`, `.env.*`, `.envrc`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, `.credentials/*`, `!.env.example`, `!.env.sample`, `!.env.template`, `!.env.dist`, `!.env-example`, `!.env.missing`, `!.credentials/.gitignore`, `!.credentials/.keep`, `!.credentials/README*`, `!.credentials/*.example`, `!.credentials/*.sample`, `!.credentials/*.template`, `!.credentials/*.dist`
+- `.gitignore`: `__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.coverage`, `codex_bridge.db`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `venv/`, `.governancekit-identity.json`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md`, `.windsurfrules`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/ai-agents.md`, `handoff.md`, `new-tag.sh`, `scripts/install-agents-kit.sh`, `scripts/agent-worktree.sh`, `.docs-migration-bak/`, `.gk/operator.json`, `.gk/secrets.json`, `.gk/context-telemetry.jsonl`, `.gk/overwritten/`, `.gk/pre-upgrade/`, `.gk/pre-migrate/`, `.gk/remove-agents-backup/`, `.gk/remove-agents-plan.json`, `.gk/context-proposal/`, `*.kit-new`, `*.pre-draft`, `.env`, `.env.*`, `.envrc`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, `.credentials/*`, `!.env.example`, `!.env.sample`, `!.env.template`, `!.env.dist`, `!.env-example`, `!.env.missing`, `!.credentials/.gitignore`, `!.credentials/.keep`, `!.credentials/README*`, `!.credentials/*.example`, `!.credentials/*.sample`, `!.credentials/*.template`, `!.credentials/*.dist`
 
 ## Entry Points
 
@@ -127,6 +128,7 @@ tests/
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
     test_projects.py  — "Projects and the project operational dashboard — issue #5."
+    test_push_preauthorization.py  — "Push pre-authorization is resolved as a recorded approval, never a bypass."
     test_reconnect_replay_resolves.py  — "Issue #17 council round 1 — the headline scenario named by findings 1, 4"
     test_sessions.py  — "Agent sessions, logs and control — issue #9."
     test_store_and_mcp.py
@@ -566,7 +568,7 @@ tests/
 - `latest_project_activity_at(session, project_id)` *(async function)* — "The most recent task creation time for a project, or None if it has none."
 - `get_task(session, task_id)` *(async function)*
 - `list_recent_tasks(session, limit)` *(async function)*
-- `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email)` *(async function)*
+- `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email, can_approve_push)` *(async function)*
 - `mark_executor_connected(session, executor_id, connected)` *(async function)*
 - `executor_is_live(executor)` — "Whether an executor should be presented as connected right now."
 - `next_dispatchable_task(session, executor_id)` *(async function)*
@@ -629,10 +631,13 @@ tests/
 
 - **`PolicyDecision`** *(class)*
 - `policy_level_for_mode(mode)`
+- `push_branch_is_allowed(delivery)` — "Whether `delivery.branch` is a branch a pre-authorized push may target."
+- `push_is_preauthorized(request)` — "Whether this request's own `delivery` block authorizes a push."
 - `evaluate_task_policy(request)`
 
 ### `shared/protocol.py`
 
+- **`AgentEngine`** *(class)* — "Which development-agent CLI runs a task's instruction."
 - **`TaskMode`** *(class)*
 - **`TaskState`** *(class)*
 - **`PolicyLevel`** *(class)*
@@ -641,6 +646,7 @@ tests/
 - **`ApprovalDecision`** *(class)*
 - **`ProjectRegistration`** *(class)*
 - **`ExecutorRegistration`** *(class)*
+- **`DeliveryRequest`** *(class)* — "What the requester authorized the executor to do with git, once a task"
 - **`SubmitTaskRequest`** *(class)*
 - **`ContinueSessionRequest`** *(class)*
 - **`AgentEnvelope`** *(class)*
@@ -1131,6 +1137,16 @@ tests/
 - `test_a_cursor_from_another_filter_is_rejected(api)` *(async function)*
 - `test_a_cursor_is_not_valid_for_another_caller(api)` *(async function)* — "The caller's scope is bound into the cursor, same rule as sessions."
 
+### `tests/integration/test_push_preauthorization.py`
+
+> Push pre-authorization is resolved as a recorded approval, never a bypass.
+
+- `db_session()` *(async function)*
+- `test_preauthorized_push_resolves_automatically_when_caller_may_approve(db_session)` *(async function)*
+- `test_preauthorized_push_waits_for_a_human_without_approval_authority(db_session)` *(async function)*
+- `test_push_to_main_is_never_created_pending_or_otherwise(db_session)` *(async function)* — "`main` fails `PUSHABLE_BRANCH_PATTERN`, so this is an ordinary"
+- `test_restart_clears_delivery_result_but_not_the_request(db_session)` *(async function)*
+
 ### `tests/integration/test_reconnect_replay_resolves.py`
 
 > Issue #17 council round 1 — the headline scenario named by findings 1, 4
@@ -1278,6 +1294,7 @@ tests/
 - `test_a_half_applied_migration_is_not_reported_as_untouched(tmp_path)` — "The runner must not tell the operator the database is clean when it is not."
 - `test_dry_run_changes_nothing(legacy_db)`
 - `test_unknown_migration_name_is_refused(legacy_db)`
+- `test_engine_and_delivery_columns_default_existing_rows_to_codex(legacy_db)` — "0008: an existing row must read back as what it always was -- a plain"
 
 ### `tests/unit/test_codex_runner.py`
 
@@ -1317,6 +1334,11 @@ tests/
 
 - `test_policy_level_for_mode()`
 - `test_sensitive_instruction_requires_approval()`
+- `test_keyword_only_is_sensitive_and_unapproved()`
+- `test_allow_push_without_keyword_is_sensitive_but_preauthorized()`
+- `test_allow_push_to_main_is_refused_not_preauthorized()`
+- `test_keyword_and_preauthorized_push_is_one_decision_not_two()` — "A "push " hit plus a matching `delivery` must not stack into two"
+- `test_no_other_sensitive_keyword_is_ever_preauthorized()`
 
 ### `tests/unit/test_rate_limiter_bounds.py`
 
@@ -1335,6 +1357,7 @@ tests/
 - `test_missing_column_is_named_with_its_migration(tmp_path)` — "The message has to be actionable: what is missing, and what adds it."
 - `test_a_database_that_cannot_express_revocation_refuses_to_serve(tmp_path)` — "`revoked_at` is what makes a revoked token stop working."
 - `test_create_all_does_not_repair_an_existing_table(tmp_path)` — "The premise of the guard, asserted rather than assumed."
+- `test_engine_and_delivery_columns_are_required(tmp_path)` — "Migration 0008: engine/issue_ref/delivery_json/delivery_result_json."
 
 ### `tests/unit/test_security.py`
 

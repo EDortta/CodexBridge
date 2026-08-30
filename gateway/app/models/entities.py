@@ -67,6 +67,28 @@ class TaskModel(Base):
     # last_error changes, so an ETag derived from them would match on both sides
     # of a concurrent approval and no stale write would ever be detected.
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    # WK-20260830-chatgpt-entry-provider-and-delivery / migration 0008.
+    # Which agent CLI ran this task. Defaults to "codex" so a row from before
+    # this column existed reads back as what it always was.
+    engine: Mapped[str] = mapped_column(String(32), default="codex", server_default="codex")
+    # Opaque token naming the source issue ("docs:NNN", "local:<id>", a bare
+    # number, or "gh:N" for the not-yet-supported GitHub form). Never a
+    # filesystem path -- the gateway does not resolve it, the executor does
+    # (see `agent/codex_bridge_agent/instructions.py`), because the gateway
+    # never learns a project's real path (`docs/architecture.md`).
+    issue_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # What delivery was *requested* (branch, allow_push, base_branch, remote) --
+    # `shared.protocol.DeliveryRequest`, serialized. Distinct from
+    # `delivery_result_json` below on purpose: a restart must be able to clear
+    # what *happened* on the previous attempt without losing what was *asked*.
+    delivery_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # What delivery *actually did* -- branch, head commit, pushed y/n, refusal
+    # reason. Kept out of `result_json` so "did it push, what commit" is a
+    # column read, not a JSON parse, and so `restart_finished_task` resets it
+    # the same way it resets `result_json` (issue-adjacent: a restarted task
+    # that keeps a stale `delivery_result_json` would report the *previous*
+    # run's commit as if it were this one's).
+    delivery_result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class EpicModel(Base):
