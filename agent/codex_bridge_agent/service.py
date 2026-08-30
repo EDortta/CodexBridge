@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import websockets
 
-from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects
+from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects, resolve_auto_project
 from agent.codex_bridge_agent.git_delivery import deliver_changes
 from agent.codex_bridge_agent.instructions import IssueResolutionError, build_task_instruction, resolve_issue_text
 from agent.codex_bridge_agent.runners.base import EngineNotImplementedError
@@ -217,6 +217,11 @@ class AgentService:
         self.runners.mark_dispatched(task_id, engine)
         try:
             project = self.projects.get(project_id)
+            if project is None and self.settings.auto_project_root:
+                # Opt-in fallback (see `AgentSettings.auto_project_root`'s own
+                # docstring for the tradeoff): only reached once the static
+                # allowlist has already said no.
+                project = resolve_auto_project(project_id, self.settings.auto_project_root)
             if project is None:
                 await websocket.send(
                     self._envelope(

@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 123 file(s) · 1145 symbol(s) indexed
-- Languages: config (2), python (119), shell (2)
+- 125 file(s) · 1159 symbol(s) indexed
+- Languages: config (2), python (121), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -120,6 +120,7 @@ scripts/
 shared/
   __init__.py  — "Shared contracts for the gateway and the agent."
   policy.py
+  project_discovery.py  — "Read-only filesystem discovery of real git repositories."
   protocol.py
   security.py
 tests/
@@ -153,6 +154,7 @@ tests/
     test_store_and_mcp.py
   unit/
     test_agent_auth.py  — "Credential resolution for the `/agent/ws` handshake — issue #15."
+    test_agent_auto_project.py  — "`agent.codex_bridge_agent.config.resolve_auto_project` -- the opt-in"
     test_agent_service.py
     test_apply_migrations.py  — "The migration runner, exercised against real throwaway databases."
     test_claude_runner.py  — "ClaudeRunner's pure logic: command assembly, NDJSON extraction, sandbox mapping."
@@ -182,6 +184,7 @@ tests/
 - **`AgentSettings`** *(class)*
 - **`AgentProjectConfig`** *(class)*
 - `load_agent_projects(path)`
+- `resolve_auto_project(project_id, root)` — "Fallback lookup for a `project_id` the static allowlist does not know."
 
 ### `agent/codex_bridge_agent/git_delivery.py`
 
@@ -788,6 +791,15 @@ tests/
 - `push_branch_is_allowed(delivery)` — "Whether `delivery.branch` is a branch a pre-authorized push may target."
 - `push_is_preauthorized(request)` — "Whether this request's own `delivery` block authorizes a push."
 - `evaluate_task_policy(request)`
+
+### `shared/project_discovery.py`
+
+> Read-only filesystem discovery of real git repositories.
+
+- `is_excluded(dir_name)`
+- `walk_for_git_repos(root, max_depth)` — "Depth-limited scan for directories containing `.git`."
+- `suggest_project_id(path, taken)` — "A short, stable, unique-among-`taken` id for `path`'s own directory name."
+- `build_project_id_index(root, max_depth)` — "Every real repo under `root`, keyed by its `suggest_project_id`."
 
 ### `shared/protocol.py`
 
@@ -1489,6 +1501,18 @@ tests/
 - `test_blank_values_do_not_count_as_a_credential(blank)` — "`?token=` is not a presented credential."
 - `test_a_blank_header_falls_through_to_the_query()` — "Proxies that inject empty headers must not break the transition path."
 
+### `tests/unit/test_agent_auto_project.py`
+
+> `agent.codex_bridge_agent.config.resolve_auto_project` -- the opt-in
+
+- `test_resolves_a_real_repo_by_its_suggested_id(tmp_path)`
+- `test_resolves_a_nested_submodule(tmp_path)` — "The same reasoning `discover_projects.py` bakes in: monorepo"
+- `test_no_match_returns_none(tmp_path)`
+- `test_a_root_that_is_not_a_directory_returns_none(tmp_path)`
+- `test_a_directory_without_git_is_never_matched(tmp_path)`
+- `test_a_symlinked_directory_outside_root_is_never_followed(tmp_path)` — "`walk_for_git_repos` never follows a symlink -- this proves the"
+- `test_the_resolved_id_matches_what_discover_projects_would_suggest(tmp_path)` — "Consistency property this module's own docstring promises: an id a"
+
 ### `tests/unit/test_agent_service.py`
 
 - **`DummyWebSocket`** *(class)*
@@ -1505,6 +1529,8 @@ tests/
   - `resume(self, _)` *(async method)*
   - `restart(self, _)` *(async method)*
 - `test_dispatch_failure_returns_task_result(tmp_path)` *(async function)*
+- `test_an_unregistered_project_is_still_refused_when_auto_project_root_is_unset(tmp_path)` *(async function)* — "Default behavior, unchanged by the new opt-in setting existing at"
+- `test_auto_project_root_resolves_a_project_the_static_allowlist_does_not_know(tmp_path)` *(async function)* — "WK-20260830-chatgpt-entry-provider-and-delivery: with the opt-in root"
 - `test_machine_token_travels_in_a_header_not_the_url(monkeypatch)` *(async function)* — "The token in the query string was logged verbatim 107 times (#15)."
 - `test_connect_kwargs_are_accepted_by_the_real_installed_websockets_library()` *(async function)* — "Drives the REAL `websockets.connect`, not a fake -- every other test in"
 - `test_pause_resume_and_restart_controls_acknowledge_over_the_socket(monkeypatch)` *(async function)* — "Drives the real `_run_once` dispatch loop, not a copy of it."

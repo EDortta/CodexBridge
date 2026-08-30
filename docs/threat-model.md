@@ -39,6 +39,33 @@ implementar isso precisa passar a raiz do projeto e o alvo como argumentos
 distintos. Registrado aqui para que ninguém leia "ancestralidade verificada" e
 presuma proteção que ainda não está armada.
 
+**Raiz de auto-descoberta do executor (WK-20260830, opt-in, `CODEX_BRIDGE_AGENT_AUTO_PROJECT_ROOT`).**
+Decisão do operador (2026-08-30): quando ligada, "allowlist redundante no
+agente" acima deixa de ser uma lista fechada e vira "qualquer repositório git
+real sob esta raiz" (`shared/project_discovery.py`, `resolve_auto_project`).
+
+* controle: só ativa por configuração explícita — desligada por padrão, sem
+  mudança de comportamento para quem não a liga
+* controle: a varredura nunca segue symlink e nunca sobe diretório (herdado
+  de `walk_for_git_repos`) — testado explicitamente
+  (`test_a_symlinked_directory_outside_root_is_never_followed`)
+* controle: o caminho encontrado é resolvido (`realpath`) e checado contra a
+  raiz resolvida antes de virar um `ProjectRegistration` — segunda barreira
+  sobre a mesma garantia, no único ponto que devolve um caminho para quem vai
+  rodar um agente de código contra ele
+* controle: só precisa ter `.git` — uma pasta comum não vira projeto por
+  engano
+* risco aceito, com escopo explícito: esta válvula move a fronteira da
+  **camada 7** (`docs/project-onboarding.md`) de "cadastrado à mão" para
+  "existe fisicamente dentro desta árvore" — ainda uma fronteira, mais larga.
+  **Não afeta as camadas 1–6**, que rodam no gateway: um projeto ainda
+  precisa existir em `registry.json` antes de o ChatGPT conseguir nomeá-lo
+  (`gateway/app/services/store.py:resolve_project_reference` não tem
+  equivalente — o gateway não enxerga o disco do executor). Ligar esta
+  válvula sozinha não entrega "qualquer projeto, sem cadastro nenhum,
+  ponta a ponta" — só remove o segundo cadastro (o do executor), não o
+  primeiro (o do gateway).
+
 ### Execução de comandos arbitrários
 
 * controle: nenhuma ferramenta MCP genérica de shell

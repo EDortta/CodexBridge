@@ -148,6 +148,19 @@ Três campos existem no schema e **não têm nenhum efeito** no código atual:
 As camadas 1 a 6 rodam no `frida`. As 7 a 9 rodam no `devel3` e continuam valendo
 mesmo que o gateway esteja comprometido.
 
+**A camada 7 tem uma válvula opt-in** (`CODEX_BRIDGE_AGENT_AUTO_PROJECT_ROOT`,
+WK-20260830-chatgpt-entry-provider-and-delivery): quando configurada, um
+`project_id` ausente de `allowed_projects_file` ainda é aceito se existir um
+repositório git real com esse nome sob a raiz configurada
+(`shared/project_discovery.py`, a mesma varredura de `discover_projects.py`).
+A fronteira muda de "este `project_id` foi cadastrado à mão" para "este
+`project_id` é um repositório real dentro desta árvore de diretórios" — ainda
+uma fronteira, só que mais larga. **Não afeta as camadas 1 a 6**: o projeto
+ainda precisa existir no `registry.json` do gateway antes de o ChatGPT
+conseguir sequer nomeá-lo (ver `docs/threat-model.md`, "Raiz de
+auto-descoberta do executor"). Desligada por padrão; cada operador decide se
+quer essa fronteira mais larga ou a lista explícita de sempre.
+
 ## Remover um projeto
 
 Inverter a ordem: primeiro `"enabled": false` no arquivo do gateway (para a fila

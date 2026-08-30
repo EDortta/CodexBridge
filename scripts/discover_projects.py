@@ -27,55 +27,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from shared.project_discovery import suggest_project_id, walk_for_git_repos  # noqa: E402
+
 DEFAULT_ROOT = Path("~/Sync/Projects").expanduser()
-
-# Directory names never descended into, and never reported as a repo root by
-# themselves. Deliberately generic -- this file ships in a public repo, so it
-# must not name any of the operator's actual project folders (some of which
-# are personal/financial and must never appear in a public commit).
-EXCLUDED_DIR_NAMES = frozenset(
-    {
-        ".git",
-        ".venv",
-        "venv",
-        "env",
-        "node_modules",
-        "__pycache__",
-        ".tox",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        "dist",
-        "build",
-        ".next",
-        ".nuxt",
-        "target",
-        ".idea",
-        ".vscode",
-        ".stfolder",
-        ".stversions",
-        ".cache",
-        "System Volume Information",
-    }
-)
-
-_SUFFIX_EXCLUDE_RE = re.compile(r"\.(bak|old|orig)$", re.IGNORECASE)
-_ID_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
-
-
-def _is_excluded(dir_name: str) -> bool:
-    if dir_name in EXCLUDED_DIR_NAMES:
-        return True
-    if dir_name.startswith(".Trash"):
-        return True
-    if _SUFFIX_EXCLUDE_RE.search(dir_name):
-        return True
-    return False
 
 
 @dataclass(frozen=True)
@@ -85,56 +47,6 @@ class Candidate:
     suggested_project_id: str
     suggested_name: str
     already_in_local_executor_allowlist: bool
-
-
-def _walk_for_git_repos(root: Path, max_depth: int) -> list[Path]:
-    """Depth-limited scan for directories containing `.git`.
-
-    Descends past a found repo root rather than stopping there, so a
-    monorepo's own submodules (each with their own `.git`) are still found as
-    separate candidates -- CLAUDE.md's project-scope rule explicitly covers
-    "monorepo e submódulos". `.git` itself is never descended into: it holds
-    no project code, only git's own bookkeeping.
-    """
-    found: list[Path] = []
-
-    def _recurse(directory: Path, depth: int) -> None:
-        if depth > max_depth:
-            return
-        try:
-            entries = sorted(directory.iterdir())
-        except (PermissionError, OSError):
-            return
-        has_git = any(entry.name == ".git" for entry in entries)
-        if has_git:
-            found.append(directory)
-        for entry in entries:
-            if not entry.is_dir() or entry.is_symlink():
-                continue
-            if _is_excluded(entry.name):
-                continue
-            _recurse(entry, depth + 1)
-
-    _recurse(root, 0)
-    return found
-
-
-def _suggest_project_id(path: Path, root: Path, taken: set[str]) -> str:
-    base = _ID_SANITIZE_RE.sub("-", path.name.lower()).strip("-") or "project"
-    if base not in taken:
-        return base
-    # Disambiguate with the parent folder name -- the shape a real collision
-    # takes here is two same-named leaf dirs under different parents (e.g. two
-    # `api` submodules in different monorepos), not two unrelated projects
-    # that happen to share a name.
-    parent_name = _ID_SANITIZE_RE.sub("-", path.parent.name.lower()).strip("-")
-    candidate = f"{parent_name}-{base}" if parent_name else base
-    if candidate not in taken:
-        return candidate
-    n = 2
-    while f"{candidate}-{n}" in taken:
-        n += 1
-    return f"{candidate}-{n}"
 
 
 def _load_local_executor_paths(allowed_projects_file: Path) -> set[str]:
@@ -162,13 +74,13 @@ def discover(
     registered_paths = (
         _load_local_executor_paths(local_allowed_projects_file) if local_allowed_projects_file else set()
     )
-    repo_dirs = _walk_for_git_repos(root, max_depth)
+    repo_dirs = walk_for_git_repos(root, max_depth)
 
     taken: set[str] = set()
     candidates: list[Candidate] = []
     for repo_dir in sorted(repo_dirs):
         depth = len(repo_dir.relative_to(root).parts)
-        project_id = _suggest_project_id(repo_dir, root, taken)
+        project_id = suggest_project_id(repo_dir, taken)
         taken.add(project_id)
         candidates.append(
             Candidate(
