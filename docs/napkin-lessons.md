@@ -1077,3 +1077,68 @@ polling here") instead of its report despite having done the real work
 (731K tokens, real findings later recovered via `SendMessage` resuming the
 same fork). Treat a fork's terminal non-answer as incomplete, not as "no
 findings" — resume it rather than accepting silence.
+
+## 2026-08-30 — a "restart to test" turned into a 20-day-overdue production deploy,
+and `main` was silently frozen at the repo's first commit
+
+Attempting to verify the session's own delivery (restart the local executor,
+confirm it reconnects) surfaced two real, pre-existing problems that had
+nothing to do with the session's own code:
+
+1. **`websockets.connect(..., extra_headers=...)` had been silently broken
+   for 16 days.** `websockets>=15.0`'s asyncio client renamed the kwarg to
+   `additional_headers`; the old name is absorbed into `**kwargs` at
+   `connect()`'s own signature and only raises `TypeError` two calls deeper,
+   inside asyncio's raw `create_connection()`. `AgentService.run_forever`'s
+   bare `except Exception` caught and silently retried that `TypeError`
+   forever — the systemd unit read "active (running)" continuously while
+   the executor never once successfully connected. No test in the suite
+   ever caught it because every test that drives `_run_once` replaces
+   `websockets.connect` with a fake. Fixed with a new test that drives the
+   REAL library against a refused port, so a future API rename fails fast
+   and loud instead of silently for weeks.
+
+2. **The production gateway on `frida` was running code from 2026-08-10**
+   — 485-line `main.py` vs. the current 796, only migrations 0001-0002 of 8
+   applied, missing the header-based executor auth entirely (issue #15).
+   That is *why* the executor got HTTP 403 even after the `websockets` fix:
+   the deployed app didn't know the `X-Executor-Token` header existed. There
+   was no deploy script and no record of the gap anywhere — it was only
+   found by directly querying the production database's `executors.last_seen_at`
+   and comparing line counts against the local checkout. Lesson: **"the
+   service is active (running)" proves nothing about whether it is doing
+   its job** — the only real signal was a fresh timestamp in the gateway's
+   own database after a reconnect attempt, checked directly, not read off
+   `systemctl status`.
+
+   Recovered with a full, careful, backed-up deploy (DB dump + code tarball
+   before touching anything, `git archive` of `development` HEAD into a
+   staging directory rather than rsyncing a live working tree, dependency
+   sync via `pip install -e .`, 6 migrations applied for real, verified
+   `/health`/`/api/version` and the executor's live reconnect before
+   declaring it done). Zero data lost (3 pre-existing tasks all survived
+   with `engine` correctly defaulted to `"codex"`).
+
+3. **`main` on GitHub was frozen at the repository's very first commit.**
+   An earlier accidental merge of a PR directly into `main` had been
+   correctly reverted (`fad0cb2`), but the revert's tree was — confirmed by
+   an empty `git diff` — identical to `96c49e9`, the first commit ever made.
+   `main` had never actually carried the project's real history. This
+   produced a genuinely confusing symptom: `git merge origin/development`
+   from that point generated dozens of spurious "modify/delete" conflicts,
+   because git's 3-way merge picks a merge-base that does not simplify the
+   way a human expects when one side's tree, despite matching an ancestor
+   commit's tree, is not *literally* that ancestor commit (the revert is a
+   new commit object with old content, not a pointer back in time). The
+   correct fix — proven safe first via `git diff --stat` returning empty —
+   was `git push --force-with-lease` moving `main`'s ref to `development`'s
+   tip directly, **only after** explicit, separate operator confirmation
+   for that specific action (a generic earlier "deploy ok" did not cover
+   it — force-pushing `main` gets asked about every time, on its own,
+   regardless of what was pre-authorized minutes earlier for a different
+   action). Lesson: when a merge into `main` produces conflicts that make
+   no sense given what the diff *should* be, check whether one side's
+   history is a revert with identical-but-distinct-commit content before
+   assuming there is a real conflict to resolve — a content diff
+   (`git diff A B`) answers that question in one command; the merge
+   algorithm's confusion does not mean the content actually conflicts.
