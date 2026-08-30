@@ -380,6 +380,131 @@ async def test_handle_dispatch_forgets_the_task_only_after_the_result_is_sent(tm
 
 
 # --------------------------------------------------------------------------
+# WK-20260830-chatgpt-entry-provider-and-delivery: the git delivery step is
+# wired into _handle_dispatch but currently unreachable in practice (no
+# gateway sets `envelope.payload["delivery"]` yet -- issue #65 is what wires
+# the MCP tool that will). These tests drive the wiring directly with a
+# hand-built dispatch payload, proving the plumbing works before anything on
+# the gateway side can reach it.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_dispatch_runs_delivery_when_the_payload_carries_one(tmp_path: Path, monkeypatch) -> None:
+    from agent.codex_bridge_agent import service as service_module
+    from agent.codex_bridge_agent.git_delivery import DeliveryOutcome
+
+    fake_outcome = DeliveryOutcome(
+        attempted=True, outcome="committed_and_pushed", branch="feature/uc-1",
+        commit="deadbeef", pushed=True, remote_sha="deadbeef",
+    )
+    calls: list[dict] = []
+
+    async def fake_deliver_changes(**kwargs):
+        calls.append(kwargs)
+        return fake_outcome
+
+    monkeypatch.setattr(service_module, "deliver_changes", fake_deliver_changes)
+
+    service = AgentService(AgentSettings())
+    service.runners._runners["codex"] = _RecordingRunner([])
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+    websocket = DummyWebSocket()
+    envelope = AgentEnvelope(
+        message_id="dispatch-1",
+        executor_id="devel3",
+        sent_at=datetime.now(timezone.utc),
+        type=AgentMessageType.TASK_DISPATCH,
+        payload={
+            "task_id": "task-1",
+            "project_id": "codexbridge",
+            "instruction": "do the thing",
+            "mode": "implement",
+            "timeout_seconds": 60,
+            "issue_ref": "57",
+            "delivery": {"branch": "feature/uc-1", "allow_push": True},
+        },
+    )
+
+    await service._handle_dispatch(websocket, envelope)
+
+    assert len(calls) == 1
+    assert calls[0]["issue_ref"] == "57"
+    assert calls[0]["engine"] == "codex"
+    result = AgentEnvelope.model_validate_json(websocket.messages[-1])
+    assert result.payload["delivery"]["outcome"] == "committed_and_pushed"
+    assert result.payload["delivery"]["commit"] == "deadbeef"
+
+
+@pytest.mark.asyncio
+async def test_handle_dispatch_never_runs_delivery_without_a_delivery_payload(tmp_path: Path, monkeypatch) -> None:
+    """No `delivery` key at all -- today's only real shape, since no gateway
+
+    sets one yet -- must never call into git_delivery.
+    """
+    from agent.codex_bridge_agent import service as service_module
+
+    called = False
+
+    async def fake_deliver_changes(**kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("deliver_changes must not run without a delivery payload")
+
+    monkeypatch.setattr(service_module, "deliver_changes", fake_deliver_changes)
+
+    service = AgentService(AgentSettings())
+    service.runners._runners["codex"] = _RecordingRunner([])
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+
+    await service._handle_dispatch(DummyWebSocket(), _dispatch_envelope(task_id="task-2", mode="implement"))
+
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_handle_dispatch_never_runs_delivery_after_a_failed_task(tmp_path: Path, monkeypatch) -> None:
+    from agent.codex_bridge_agent import service as service_module
+
+    called = False
+
+    async def fake_deliver_changes(**kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("deliver_changes must not run after a failed task")
+
+    monkeypatch.setattr(service_module, "deliver_changes", fake_deliver_changes)
+
+    service = AgentService(AgentSettings())
+    service.runners._runners["codex"] = FailingRunner()
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+    envelope = AgentEnvelope(
+        message_id="dispatch-3",
+        executor_id="devel3",
+        sent_at=datetime.now(timezone.utc),
+        type=AgentMessageType.TASK_DISPATCH,
+        payload={
+            "task_id": "task-3",
+            "project_id": "codexbridge",
+            "instruction": "do the thing",
+            "mode": "implement",
+            "timeout_seconds": 60,
+            "delivery": {"branch": "feature/uc-1", "allow_push": True},
+        },
+    )
+
+    await service._handle_dispatch(DummyWebSocket(), envelope)
+
+    assert called is False
+
+
+# --------------------------------------------------------------------------
 # Issue #34: sandbox derived from policy level, and the machine-level override
 # --------------------------------------------------------------------------
 

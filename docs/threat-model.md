@@ -96,6 +96,46 @@ do CLI (issue #34): `read-only` a menos que o `policy_level` da tarefa já
 indicasse escrita, com trava adicional por executor
 (`AgentSettings.allow_workspace_write`). Ver `docs/development.md`.
 
+### Commit e push deliberados pelo executor (WK-20260830, slice de #51)
+
+A premissa muda aqui, e precisa ficar escrita: a seção acima já documentava
+que o `HOME` herdado alcança `~/.gitconfig`, credential helpers do Git e
+`~/.ssh` — mas até esta mudança essa credencial era alcançável e nunca
+deliberadamente usada pelo produto. `agent/codex_bridge_agent/git_delivery.py`
+passa a **usar** essa mesma credencial de propósito, para dar commit e (se
+autorizado) push, a pedido de uma tarefa concluída.
+
+* controle: roda **fora** do sandbox do provider (`codex exec`/`claude -p`) —
+  o agente (LLM) nunca invoca `git commit`/`git push` ele mesmo; é sempre este
+  módulo, depois que o processo do provider já saiu
+* controle: `AgentSettings.allow_git_delivery` — trava de máquina, **False por
+  padrão**. Só liga quando um operador decide explicitamente que este
+  executor pode escrever remoto
+* controle: `delivery.branch` é conferido contra `PUSHABLE_BRANCH_PATTERN`
+  duas vezes — uma no gateway (`shared.policy.push_is_preauthorized`), outra
+  aqui — para que um gateway comprometido ou com bug não consiga conceder
+  `main` alegando já ter verificado
+* controle: `delivery.remote` é validado contra um formato conservador de
+  nome de remote (deve começar com letra) antes de entrar no argv de
+  `git push --set-upstream <remote> <branch>` — sem essa checagem, um valor
+  como `"--force"` seria interpretado como flag pelo próprio git, já que este
+  módulo monta listas de argv, não uma string de shell
+* controle: staging é sempre por caminho explícito (`git add -- <paths>`),
+  nunca `-A`/`.`/`commit -a`; nenhum comando emite `--force`,
+  `--force-with-lease` ou refspec `+refs`; `HEAD` é relido imediatamente antes
+  do commit e a operação é recusada (nunca forçada) se mudou nesse intervalo
+* controle: a pós-condição do push é verificada (`git rev-parse
+  <remote>/<branch>` comparado ao sha do commit) — um `git push` que retorna 0
+  não é, por si, prova de que o remoto está no estado esperado
+* risco aceito: com `allow_git_delivery=true`, uma tarefa pré-autorizada
+  (`allow_push=true` numa branch válida) resulta em push real usando a
+  credencial de git deste executor. O controle final contra abuso é a
+  pré-autorização em si — registrada como decisão auditável
+  (`task.push_preauthorized`), nunca implícita
+* recomendação operacional: a mesma da seção anterior — usuário Linux
+  dedicado ao agente, sem credenciais de escrita em repositório de produção
+  além do(s) repositório(s) que este executor está autorizado a entregar
+
 ### Escalada local no executor
 
 * controle: usuário Linux dedicado e não root

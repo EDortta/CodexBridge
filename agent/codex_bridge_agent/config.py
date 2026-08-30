@@ -33,6 +33,18 @@ class AgentSettings(BaseSettings):
     # the same "last barrier on this machine" role `allowed_projects_file`
     # already plays for project scope (`docs/software-overview.md`).
     allow_workspace_write: bool = True
+    # WK-20260830-chatgpt-entry-provider-and-delivery, slice of #51. Same
+    # "last barrier on this machine" shape as `allow_workspace_write` above:
+    # an operator who wants one specific executor to never commit/push,
+    # regardless of what any pre-authorized request asks for, sets
+    # `CODEX_BRIDGE_AGENT_ALLOW_GIT_DELIVERY=false`. Defaults to False --
+    # unlike `allow_workspace_write`, this is a NEW capability with no
+    # existing behavior to preserve, so the safe default is "off until an
+    # operator turns it on", not "on until an operator turns it off".
+    allow_git_delivery: bool = False
+    git_author_name: str = "CodexBridge"
+    git_author_email: str = "codexbridge@invalid"
+    git_push_timeout_seconds: float = 120
 
     model_config = SettingsConfigDict(env_prefix="CODEX_BRIDGE_AGENT_", env_file=".env")
 

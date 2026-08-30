@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 105 file(s) · 951 symbol(s) indexed
-- Languages: config (2), python (101), shell (2)
+- 107 file(s) · 976 symbol(s) indexed
+- Languages: config (2), python (103), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -37,6 +37,7 @@ agent/
     __main__.py
     codex_runner.py  — "Re-export shim."
     config.py
+    git_delivery.py  — "The commit/push step a completed task's own `delivery` block authorizes."
     git_tools.py
     runners/
       __init__.py
@@ -147,6 +148,7 @@ tests/
     test_claude_runner.py  — "ClaudeRunner's pure logic: command assembly, NDJSON extraction, sandbox mapping."
     test_codex_runner.py  — "CodexRunner's pause/resume/restart/cancel state machine — issue #16 council."
     test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
+    test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
     test_main_import.py
     test_policy.py
     test_rate_limiter_bounds.py  — "The limiter's key space must be bounded, or it becomes the resource exhausted."
@@ -165,8 +167,17 @@ tests/
 - **`AgentProjectConfig`** *(class)*
 - `load_agent_projects(path)`
 
+### `agent/codex_bridge_agent/git_delivery.py`
+
+> The commit/push step a completed task's own `delivery` block authorizes.
+
+- **`DeliveryOutcome`** *(class)*
+  - `to_dict(self)` *(method)*
+- `deliver_changes()` *(async function)* — "Commits (and, if authorized, pushes) whatever a completed task changed."
+
 ### `agent/codex_bridge_agent/git_tools.py`
 
+- `run_git(project_root, *args)` *(async function)* — "Runs one `git` subcommand in `project_root`, capturing stdout/stderr."
 - `collect_git_snapshot(project_root, diff_max_chars)` *(async function)*
 
 ### `agent/codex_bridge_agent/runners/base.py`
@@ -1344,6 +1355,9 @@ tests/
 - `test_cancel_of_an_unknown_task_still_acks_over_the_socket(monkeypatch)` *(async function)* — "issue #17 council round 1, "the claim auditor" / "the second caller":"
 - `test_pause_of_an_unknown_task_reports_known_false(monkeypatch)` *(async function)* — "The control-message sibling of the cancel case above (issue #17"
 - `test_handle_dispatch_forgets_the_task_only_after_the_result_is_sent(tmp_path)` *(async function)* — "finding 14 (council round 2, "the second caller"): before this fix,"
+- `test_handle_dispatch_runs_delivery_when_the_payload_carries_one(tmp_path, monkeypatch)` *(async function)*
+- `test_handle_dispatch_never_runs_delivery_without_a_delivery_payload(tmp_path, monkeypatch)` *(async function)* — "No `delivery` key at all -- today's only real shape, since no gateway"
+- `test_handle_dispatch_never_runs_delivery_after_a_failed_task(tmp_path, monkeypatch)` *(async function)*
 - `test_sandbox_for_is_read_only_for_the_read_policy_level()`
 - `test_sandbox_for_is_workspace_write_for_controlled_write_and_sensitive()`
 - `test_sandbox_for_machine_override_forces_read_only_even_for_write_levels()` — "`AgentSettings.allow_workspace_write=False` is the executor's own kill"
@@ -1418,6 +1432,29 @@ tests/
 - `test_a_replay_window_far_past_the_overflow_point_is_rejected_at_startup(field)`
 - `test_a_replay_window_at_the_documented_ceiling_is_accepted(field)`
 - `test_a_negative_replay_window_is_rejected(field)`
+
+### `tests/unit/test_git_delivery.py`
+
+> `git_delivery.deliver_changes` against real throwaway git repos.
+
+- `test_parse_porcelain_z_handles_a_real_rename_record()` — "Confirmed against real `git status --porcelain=v1 -z` output for a"
+- `test_parse_porcelain_z_empty_output_is_no_paths()`
+- `test_parse_shortstat_reads_all_three_counters()`
+- `test_parse_shortstat_missing_fields_default_to_zero()`
+- `test_forbidden_paths_are_named_by_reason(path, expected_reason)`
+- `test_ordinary_source_paths_are_not_forbidden()`
+- `test_refuses_main_regardless_of_the_kill_switch(tmp_path)` *(async function)*
+- `test_refuses_a_branch_that_fails_the_pushable_pattern(tmp_path)` *(async function)* — "Defense in depth: even though `DeliveryRequest` itself accepts any"
+- `test_refuses_when_the_executor_kill_switch_is_off(tmp_path)` *(async function)*
+- `test_refuses_an_invalid_remote_name_that_could_be_parsed_as_a_flag(tmp_path)` *(async function)* — "`DeliveryRequest.remote` has no shape constraint of its own; a value"
+- `test_refuses_push_when_the_named_remote_does_not_exist(tmp_path)` *(async function)*
+- `test_skips_cleanly_when_there_is_nothing_to_commit(tmp_path)` *(async function)*
+- `test_refuses_a_credentials_file_even_among_other_real_changes(tmp_path)` *(async function)*
+- `test_refuses_a_change_too_large_to_have_been_authorized(tmp_path)` *(async function)*
+- `test_commits_on_a_new_branch_without_pushing(tmp_path)` *(async function)*
+- `test_staging_never_uses_add_all_or_a_bare_dot(tmp_path, monkeypatch)` *(async function)* — "The shared working-tree gate: staging is always by explicit path."
+- `test_no_command_ever_carries_a_force_flag(tmp_path, monkeypatch)` *(async function)*
+- `test_head_moving_between_status_and_commit_is_refused_not_forced(tmp_path, monkeypatch)` *(async function)* — "Simulates another process writing to the branch in the gap between"
 
 ### `tests/unit/test_main_import.py`
 

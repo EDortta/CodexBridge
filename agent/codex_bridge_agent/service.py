@@ -10,6 +10,7 @@ from uuid import uuid4
 import websockets
 
 from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects
+from agent.codex_bridge_agent.git_delivery import deliver_changes
 from agent.codex_bridge_agent.runners.base import EngineNotImplementedError
 from agent.codex_bridge_agent.runners.codex import SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE
 from agent.codex_bridge_agent.runners.pool import RunnerPool
@@ -18,6 +19,7 @@ from shared.protocol import (
     EXECUTOR_TOKEN_HEADER,
     AgentEnvelope,
     AgentMessageType,
+    DeliveryRequest,
     PolicyLevel,
     SubmitTaskRequest,
     TaskMode,
@@ -277,6 +279,25 @@ class AgentService:
                     "no_changes": True,
                     "raw_events": [],
                 }
+            # WK-20260830-chatgpt-entry-provider-and-delivery, slice of #51.
+            # Runs OUTSIDE the provider's own sandbox, only after a successful
+            # run, and only when the dispatch itself carried a `delivery`
+            # block. Today no gateway ever sets that key (issue #65 wires the
+            # MCP tool that will), so this branch is currently unreachable in
+            # practice -- exercised directly in
+            # tests/unit/test_git_delivery.py, not yet through a real dispatch.
+            delivery_payload = envelope.payload.get("delivery")
+            if delivery_payload and result.get("final_state") == TaskState.COMPLETED.value:
+                delivery_outcome = await deliver_changes(
+                    project_root=Path(root),
+                    delivery=DeliveryRequest.model_validate(delivery_payload),
+                    settings=self.settings,
+                    task_id=task_id,
+                    issue_ref=envelope.payload.get("issue_ref"),
+                    engine=engine,
+                    send_log=send_log,
+                )
+                result["delivery"] = delivery_outcome.to_dict()
             await websocket.send(self._envelope(AgentMessageType.TASK_RESULT, result).model_dump_json())
         finally:
             self.runners.forget(task_id)
