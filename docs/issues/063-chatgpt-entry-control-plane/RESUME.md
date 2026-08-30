@@ -2,36 +2,39 @@
 
 - work_id: WK-20260830-chatgpt-entry-provider-and-delivery
 - data: 2026-08-30
-- branch: `development` (pushed, `1b1d917`; nothing on `main` yet)
+- branch: `development` (pushed, `650e37b`; nothing on `main` yet)
 
 ## Next Step (DO THIS FIRST)
 
-Ask the operator what comes after Fase C — the session plan
-(`/home/esteban/.claude/plans/preciso-que-quando-eu-optimized-pizza.md`) ends
-there. Candidates mentioned but not scoped: running `discover_projects.py` +
-`register_projects.py` for real against `frida`/`devel3`'s live allowlist
-files, a configuration panel (mentioned once by the operator, not designed),
-or merging this work_id's `development` commits to `main`.
+Ask the operator whether they want to close the remaining gap on their "any
+project, no registration" request: the gateway's own `resolve_project_reference`
+(`gateway/app/services/store.py`) still requires a project to exist in its
+`registry.json`-backed DB before ChatGPT can name it at all — the executor's
+new `auto_project_root` (this session) only removed the SECOND, executor-side
+registration step, not this first one. Closing it for real needs a new
+gateway<->executor protocol message (ask the connected executor "do you know
+this project?"), a distinct, bigger change on a live remote host (`frida`),
+not yet scoped or approved. See `docs/threat-model.md`'s "Raiz de
+auto-descoberta do executor" section and `docs/napkin-lessons.md`'s
+2026-08-30 "dois portões, não um" entry.
 
 ## Current state
 
 - Etapa 1 (conversational entry + delivery) and Etapa 3 (Google Calendar
   reminders): delivered, pushed, merged to `main` earlier this session.
-- Etapa 2 (email notification, issue #70): implemented, pushed to
-  `development`, operator confirmed the real smoke-test email arrived
-  correctly. NOT yet merged to `main`.
-- Coverage: email fires on `TASK_RESULT`, `task.cancelled`, and the
-  orphan-reconnect cancel path. It does NOT yet fire from
-  `store.recover_tasks_after_startup` (expired/lost after a gateway crash) —
-  declared residual gap, council finding F27 partial, see
-  `docs/threat-model.md`.
+- Etapa 2 (email notification, issue #70): implemented, pushed, operator
+  confirmed the smoke-test email arrived correctly. NOT yet merged to `main`.
 - Fase C (project-access discovery/registration tools): delivered, pushed.
-  `scripts/discover_projects.py` (read-only, found 247 real repos under
-  `~/Sync/Projects`) and `scripts/register_projects.py` (diff-only against
-  the 4 allowlist surfaces, never applies). NOT yet run for real against
-  `frida`/`devel3`'s live files — the operator still needs to curate a
-  discovery run down to an approved list first.
-- 737 tests passing (`pytest tests/unit tests/integration tests/contract -q`).
+  `scripts/discover_projects.py` + `scripts/register_projects.py`, diff-only,
+  never applies. NOT yet run for real against `frida`/`devel3`'s live files.
+- `auto_project_root` (this session, devel3-side only): delivered, pushed.
+  `CODEX_BRIDGE_AGENT_AUTO_PROJECT_ROOT`, opt-in, unset by default. Lets the
+  executor accept any real git repo under a configured root without a
+  per-project entry in `allowed_projects_file` — but does NOT by itself
+  deliver "mention any project, it just works" from ChatGPT (see Next Step).
+- 746 tests passing (`pytest tests/unit tests/integration tests/contract -q`;
+  one known machine-load-sensitive timing flake in `test_oauth_authorize.py`,
+  confirmed unrelated, passes in isolation).
 
 ## Watch for
 

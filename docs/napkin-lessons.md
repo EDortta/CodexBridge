@@ -1183,3 +1183,29 @@ files the current turn never touched as an early signal that a background
 agent has gone outside its assigned scope, and check on a long-running
 fork (`ListAgents`) rather than assuming a multi-minute read-only task is
 just slow. Reported as product feedback (subagent scope adherence).
+
+## 2026-08-30 — "quero acesso a qualquer projeto" tem dois portões, não um
+
+O operador pediu que o CodexBridge alcance qualquer projeto existente ou
+futuro sob `~/Sync/Projects`, sem cadastro manual. A implementação óbvia —
+uma raiz de auto-descoberta no executor (devel3), que resolve `project_id`
+contra o disco em vez de uma allowlist estática — só resolve **metade** do
+problema, e não é óbvio até se traçar o caminho completo de uma requisição:
+o gateway (frida) tem seu próprio portão, `resolve_project_reference`
+(`gateway/app/services/store.py`), que exige uma linha já existente na
+tabela `projects` (vinda de `registry.json`) **antes** de qualquer coisa ser
+despachada ao executor. O gateway não tem — e por desenho não deveria ter —
+visão do disco do executor (hosts diferentes; `docs/architecture.md`), então
+não há como ele "só olhar a pasta" para decidir se um nome desconhecido é
+válido. Fechar esse segundo portão exigiria uma extensão real de protocolo
+(o gateway perguntar ao executor conectado, em tempo real, "você conhece
+esse projeto?"), não uma opção de configuração.
+
+Lição: quando um pedido de "acesso automático a X" atravessa mais de um
+processo/host com seu próprio ponto de decisão, resolver o ponto mais fácil
+de mexer (geralmente o mais próximo, aqui o executor local) e parar aí dá a
+impressão de entrega completa sem entregar o resultado fim-a-fim pedido.
+Vale a pena traçar o caminho completo da requisição — aqui, ChatGPT → MCP →
+gateway → executor — e nomear explicitamente qual trecho ficou resolvido e
+qual não, antes de declarar a etapa fechada (feito em
+`docs/threat-model.md` e no handoff desta entrega).
