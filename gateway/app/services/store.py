@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import statistics
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -308,8 +309,18 @@ async def get_task(session: AsyncSession, task_id: str) -> TaskModel | None:
     return await session.get(TaskModel, task_id)
 
 
-async def list_recent_tasks(session: AsyncSession, limit: int = 20) -> list[TaskModel]:
-    result = await session.execute(select(TaskModel).order_by(TaskModel.created_at.desc()).limit(limit))
+async def list_recent_tasks(session: AsyncSession, limit: int = 20, states: list[str] | None = None) -> list[TaskModel]:
+    """`states` narrows to a caller-given set of `TaskState` values.
+
+    WK-20260830-chatgpt-entry-provider-and-delivery: this is what lets "what
+    finished since I last asked" (a ChatGPT scheduled Task's poll surface,
+    council finding F27's email being the other half) be one call instead of
+    listing everything and filtering client-side.
+    """
+    statement = select(TaskModel).order_by(TaskModel.created_at.desc()).limit(limit)
+    if states:
+        statement = statement.where(TaskModel.state.in_(states))
+    result = await session.execute(statement)
     return list(result.scalars())
 
 
@@ -2087,3 +2098,158 @@ async def list_conversation_messages_page(
     ).limit(limit + 1)
     result = await session.execute(statement)
     return list(result.scalars())
+
+
+# --------------------------------------------------------------------------
+# WK-20260830-chatgpt-entry-provider-and-delivery: `start_development_task`
+# support. The gateway never learns a project's real path
+# (`docs/architecture.md`), so resolution here only ever picks a
+# `project_id` -- it does not, and must not, touch the filesystem.
+# --------------------------------------------------------------------------
+
+
+class AmbiguousProjectReference(ValueError):
+    """More than one project matched a `start_development_task` reference.
+
+    Carries every candidate so the caller (the gateway's MCP handler) can
+    report them and let ChatGPT ask the operator, instead of guessing.
+    """
+
+    def __init__(self, candidates: list[ProjectModel]):
+        super().__init__("ambiguous_project")
+        self.candidates = candidates
+
+
+def _like_escape(text: str) -> str:
+    """Escapes SQL LIKE wildcards in caller-supplied text before it is used
+
+    in a `LIKE` pattern -- `resolve_project_reference`'s `text` comes from a
+    ChatGPT-relayed request and is not otherwise constrained; a stray `%` or
+    `_` in it must not change what the prefix match matches.
+    """
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+async def resolve_project_reference(session: AsyncSession, text: str) -> ProjectModel:
+    """Resolves "project Y" to exactly one registered project.
+
+    Order: exact `project_id` -> exact `name` (case-insensitive) -> a unique
+    case-insensitive prefix of either. Zero matches raises `ValueError`
+    ("unknown_project"); more than one raises `AmbiguousProjectReference`
+    naming every candidate. Never guesses between candidates.
+    """
+    text = text.strip()
+    if not text:
+        raise ValueError("unknown_project")
+
+    exact = await session.get(ProjectModel, text)
+    if exact is not None:
+        return exact
+
+    lowered = text.lower()
+    result = await session.execute(select(ProjectModel).where(func.lower(ProjectModel.name) == lowered))
+    name_matches = list(result.scalars())
+    if len(name_matches) == 1:
+        return name_matches[0]
+    if len(name_matches) > 1:
+        raise AmbiguousProjectReference(name_matches)
+
+    pattern = f"{_like_escape(lowered)}%"
+    result = await session.execute(
+        select(ProjectModel).where(
+            or_(
+                func.lower(ProjectModel.id).like(pattern, escape="\\"),
+                func.lower(ProjectModel.name).like(pattern, escape="\\"),
+            )
+        )
+    )
+    prefix_matches = list(result.scalars())
+    if len(prefix_matches) == 1:
+        return prefix_matches[0]
+    if len(prefix_matches) > 1:
+        raise AmbiguousProjectReference(prefix_matches)
+
+    raise ValueError("unknown_project")
+
+
+_ETA_SAMPLE_LIMIT = 50
+_ETA_MIN_SAMPLES = 5
+_ETA_LOOKBACK_DAYS = 90
+
+
+async def _task_durations(
+    session: AsyncSession, *, mode: str, project_id: str | None, engine: str | None
+) -> list[float]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_ETA_LOOKBACK_DAYS)
+    statement = (
+        select(TaskModel.started_at, TaskModel.completed_at)
+        .where(TaskModel.state == TaskState.COMPLETED.value)
+        .where(TaskModel.started_at.isnot(None))
+        .where(TaskModel.completed_at.isnot(None))
+        .where(TaskModel.created_at > cutoff)
+        .where(TaskModel.mode == mode)
+        .order_by(TaskModel.completed_at.desc())
+        .limit(_ETA_SAMPLE_LIMIT)
+    )
+    if project_id is not None:
+        statement = statement.where(TaskModel.project_id == project_id)
+    if engine is not None:
+        statement = statement.where(TaskModel.engine == engine)
+    result = await session.execute(statement)
+    return [
+        (_as_utc(completed_at) - _as_utc(started_at)).total_seconds()
+        for started_at, completed_at in result.all()
+    ]
+
+
+async def estimate_task_duration_seconds(
+    session: AsyncSession, *, project_id: str, mode: str, engine: str
+) -> dict:
+    """A duration estimate for `start_development_task`'s `eta_seconds`.
+
+    Median (not mean -- a single long timeout must not dominate) of
+    `completed_at - started_at` over the last 50 completed tasks in the last
+    90 days, narrowed by project+mode+engine when there is enough history and
+    WIDENED (never invented) when there is not: drop engine, then project,
+    then mode, in that order, before finally reporting no estimate at all
+    (`eta_seconds: None`) rather than a number with no real basis behind it
+    (council finding F29's "best available cost/usage evidence" failure, in
+    miniature). `eta_sample_size` says exactly how many runs the number
+    behind `eta_basis` actually rests on.
+    """
+    for basis, use_project, use_engine in (
+        ("project+mode+engine", True, True),
+        ("project+mode", True, False),
+        ("mode", False, False),
+    ):
+        durations = await _task_durations(
+            session,
+            mode=mode,
+            project_id=project_id if use_project else None,
+            engine=engine if use_engine else None,
+        )
+        if len(durations) >= _ETA_MIN_SAMPLES:
+            return {
+                "eta_seconds": statistics.median(durations),
+                "eta_basis": basis,
+                "eta_sample_size": len(durations),
+            }
+
+    # Global fallback: any completed task at all, regardless of mode.
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_ETA_LOOKBACK_DAYS)
+    result = await session.execute(
+        select(TaskModel.started_at, TaskModel.completed_at)
+        .where(TaskModel.state == TaskState.COMPLETED.value)
+        .where(TaskModel.started_at.isnot(None))
+        .where(TaskModel.completed_at.isnot(None))
+        .where(TaskModel.created_at > cutoff)
+        .order_by(TaskModel.completed_at.desc())
+        .limit(_ETA_SAMPLE_LIMIT)
+    )
+    durations = [
+        (_as_utc(completed_at) - _as_utc(started_at)).total_seconds()
+        for started_at, completed_at in result.all()
+    ]
+    if durations:
+        return {"eta_seconds": statistics.median(durations), "eta_basis": "global", "eta_sample_size": len(durations)}
+    return {"eta_seconds": None, "eta_basis": "none", "eta_sample_size": 0}

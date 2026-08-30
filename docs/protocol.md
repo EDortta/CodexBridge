@@ -23,10 +23,25 @@ Ferramentas expostas:
 * `cancel_codex_task`
 * `approve_codex_task`
 * `list_recent_tasks`
+* `start_development_task`
 
-São 11 ferramentas. `approve_codex_task` é a que libera tarefa parada em
+São 12 ferramentas. `approve_codex_task` é a que libera tarefa parada em
 `awaiting_approval` pela política de sensibilidade, e exige principal com escopo
 `codexbridge.task.approve` ou `can_approve_sensitive`.
+
+`start_development_task` (WK-20260830-chatgpt-entry-provider-and-delivery, issue
+#65) é a entrada conversacional: resolve `project` (id, nome ou prefixo único),
+resolve o executor automaticamente quando omitido, calcula `expires_at` sozinho
+e devolve uma estimativa de duração (`eta_seconds`/`eta_basis`/`eta_sample_size`)
+baseada no histórico real de tarefas. Aceita `issue` (`docs:NNN`/`NNN` resolvido
+**no executor**, `local:<id>` resolvido no gateway, `gh:<n>` recusado —
+ingestão de issue do GitHub não tem dono neste sistema) e `engine`
+(`codex`/`claude`/`cursor-agent`/`gemini`/`opencode`/`aider`, default `claude`).
+`allow_push=true` exige `branch` casando `PUSHABLE_BRANCH_PATTERN` e escopo
+`codexbridge.task.approve` — nunca cria a tarefa sem os dois. As quatro
+ferramentas com nome `codex` continuam respondendo exatamente como antes
+(57a surface inventory): `get_task_status` e `list_recent_tasks` só ganharam
+campos aditivos (`engine`, `issue_ref`, `delivery`, `delivery_result`).
 
 ## Canal reverso do agente
 

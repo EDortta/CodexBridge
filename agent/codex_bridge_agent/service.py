@@ -11,6 +11,7 @@ import websockets
 
 from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects
 from agent.codex_bridge_agent.git_delivery import deliver_changes
+from agent.codex_bridge_agent.instructions import IssueResolutionError, build_task_instruction, resolve_issue_text
 from agent.codex_bridge_agent.runners.base import EngineNotImplementedError
 from agent.codex_bridge_agent.runners.codex import SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE
 from agent.codex_bridge_agent.runners.pool import RunnerPool
@@ -213,6 +214,23 @@ class AgentService:
                 )
                 return
             root = ensure_within_root(project.path, project.path)
+            # WK-20260830-chatgpt-entry-provider-and-delivery, issue #65: the
+            # gateway never learns a project's real path
+            # (`docs/architecture.md`), so `issue_ref` is resolved HERE, not
+            # on the gateway. Failure is a typed error, never a traceback.
+            issue_ref = envelope.payload.get("issue_ref")
+            issue_text: str | None = None
+            if issue_ref:
+                try:
+                    issue_text = resolve_issue_text(Path(root), issue_ref)
+                except IssueResolutionError as exc:
+                    await websocket.send(
+                        self._envelope(
+                            AgentMessageType.TASK_RESULT,
+                            {"task_id": task_id, "final_state": TaskState.FAILED.value, "error": exc.code},
+                        ).model_dump_json()
+                    )
+                    return
             request = SubmitTaskRequest(
                 executor_id=self.settings.executor_id,
                 project_id=project_id,
@@ -253,7 +271,11 @@ class AgentService:
                 result = await runner.run_task(
                     task_id=task_id,
                     project_root=Path(root),
-                    instruction=f"{BASE_PROMPT}\n\nUser task:\n{envelope.payload['instruction']}",
+                    instruction=build_task_instruction(
+                        base_prompt=BASE_PROMPT,
+                        operator_request=envelope.payload["instruction"],
+                        issue_text=issue_text,
+                    ),
                     timeout_seconds=int(envelope.payload["timeout_seconds"]),
                     continue_session_id=envelope.payload.get("continue_session_id"),
                     send_log=send_log,

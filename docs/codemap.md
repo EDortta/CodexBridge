@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 107 file(s) · 976 symbol(s) indexed
-- Languages: config (2), python (103), shell (2)
+- 112 file(s) · 1037 symbol(s) indexed
+- Languages: config (2), python (108), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -39,6 +39,7 @@ agent/
     config.py
     git_delivery.py  — "The commit/push step a completed task's own `delivery` block authorizes."
     git_tools.py
+    instructions.py  — "Resolves `issue_ref` to file content, and builds the provider prompt with"
     runners/
       __init__.py
       base.py  — "The provider-neutral surface the executor dispatches a task through."
@@ -132,14 +133,17 @@ tests/
     test_codex_runner_real_process.py  — "CodexRunner against a REAL `codex` subprocess — not the fake used everywhere else."
     test_conversations.py  — "Conversations and contextual messaging — issue #10."
     test_decisions.py  — "Operational decisions — issue #6."
+    test_dispatch_payload_engine_and_delivery.py  — "`AgentHub.dispatch_next` forwards engine/issue_ref/delivery to the executor."
     test_epics_issues.py  — "Epics and issues — issue #8."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
+    test_project_and_eta_resolution.py  — "`resolve_project_reference` and `estimate_task_duration_seconds`."
     test_projects.py  — "Projects and the project operational dashboard — issue #5."
     test_push_preauthorization.py  — "Push pre-authorization is resolved as a recorded approval, never a bypass."
     test_reconnect_replay_resolves.py  — "Issue #17 council round 1 — the headline scenario named by findings 1, 4"
     test_sessions.py  — "Agent sessions, logs and control — issue #9."
+    test_start_development_task.py  — "The `start_development_task` MCP tool -- the conversational entry point."
     test_store_and_mcp.py
   unit/
     test_agent_auth.py  — "Credential resolution for the `/agent/ws` handshake — issue #15."
@@ -149,6 +153,7 @@ tests/
     test_codex_runner.py  — "CodexRunner's pause/resume/restart/cancel state machine — issue #16 council."
     test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
+    test_instructions.py  — "`resolve_issue_text` and `build_task_instruction`."
     test_main_import.py
     test_policy.py
     test_rate_limiter_bounds.py  — "The limiter's key space must be bounded, or it becomes the resource exhausted."
@@ -179,6 +184,15 @@ tests/
 
 - `run_git(project_root, *args)` *(async function)* — "Runs one `git` subcommand in `project_root`, capturing stdout/stderr."
 - `collect_git_snapshot(project_root, diff_max_chars)` *(async function)*
+
+### `agent/codex_bridge_agent/instructions.py`
+
+> Resolves `issue_ref` to file content, and builds the provider prompt with
+
+- **`IssueResolutionError`** *(class)* — "A typed reason `issue_ref` could not be turned into file content."
+  - `__init__(self, code)` *(method)*
+- `resolve_issue_text(project_root, issue_ref)` — "Returns the raw text of the issue `issue_ref` names, or raises"
+- `build_task_instruction()` — "Assembles the final provider prompt, keeping the operator's own words"
 
 ### `agent/codex_bridge_agent/runners/base.py`
 
@@ -644,7 +658,7 @@ tests/
 - `project_task_counts(session, project_ids)` *(async function)* — "Per-project task counts, in one grouped query rather than one query per row."
 - `latest_project_activity_at(session, project_id)` *(async function)* — "The most recent task creation time for a project, or None if it has none."
 - `get_task(session, task_id)` *(async function)*
-- `list_recent_tasks(session, limit)` *(async function)*
+- `list_recent_tasks(session, limit, states)` *(async function)* — "`states` narrows to a caller-given set of `TaskState` values."
 - `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email, can_approve_push)` *(async function)*
 - `mark_executor_connected(session, executor_id, connected)` *(async function)*
 - `executor_is_live(executor)` — "Whether an executor should be presented as connected right now."
@@ -697,6 +711,10 @@ tests/
 - `mark_conversation_read(session)` *(async function)* — "Advance (never retreat) one actor's read cursor on one conversation."
 - `create_conversation_message(session)` *(async function)* — "Append a message. Immutable once written — there is no update path."
 - `list_conversation_messages_page(session)` *(async function)* — "A conversation's messages, oldest first — the order a thread reads in."
+- **`AmbiguousProjectReference`** *(class)* — "More than one project matched a `start_development_task` reference."
+  - `__init__(self, candidates)` *(method)*
+- `resolve_project_reference(session, text)` *(async function)* — "Resolves "project Y" to exactly one registered project."
+- `estimate_task_duration_seconds(session)` *(async function)* — "A duration estimate for `start_development_task`'s `eta_seconds`."
 
 ### `scripts/apply_migrations.py`
 
@@ -1035,6 +1053,17 @@ tests/
 - `test_request_revision_is_a_distinct_outcome_from_reject(api)` *(async function)*
 - `test_request_revision_on_a_resolved_decision_is_a_conflict(api)` *(async function)*
 
+### `tests/integration/test_dispatch_payload_engine_and_delivery.py`
+
+> `AgentHub.dispatch_next` forwards engine/issue_ref/delivery to the executor.
+
+- **`DummyWebSocket`** *(class)*
+  - `__init__(self)` *(method)*
+  - `send_json(self, payload)` *(async method)*
+- `factory()` *(async function)*
+- `test_dispatch_omits_delivery_and_issue_ref_when_neither_was_requested(factory)` *(async function)*
+- `test_dispatch_forwards_engine_issue_ref_and_delivery_when_requested(factory)` *(async function)*
+
 ### `tests/integration/test_epics_issues.py`
 
 > Epics and issues — issue #8.
@@ -1182,6 +1211,24 @@ tests/
 - `test_zero_cache_seconds_is_floored(monkeypatch)` — "A TTL of 0 would restore the uncached DoS, so it is not honoured."
 - `test_every_served_api_route_carries_the_rate_limiter()` — "`main.py` claimed every future /api route inherits the limiter. It does not."
 
+### `tests/integration/test_project_and_eta_resolution.py`
+
+> `resolve_project_reference` and `estimate_task_duration_seconds`.
+
+- `db_session()` *(async function)*
+- `test_resolves_exact_project_id(db_session)` *(async function)*
+- `test_resolves_exact_name_case_insensitively(db_session)` *(async function)*
+- `test_resolves_a_unique_prefix(db_session)` *(async function)*
+- `test_ambiguous_prefix_names_every_candidate_and_never_guesses(db_session)` *(async function)*
+- `test_unknown_reference_raises_unknown_project(db_session)` *(async function)*
+- `test_empty_reference_raises_unknown_project(db_session)` *(async function)*
+- `test_a_percent_or_underscore_in_the_reference_is_not_a_wildcard(db_session)` *(async function)* — "`_like_escape` must neutralize SQL LIKE metacharacters in"
+- `test_reports_no_estimate_with_zero_samples(db_session)` *(async function)*
+- `test_uses_the_narrowest_basis_once_it_has_enough_samples(db_session)` *(async function)*
+- `test_widens_to_project_and_mode_when_the_engine_specific_sample_is_too_thin(db_session)` *(async function)*
+- `test_widens_to_global_mode_and_finally_to_none(db_session)` *(async function)*
+- `test_median_not_mean_so_one_outlier_does_not_dominate(db_session)` *(async function)*
+
 ### `tests/integration/test_projects.py`
 
 > Projects and the project operational dashboard — issue #5.
@@ -1291,6 +1338,33 @@ tests/
 - `test_more_secret_shapes_are_redacted(api, stored, must_not_contain)` *(async function)* — "Each of these reached the client verbatim before an adversarial pass."
 - `test_terminal_escapes_are_stripped(api)` *(async function)* — "`]0;title` retitles a CLI consumer's window."
 - `test_the_instruction_is_redacted_like_everything_else(api)` *(async function)* — "It sat raw beside a redacted lastError; it is free text a human writes."
+
+### `tests/integration/test_start_development_task.py`
+
+> The `start_development_task` MCP tool -- the conversational entry point.
+
+- **`DummyHub`** *(class)*
+  - `__init__(self)` *(method)*
+  - `is_connected(self, executor_id)` *(method)*
+  - `dispatch_next(self, executor_id)` *(async method)*
+  - `send(self, executor_id, envelope)` *(async method)*
+- `db_session()` *(async function)*
+- `test_happy_path_resolves_project_and_returns_eta_fields(db_session)` *(async function)*
+- `test_resolves_project_by_unique_prefix(db_session)` *(async function)* — ""unclai" resolves uniquely to "unclaimed" -- proven by getting past"
+- `test_ambiguous_project_reference_is_409_naming_every_candidate(db_session)` *(async function)*
+- `test_unknown_project_reference_is_404(db_session)` *(async function)*
+- `test_project_not_onboarded_names_both_allowlist_files(db_session)` *(async function)*
+- `test_allow_push_without_approval_authority_is_refused(db_session)` *(async function)*
+- `test_allow_push_without_a_branch_is_refused(db_session)` *(async function)*
+- `test_allow_push_to_an_unpushable_branch_is_refused(db_session)` *(async function)*
+- `test_allow_push_on_a_valid_branch_creates_a_preauthorized_task(db_session)` *(async function)*
+- `test_issue_ref_invalid_shape_is_refused(db_session)` *(async function)*
+- `test_github_issue_reference_is_explicitly_unsupported(db_session)` *(async function)*
+- `test_neither_request_nor_issue_is_refused(db_session)` *(async function)*
+- `test_local_issue_reference_builds_a_default_request_from_its_title(db_session)` *(async function)*
+- `test_local_issue_reference_in_another_project_is_unknown(db_session)` *(async function)*
+- `test_bare_issue_number_with_no_request_builds_a_generic_objective(db_session)` *(async function)* — ""docs:NNN"/bare NNN forms are resolved on the EXECUTOR, not the"
+- `test_eta_reflects_real_task_history(db_session)` *(async function)*
 
 ### `tests/integration/test_store_and_mcp.py`
 
@@ -1455,6 +1529,23 @@ tests/
 - `test_staging_never_uses_add_all_or_a_bare_dot(tmp_path, monkeypatch)` *(async function)* — "The shared working-tree gate: staging is always by explicit path."
 - `test_no_command_ever_carries_a_force_flag(tmp_path, monkeypatch)` *(async function)*
 - `test_head_moving_between_status_and_commit_is_refused_not_forced(tmp_path, monkeypatch)` *(async function)* — "Simulates another process writing to the branch in the gap between"
+
+### `tests/unit/test_instructions.py`
+
+> `resolve_issue_text` and `build_task_instruction`.
+
+- `test_resolves_zero_padded_issue_under_an_epic_folder(tmp_path)`
+- `test_resolves_a_bare_numbered_file_directly_under_docs_issues(tmp_path)`
+- `test_resolves_an_epic_numbered_folder_via_its_readme(tmp_path)` — "This repo's own older convention (`docs/issues/001-mobile-api-foundation/`)"
+- `test_unknown_issue_number_is_not_found(tmp_path)`
+- `test_missing_docs_issues_directory_is_not_found(tmp_path)`
+- `test_ambiguous_number_across_two_epics_is_reported_not_guessed(tmp_path)`
+- `test_gh_reference_is_explicitly_unsupported(tmp_path)` — "GitHub issue ingestion has no owner in this codebase (council finding"
+- `test_local_reference_is_rejected_here_as_a_defensive_backstop(tmp_path)` — "`local:<id>` is meant to be resolved by the GATEWAY (an `IssueModel`"
+- `test_malformed_reference_is_invalid_not_a_traceback(tmp_path)`
+- `test_a_prefix_of_a_longer_number_is_not_matched(tmp_path)` — "Globbing "65-*" must not accidentally match a "650-..." folder."
+- `test_build_task_instruction_without_an_issue_has_no_untrusted_block()`
+- `test_build_task_instruction_separates_operator_words_from_issue_content()`
 
 ### `tests/unit/test_main_import.py`
 

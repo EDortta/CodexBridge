@@ -115,14 +115,27 @@ class AgentHub:
                 return None
             await store.update_task_state(session, task.id, TaskState.RUNNING)
             self.running_tasks.setdefault(executor_id, set()).add(task.id)
-            return {
+            payload: dict[str, Any] = {
                 "task_id": task.id,
                 "project_id": task.project_id,
                 "instruction": task.instruction,
                 "mode": task.mode,
                 "timeout_seconds": task.timeout_seconds,
                 "continue_session_id": task.session_id,
+                # WK-20260830-chatgpt-entry-provider-and-delivery. `engine`
+                # always present (column default "codex") so an executor that
+                # reads `payload.get("engine", "codex")` behaves identically
+                # whether or not this key is here at all -- included anyway
+                # for an executor that wants to see it explicitly, and
+                # because `issue_ref`/`delivery` being present without
+                # `engine` would be a stranger payload shape than either
+                # being absent together.
+                "engine": task.engine,
+                "issue_ref": task.issue_ref,
             }
+            if task.delivery_json:
+                payload["delivery"] = json.loads(task.delivery_json)
+            return payload
 
     async def dispatch_available(self, executor_id: str) -> None:
         """Dispatches the next queued/waiting task to `executor_id`, if one is

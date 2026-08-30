@@ -140,12 +140,81 @@ def tool_definitions() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "start_development_task",
+            "title": "Start development task",
+            "description": (
+                "Ponto de entrada conversacional: 'resolva a issue X do projeto Y'. "
+                "Resolve o projeto por id, nome ou prefixo unico; resolve o executor "
+                "automaticamente quando omitido; calcula expires_at sozinho; e devolve uma "
+                "estimativa de duracao baseada no historico. Sem path de disco: o projeto "
+                "e sempre um project_id, nunca um caminho."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "project_id, nome, ou prefixo unico de um dos dois (retornado por list_projects).",
+                    },
+                    "issue": {
+                        "type": "string",
+                        "description": (
+                            "Numero da issue (ex '57' ou 'docs:57'), 'local:<id>' para uma issue "
+                            "cadastrada neste gateway, ou 'gh:<n>' (ainda nao suportado -- "
+                            "ingestao de issue do GitHub nao tem dono neste sistema)."
+                        ),
+                    },
+                    "request": {
+                        "type": "string",
+                        "maxLength": 8000,
+                        "description": "O pedido do operador, nas proprias palavras. Se omitido, precisa de 'issue'.",
+                    },
+                    "engine": {
+                        "type": "string",
+                        "enum": ["claude", "codex", "cursor-agent", "gemini", "opencode", "aider"],
+                        "default": "claude",
+                    },
+                    "executor_id": {"type": "string", "description": "Omitido: escolhido automaticamente entre os executores autorizados para o projeto."},
+                    "mode": {"type": "string", "enum": ["analyze", "review", "edit", "test", "implement"], "default": "implement"},
+                    "branch": {
+                        "type": "string",
+                        "description": "Branch de entrega (ex 'development' ou 'feature/uc-57/...'). Obrigatorio se allow_push=true.",
+                    },
+                    "allow_push": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Pre-autoriza commit e push nessa branch ao final da tarefa. Exige escopo de aprovacao.",
+                    },
+                    "base_branch": {"type": "string", "default": "development"},
+                    "timeout_seconds": {"type": "integer", "minimum": 30, "maximum": 86400, "default": 3600},
+                    "priority": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
+                    "run_when_available": {"type": "boolean", "default": True},
+                },
+                "required": ["project"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "list_recent_tasks",
             "title": "List recent tasks",
             "description": "Listar tarefas recentes para auditoria e acompanhamento.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}},
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                    "states": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "queued", "waiting_executor", "awaiting_approval", "pausing",
+                                "paused", "resuming", "restarting", "running", "completed",
+                                "failed", "cancelled", "expired", "lost",
+                            ],
+                        },
+                        "description": "Filtra por estado. Util para 'o que terminou desde a ultima vez que perguntei' (ex: [\"completed\", \"failed\"]).",
+                    },
+                },
                 "additionalProperties": False,
             },
         },

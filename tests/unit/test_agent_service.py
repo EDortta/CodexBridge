@@ -406,6 +406,10 @@ async def test_handle_dispatch_runs_delivery_when_the_payload_carries_one(tmp_pa
 
     monkeypatch.setattr(service_module, "deliver_changes", fake_deliver_changes)
 
+    issue_dir = tmp_path / "docs" / "issues" / "epic" / "issues"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "057-resolve-something.md").write_text("issue 57 body", encoding="utf-8")
+
     service = AgentService(AgentSettings())
     service.runners._runners["codex"] = _RecordingRunner([])
     service.projects = {

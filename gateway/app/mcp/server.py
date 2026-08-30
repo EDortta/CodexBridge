@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.app.models.entities import ExecutorModel
+from gateway.app.models.entities import ExecutorModel, IssueModel
 from gateway.app.services import store
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
 from gateway.app.services.audit import record_event
@@ -15,9 +15,13 @@ from gateway.app.mcp.tools import tool_definitions
 from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.version import APP_VERSION
 from shared.protocol import (
+    AgentEngine,
     AgentEnvelope,
     AgentMessageType,
     ApprovalDecision,
+    DeliveryRequest,
+    ISSUE_REF_PATTERN,
+    PUSHABLE_BRANCH_PATTERN,
     STOPPABLE_TASK_STATES,
     SubmitTaskRequest,
     TaskMode,
@@ -158,6 +162,16 @@ async def handle_mcp_call(
             "completed_at": task.completed_at.isoformat() if task.completed_at else None,
             "last_error": task.last_error,
             "session_id": task.session_id,
+            # Additive, WK-20260830-chatgpt-entry-provider-and-delivery: none
+            # of the fields above changed shape or meaning -- this is what
+            # keeps the four Codex-named tools answering unchanged for an
+            # existing caller (57a surface inventory's coexistence rule),
+            # while giving the ChatGPT scheduled-Task poll surface (the other
+            # half of council finding F27) something to read.
+            "engine": task.engine,
+            "issue_ref": task.issue_ref,
+            "delivery": json.loads(task.delivery_json) if task.delivery_json else None,
+            "delivery_result": json.loads(task.delivery_result_json) if task.delivery_result_json else None,
         }
         result = _text_result(f"Task {task.id} is {task.state}.", payload)
     elif tool_name == "get_task_logs":
@@ -336,9 +350,164 @@ async def handle_mcp_call(
         await session.commit()
         payload = {"task_id": task.id, "state": task.state, "approval_state": task.approval_state}
         result = _text_result(f"Approval decision recorded for task {task.id}.", payload)
+    elif tool_name == "start_development_task":
+        # WK-20260830-chatgpt-entry-provider-and-delivery, issue #65: the
+        # conversational entry point -- "resolve issue X of project Y" --
+        # resolved to a real SubmitTaskRequest without the caller having to
+        # invent an executor_id or an RFC-3339 expires_at.
+        require_scope("codexbridge.task.submit")
+
+        project_text = str(arguments["project"])
+        try:
+            project = await store.resolve_project_reference(session, project_text)
+        except store.AmbiguousProjectReference as exc:
+            candidates = ", ".join(f"{c.id} ({c.name})" for c in exc.candidates)
+            raise HTTPException(status_code=409, detail=f"ambiguous_project: {candidates}")
+        except ValueError:
+            raise HTTPException(status_code=404, detail="unknown_project")
+
+        if principal is not None and not principal.can_access_project(project.id):
+            raise HTTPException(status_code=403, detail="project_access_denied")
+
+        executor_id = arguments.get("executor_id")
+        if executor_id:
+            executor = await session.get(ExecutorModel, executor_id)
+            if executor is None:
+                raise HTTPException(status_code=404, detail="unknown_executor")
+            allowed_projects = json.loads(executor.metadata_json).get("allowed_projects", [])
+            if project.id not in allowed_projects:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"project_not_onboarded: executor {executor_id!r} does not allow project "
+                        f"{project.id!r}. Register it in both /etc/codex-bridge/registry.json (on "
+                        "the gateway host) and the executor's allowed-projects.json, then restart "
+                        "both processes."
+                    ),
+                )
+        else:
+            onboarded = await store.executors_allowing_project(session, project.id)
+            if not onboarded:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"project_not_onboarded: no executor allows project {project.id!r}. "
+                        "Register it in both /etc/codex-bridge/registry.json (on the gateway host) "
+                        "and the executor's allowed-projects.json, then restart both processes."
+                    ),
+                )
+            connected = [item for item in onboarded if hub.is_connected(item.id)]
+            executor_id = (connected[0] if connected else onboarded[0]).id
+
+        engine_value = arguments.get("engine", "claude")
+        mode_value = arguments.get("mode", "implement")
+        allow_push = bool(arguments.get("allow_push", False))
+        branch = arguments.get("branch")
+
+        if allow_push:
+            require_scope("codexbridge.task.approve")
+            if principal is not None and not (principal.can_approve_sensitive or principal.is_admin()):
+                raise HTTPException(status_code=403, detail="approval_not_allowed")
+            if not branch:
+                raise HTTPException(status_code=400, detail="branch_required_for_push")
+            if not PUSHABLE_BRANCH_PATTERN.match(branch):
+                raise HTTPException(status_code=400, detail="branch_not_pushable")
+
+        issue_arg = arguments.get("issue")
+        issue_ref: str | None = None
+        operator_request = arguments.get("request")
+        if issue_arg is not None:
+            issue_ref = str(issue_arg)
+            if not ISSUE_REF_PATTERN.match(issue_ref):
+                raise HTTPException(status_code=400, detail="issue_ref_invalid")
+            if issue_ref.startswith("gh:"):
+                # GitHub issue ingestion has no owner in this codebase yet
+                # (council finding F18) -- say so rather than improvising a
+                # second id space.
+                raise HTTPException(status_code=400, detail="issue_source_unsupported")
+            if issue_ref.startswith("local:"):
+                local_id = issue_ref.split(":", 1)[1]
+                issue_row = await session.get(IssueModel, local_id)
+                if issue_row is None or issue_row.project_id != project.id:
+                    raise HTTPException(status_code=404, detail="unknown_issue")
+                if not operator_request:
+                    operator_request = f"Resolve issue: {issue_row.title}"
+            elif not operator_request:
+                # "docs:NNN"/bare NNN forms are resolved on the EXECUTOR, not
+                # here -- the gateway never learns a project's real path
+                # (docs/architecture.md). Only local: issues can supply a
+                # title for the default objective below.
+                operator_request = f"Resolve issue {issue_ref} in project {project.id}."
+        if not operator_request:
+            raise HTTPException(status_code=400, detail="request_or_issue_required")
+
+        timeout_seconds = int(arguments.get("timeout_seconds", 3600))
+        # Computed, never invented by the caller: submit_codex_task requires
+        # an RFC-3339 expires_at the caller has to build by hand, which is
+        # the single most error-prone field for an LLM caller. Generous on
+        # purpose -- this bounds queueing, not execution (timeout_seconds
+        # already bounds that).
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(7200, 2 * timeout_seconds))
+
+        delivery = (
+            DeliveryRequest(branch=branch, allow_push=allow_push, base_branch=arguments.get("base_branch", "development"))
+            if branch
+            else None
+        )
+
+        request = SubmitTaskRequest(
+            executor_id=executor_id,
+            project_id=project.id,
+            instruction=operator_request,
+            mode=TaskMode(mode_value),
+            timeout_seconds=timeout_seconds,
+            priority=TaskPriority(arguments.get("priority", "normal")),
+            run_when_available=bool(arguments.get("run_when_available", True)),
+            expires_at=expires_at,
+            engine=AgentEngine(engine_value),
+            issue_ref=issue_ref,
+            delivery=delivery,
+        )
+        task = await store.create_task(
+            session,
+            request,
+            hub.is_connected(executor_id),
+            requested_by_user_id=principal.user_id if principal else None,
+            requested_by_email=principal.email if principal else None,
+            can_approve_push=bool(principal is not None and (principal.can_approve_sensitive or principal.is_admin())),
+        )
+        task = await store.get_task(session, task.id)
+        if task.state == TaskState.QUEUED.value:
+            dispatch_payload = await hub.dispatch_next(task.executor_id)
+            if dispatch_payload is not None:
+                await hub.send(
+                    task.executor_id,
+                    hub_envelope(task.executor_id, "task.dispatch", dispatch_payload),
+                )
+
+        eta = await store.estimate_task_duration_seconds(
+            session, project_id=project.id, mode=mode_value, engine=engine_value
+        )
+        payload = {
+            "task_id": task.id,
+            "state": task.state,
+            "engine": task.engine,
+            "project_id": task.project_id,
+            "executor_id": task.executor_id,
+            "issue_ref": task.issue_ref,
+            "branch": branch,
+            "allow_push": allow_push,
+            "expires_at": task.expires_at.isoformat(),
+            **eta,
+        }
+        result = _text_result(
+            f"Task {task.id} created with state {task.state}, running on engine {task.engine}.", payload
+        )
     elif tool_name == "list_recent_tasks":
         require_scope("codexbridge.read")
-        tasks = await store.list_recent_tasks(session, arguments.get("limit", 20))
+        tasks = await store.list_recent_tasks(
+            session, arguments.get("limit", 20), states=arguments.get("states")
+        )
         if principal is not None and not principal.is_admin():
             tasks = [task for task in tasks if task.requested_by_user_id == principal.user_id]
         payload = {
@@ -350,6 +519,10 @@ async def handle_mcp_call(
                     "state": item.state,
                     "approval_state": item.approval_state,
                     "created_at": item.created_at.isoformat(),
+                    # Additive, WK-20260830-chatgpt-entry-provider-and-delivery.
+                    "engine": item.engine,
+                    "branch": (json.loads(item.delivery_result_json).get("branch") if item.delivery_result_json else None),
+                    "pushed": (json.loads(item.delivery_result_json).get("pushed") if item.delivery_result_json else None),
                 }
                 for item in tasks
             ]
