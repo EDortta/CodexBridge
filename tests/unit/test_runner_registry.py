@@ -68,15 +68,18 @@ def test_unimplemented_engines_are_declared_not_absent():
     for engine in AgentEngine:
         assert engine.value in KNOWN_ENGINES, engine.value
     implemented = {name for name, reg in KNOWN_ENGINES.items() if reg.implemented}
-    assert implemented == {AgentEngine.CODEX.value}
+    assert implemented == {AgentEngine.CODEX.value, AgentEngine.CLAUDE.value}
 
 
 def test_pool_defaults_to_codex_and_rejects_unknown_engines():
     pool = RunnerPool(AgentSettings())
     assert isinstance(pool.for_engine("codex"), CodexRunner)
+    from agent.codex_bridge_agent.runners.claude import ClaudeRunner
+
+    assert isinstance(pool.for_engine("claude"), ClaudeRunner)
     with pytest.raises(EngineNotImplementedError) as raised:
-        pool.for_engine("claude")
-    assert str(raised.value) == "engine_not_implemented:claude"
+        pool.for_engine("cursor-agent")
+    assert str(raised.value) == "engine_not_implemented:cursor-agent"
     with pytest.raises(EngineNotImplementedError):
         pool.for_engine("not-a-real-engine")
 

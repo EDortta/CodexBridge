@@ -15,6 +15,7 @@ from typing import Callable
 
 from agent.codex_bridge_agent.config import AgentSettings
 from agent.codex_bridge_agent.runners.base import Runner
+from agent.codex_bridge_agent.runners.claude import ClaudeRunner
 from agent.codex_bridge_agent.runners.codex import CodexRunner
 from shared.protocol import AgentEngine
 
@@ -31,7 +32,7 @@ class EngineRegistration:
 # "what could this executor ever run" as well as "what can it run today".
 KNOWN_ENGINES: dict[str, EngineRegistration] = {
     AgentEngine.CODEX.value: EngineRegistration(AgentEngine.CODEX.value, implemented=True, factory=CodexRunner),
-    AgentEngine.CLAUDE.value: EngineRegistration(AgentEngine.CLAUDE.value, implemented=False),
+    AgentEngine.CLAUDE.value: EngineRegistration(AgentEngine.CLAUDE.value, implemented=True, factory=ClaudeRunner),
     AgentEngine.CURSOR_AGENT.value: EngineRegistration(AgentEngine.CURSOR_AGENT.value, implemented=False),
     AgentEngine.GEMINI.value: EngineRegistration(AgentEngine.GEMINI.value, implemented=False),
     AgentEngine.OPENCODE.value: EngineRegistration(AgentEngine.OPENCODE.value, implemented=False),

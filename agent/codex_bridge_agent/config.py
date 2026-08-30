@@ -15,6 +15,8 @@ class AgentSettings(BaseSettings):
     machine_token: str = "replace-with-long-random-token"
     allowed_projects_file: str = str(Path("examples/agent-projects.json").resolve())
     codex_bin: str = "codex"
+    # WK-20260830-chatgpt-entry-provider-and-delivery, issue #41a.
+    claude_bin: str = "claude"
     heartbeat_interval_seconds: int = 15
     reconnect_min_seconds: int = 2
     reconnect_max_seconds: int = 30

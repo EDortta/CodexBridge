@@ -18,12 +18,31 @@ flag a runner's `is_known()` produces. Its contract does not change here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol, runtime_checkable
 
 
 LogSender = Callable[[str, str], Awaitable[None]]
+
+
+@dataclass
+class RunningTask:
+    """A live subprocess plus the control flags `pause`/`cancel`/`restart`
+
+    set from outside its own run loop. Provider-neutral: SIGSTOP/SIGCONT and
+    `terminate()`/`kill()` work the same on any subprocess regardless of
+    which CLI it runs, so both `runners/codex.py` and `runners/claude.py`
+    share this shape rather than each declaring their own.
+    """
+
+    process: asyncio.subprocess.Process
+    paused: bool = False
+    cancel_requested: bool = False
+    restart_requested: bool = False
+    continue_session_id: str | None = None
+    raw_events: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

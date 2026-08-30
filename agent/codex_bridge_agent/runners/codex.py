@@ -4,14 +4,13 @@ import asyncio
 import json
 import signal
 import time
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from agent.codex_bridge_agent.config import AgentSettings
 from agent.codex_bridge_agent.git_tools import collect_git_snapshot
-from agent.codex_bridge_agent.runners.base import LogSender, RunnerCapabilities
+from agent.codex_bridge_agent.runners.base import LogSender, RunnerCapabilities, RunningTask
 from shared.protocol import AgentEngine, TaskState
 from shared.security import filtered_environment, sanitize_log_line
 
@@ -26,15 +25,7 @@ SANDBOX_WORKSPACE_WRITE = "workspace-write"
 _ALLOWED_SANDBOX_MODES = frozenset({SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE})
 
 
-@dataclass
-class RunningTask:
-    process: asyncio.subprocess.Process
-    paused: bool = False
-    cancel_requested: bool = False
-    restart_requested: bool = False
-    continue_session_id: str | None = None
-    raw_events: list[dict] = field(default_factory=list)
-
+# `RunningTask` lives in `runners/base.py` now -- shared with `runners/claude.py`.
 
 # Env vars this runner passes through to `codex exec`. Kept as a module
 # constant here (rather than only inside `run_task`) so `capabilities()` can

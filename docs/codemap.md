@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 102 file(s) · 923 symbol(s) indexed
-- Languages: config (2), python (98), shell (2)
+- 105 file(s) · 951 symbol(s) indexed
+- Languages: config (2), python (101), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -41,6 +41,7 @@ agent/
     runners/
       __init__.py
       base.py  — "The provider-neutral surface the executor dispatches a task through."
+      claude.py  — "Claude Code as a second `Runner`, issue #41a."
       codex.py
       pool.py  — "The facade `AgentService` talks to instead of a single hardcoded runner."
       registry.py  — "Which `AgentEngine` values have a real `Runner` behind them."
@@ -126,6 +127,7 @@ tests/
     test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
+    test_claude_runner_real_process.py  — "ClaudeRunner against a REAL `claude` subprocess — not the fakes used elsewhere."
     test_codex_runner_real_process.py  — "CodexRunner against a REAL `codex` subprocess — not the fake used everywhere else."
     test_conversations.py  — "Conversations and contextual messaging — issue #10."
     test_decisions.py  — "Operational decisions — issue #6."
@@ -142,6 +144,7 @@ tests/
     test_agent_auth.py  — "Credential resolution for the `/agent/ws` handshake — issue #15."
     test_agent_service.py
     test_apply_migrations.py  — "The migration runner, exercised against real throwaway databases."
+    test_claude_runner.py  — "ClaudeRunner's pure logic: command assembly, NDJSON extraction, sandbox mapping."
     test_codex_runner.py  — "CodexRunner's pause/resume/restart/cancel state machine — issue #16 council."
     test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
     test_main_import.py
@@ -170,6 +173,7 @@ tests/
 
 > The provider-neutral surface the executor dispatches a task through.
 
+- **`RunningTask`** *(class)* — "A live subprocess plus the control flags `pause`/`cancel`/`restart`"
 - **`RunnerCapabilities`** *(class)* — "What a provider can and cannot do, declared rather than assumed."
 - **`Runner`** *(class)* — "One provider's implementation of "run this instruction, report back"."
   - `capabilities(self)` *(method)*
@@ -184,9 +188,24 @@ tests/
 - **`EngineNotImplementedError`** *(class)* — "A dispatch named an `AgentEngine` value with no real `Runner` behind it."
   - `__init__(self, engine)` *(method)*
 
+### `agent/codex_bridge_agent/runners/claude.py`
+
+> Claude Code as a second `Runner`, issue #41a.
+
+- **`ClaudeRunner`** *(class)* — "Mirrors `runners.codex.CodexRunner`'s public surface method for method"
+  - `__init__(self, settings)` *(method)*
+  - `capabilities(self)` *(method)*
+  - `is_known(self, task_id)` *(method)*
+  - `mark_dispatched(self, task_id)` *(method)*
+  - `forget(self, task_id)` *(method)*
+  - `cancel(self, task_id)` *(async method)*
+  - `pause(self, task_id)` *(async method)*
+  - `resume(self, task_id)` *(async method)*
+  - `restart(self, task_id)` *(async method)*
+  - `run_task(self, task_id, project_root, instruction, timeout_seconds, continue_session_id, send_log, sandbox)` *(async method)*
+
 ### `agent/codex_bridge_agent/runners/codex.py`
 
-- **`RunningTask`** *(class)*
 - **`CodexRunner`** *(class)*
   - `__init__(self, settings)` *(method)*
   - `capabilities(self)` *(method)*
@@ -902,6 +921,15 @@ tests/
 - `test_the_administrative_action_describes_what_the_list_endpoint_does(api)` *(async function)* — "`sessions.readAllProjects` is administrative because it crosses projects."
 - `test_the_administrative_action_describes_what_the_missions_list_endpoint_does(api)` *(async function)* — "`missions.readAllProjects` mirrors `sessions.readAllProjects` — same widening."
 
+### `tests/integration/test_claude_runner_real_process.py`
+
+> ClaudeRunner against a REAL `claude` subprocess — not the fakes used elsewhere.
+
+- `test_run_task_drives_a_real_claude_process_end_to_end(tmp_path)` *(async function)*
+- `test_run_task_read_only_blocks_a_real_write_attempt(tmp_path)` *(async function)* — "Finding 2's real-world consequence, proven rather than assumed: the"
+- `test_run_task_actually_writes_when_dispatched_with_workspace_write_sandbox(tmp_path)` *(async function)*
+- `test_run_task_resume_actually_continues_the_real_session(tmp_path)` *(async function)*
+
 ### `tests/integration/test_codex_runner_real_process.py`
 
 > CodexRunner against a REAL `codex` subprocess — not the fake used everywhere else.
@@ -1342,6 +1370,24 @@ tests/
 - `test_dry_run_changes_nothing(legacy_db)`
 - `test_unknown_migration_name_is_refused(legacy_db)`
 - `test_engine_and_delivery_columns_default_existing_rows_to_codex(legacy_db)` — "0008: an existing row must read back as what it always was -- a plain"
+
+### `tests/unit/test_claude_runner.py`
+
+> ClaudeRunner's pure logic: command assembly, NDJSON extraction, sandbox mapping.
+
+- `test_claude_runner_satisfies_the_runner_protocol()`
+- `test_capabilities_declare_provider_flags_not_os_sandbox()`
+- `test_build_command_never_puts_the_instruction_in_argv()` — "The instruction travels over stdin (`run_task` writes it after spawning)."
+- `test_build_command_assigns_a_session_id_for_a_fresh_run()`
+- `test_build_command_resumes_an_existing_session_instead_of_assigning()`
+- `test_read_only_denies_every_write_tool_and_all_of_bash()`
+- `test_workspace_write_allows_edits_but_still_denies_push_and_commit()` — "Commit and push are never the agent's own initiative -- that is a"
+- `test_find_session_id_reads_the_session_id_key()`
+- `test_find_session_id_returns_none_when_absent()`
+- `test_find_result_text_reads_the_last_result_events_result_field()`
+- `test_find_result_text_is_empty_string_when_no_result_event()`
+- `test_find_cost_reads_total_cost_usd_from_the_result_event()`
+- `test_find_cost_is_none_when_no_result_event()`
 
 ### `tests/unit/test_codex_runner.py`
 

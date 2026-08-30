@@ -16,7 +16,11 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/srv/projects /var/lib/codex-bridge-agent /home/codexbridge/.codex
+# WK-20260830-chatgpt-entry-provider-and-delivery, issue #41a: Claude Code
+# needs its own config dir writable, the same way Codex needs ~/.codex. This
+# is a real relaxation of ProtectHome=read-only's blast radius, not a no-op --
+# call it out on review, don't let it slide in as a side effect of a feature PR.
+ReadWritePaths=/srv/projects /var/lib/codex-bridge-agent /home/codexbridge/.codex /home/codexbridge/.claude
 MemoryMax=2G
 TasksMax=256
 LimitNOFILE=8192
