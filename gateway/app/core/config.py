@@ -46,8 +46,16 @@ class Settings(BaseSettings):
     oauth_allowed_redirect_uri_prefixes: str = "https://chatgpt.com,https://chat.openai.com,https://auth.openai.com"
     oauth_default_scopes: str = (
         "codexbridge.read codexbridge.task.submit codexbridge.task.cancel "
-        "codexbridge.issues.write codexbridge.conversations.write"
+        "codexbridge.issues.write codexbridge.conversations.write "
+        "codexbridge.reminders.write"
     )
+    # WK-20260830-chatgpt-entry-provider-and-delivery, issue #71/#72. A
+    # reminder still needs BOTH the scope above (granted per-user via OAuth,
+    # like every other capability here) AND these two set on the gateway
+    # itself -- unset means the feature is off for every user regardless of
+    # scope, with an actionable error rather than a silent no-op or a crash.
+    google_calendar_credentials_file: str | None = None
+    google_calendar_id: str | None = None
     oauth_access_token_ttl_seconds: int = 3600
     oauth_authorization_code_ttl_seconds: int = 600
     # Absolute lifetime of a mobile sign-in (issue #4). Rotation carries this

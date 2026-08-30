@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 112 file(s) · 1037 symbol(s) indexed
-- Languages: config (2), python (108), shell (2)
+- 115 file(s) · 1083 symbol(s) indexed
+- Languages: config (2), python (111), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -103,6 +103,7 @@ gateway/
       agent_hub.py
       audit.py
       conversation_types.py  — "Closed vocabulary for conversation context references, and their error."
+      google_calendar.py  — "A Google Calendar client for reminders, built to be tested without ever"
       issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
       metrics.py
       store.py
@@ -135,6 +136,7 @@ tests/
     test_decisions.py  — "Operational decisions — issue #6."
     test_dispatch_payload_engine_and_delivery.py  — "`AgentHub.dispatch_next` forwards engine/issue_ref/delivery to the executor."
     test_epics_issues.py  — "Epics and issues — issue #8."
+    test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
@@ -153,6 +155,7 @@ tests/
     test_codex_runner.py  — "CodexRunner's pause/resume/restart/cancel state machine — issue #16 council."
     test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
+    test_google_calendar.py  — "`gateway.app.services.google_calendar`, without ever touching Google."
     test_instructions.py  — "`resolve_issue_text` and `build_task_instruction`."
     test_main_import.py
     test_policy.py
@@ -633,6 +636,19 @@ tests/
 - **`ConversationPlanningError`** *(class)* — "A create input that fails validation inside the store itself."
   - `__init__(self, field, code, message)` *(method)*
 
+### `gateway/app/services/google_calendar.py`
+
+> A Google Calendar client for reminders, built to be tested without ever
+
+- **`CalendarConfigError`** *(class)* — "The gateway itself is not set up for reminders -- an operator problem,"
+- **`CalendarAccessError`** *(class)* — "Google refused the request, or it could not be reached in time."
+- **`CalendarConfig`** *(class)*
+- `openssl_sign_rs256(signing_input, private_key_pem)` *(async function)* — "The default `Signer`: shells out to `openssl dgst -sha256 -sign`."
+- `parse_when(when)` — "Parses `when` as ISO 8601. A caller with no offset is assumed to mean"
+- `create_reminder()` *(async function)*
+- `cancel_reminder()` *(async function)*
+- `check_access(config)` *(async function)* — "Confirms the configured credential can actually read the configured"
+
 ### `gateway/app/services/issue_types.py`
 
 > Closed vocabularies for epics and issues, and the error they fail with.
@@ -1110,6 +1126,23 @@ tests/
 - `test_the_epic_list_cursor_walks_every_epic_once(api)` *(async function)*
 - `test_list_epics_filters_by_status(api)` *(async function)*
 
+### `tests/integration/test_mcp_reminders.py`
+
+> The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer.
+
+- **`DummyHub`** *(class)*
+  - `is_connected(self, executor_id)` *(method)*
+  - `dispatch_next(self, executor_id)` *(async method)*
+  - `send(self, executor_id, envelope)` *(async method)*
+- `db_session()` *(async function)*
+- `test_tools_list_includes_both_reminder_tools(db_session)` *(async function)*
+- `test_missing_scope_is_refused(db_session)` *(async function)*
+- `test_happy_path_returns_the_fake_calendars_structured_content(db_session, monkeypatch)` *(async function)*
+- `test_second_call_with_the_same_idempotency_key_reports_created_false(db_session, monkeypatch)` *(async function)*
+- `test_calendar_error_is_reported_as_a_client_error_not_a_500(db_session, monkeypatch)` *(async function)*
+- `test_cancel_reminder_happy_path(db_session, monkeypatch)` *(async function)*
+- `test_an_unconfigured_gateway_still_serves_submit_codex_task_normally(db_session, monkeypatch)` *(async function)* — "The most important test in this file: reminders being unconfigured,"
+
 ### `tests/integration/test_missions.py`
 
 > Missions: the mission-control view of Sessions — issue #7.
@@ -1529,6 +1562,37 @@ tests/
 - `test_staging_never_uses_add_all_or_a_bare_dot(tmp_path, monkeypatch)` *(async function)* — "The shared working-tree gate: staging is always by explicit path."
 - `test_no_command_ever_carries_a_force_flag(tmp_path, monkeypatch)` *(async function)*
 - `test_head_moving_between_status_and_commit_is_refused_not_forced(tmp_path, monkeypatch)` *(async function)* — "Simulates another process writing to the branch in the gap between"
+
+### `tests/unit/test_google_calendar.py`
+
+> `gateway.app.services.google_calendar`, without ever touching Google.
+
+- `test_jwt_assembly_carries_the_right_claims(tmp_path)` *(async function)*
+- `test_access_token_is_cached_across_calls(tmp_path)` *(async function)*
+- `test_event_id_is_deterministic_for_the_same_seed()`
+- `test_event_id_differs_for_a_different_user()`
+- `test_event_id_without_a_key_normalizes_text_case_and_whitespace()`
+- `test_event_id_alphabet_is_base32hex_lowercase()`
+- `test_naive_input_gets_the_default_timezone()`
+- `test_offset_aware_input_keeps_its_own_offset()`
+- `test_trailing_z_suffix_parses()`
+- `test_malformed_datetime_is_a_calendar_access_error()`
+- `test_unconfigured_gateway_refuses_before_touching_the_network(tmp_path)` *(async function)*
+- `test_a_time_in_the_past_is_refused(tmp_path)` *(async function)*
+- `test_more_than_two_years_out_is_refused(tmp_path)` *(async function)*
+- `test_the_event_body_matches_the_documented_shape_and_never_has_attendees(tmp_path)` *(async function)*
+- `test_a_lead_time_that_would_already_have_passed_is_clamped_to_zero(tmp_path)` *(async function)*
+- `test_idempotent_replay_returns_created_false_with_the_same_id(tmp_path)` *(async function)*
+- `test_replaying_a_deleted_reminder_id_is_refused(tmp_path)` *(async function)*
+- `test_permission_or_not_found_names_the_client_email_and_share_instruction(tmp_path, status)` *(async function)*
+- `test_invalid_grant_mentions_the_clock_as_a_possible_cause(tmp_path)` *(async function)*
+- `test_no_fixture_private_key_value_ever_appears_in_any_raised_message(tmp_path)` *(async function)* — "A blanket check across every error path this module can raise --"
+- `test_missing_credential_file_is_actionable(tmp_path)` *(async function)*
+- `test_credential_file_missing_a_required_field_is_actionable(tmp_path)` *(async function)*
+- `test_cancel_reminder_succeeds(tmp_path)` *(async function)*
+- `test_cancel_reminder_already_gone_is_success(tmp_path)` *(async function)*
+- `test_check_access_reports_calendar_summary_and_timezone(tmp_path)` *(async function)*
+- `test_openssl_sign_rs256_produces_a_verifiable_signature(tmp_path)` *(async function)*
 
 ### `tests/unit/test_instructions.py`
 

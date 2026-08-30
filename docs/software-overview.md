@@ -63,7 +63,9 @@ Autorização no gateway é por principal com `roles` e `scopes`
 `get_task_status`, `get_task_logs`, `get_task_result`, `continue_codex_session`,
 `cancel_codex_task`, `approve_codex_task`, `list_recent_tasks`,
 `start_development_task` (WK-20260830-chatgpt-entry-provider-and-delivery,
-issue #65 — a entrada conversacional: "resolva a issue X do projeto Y").
+issue #65 — a entrada conversacional: "resolva a issue X do projeto Y"),
+`create_reminder`/`cancel_reminder` (issue #71 — Google Calendar do operador,
+sem relação com execução de código).
 
 ### Isolamento de projeto
 

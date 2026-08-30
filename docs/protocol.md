@@ -24,8 +24,15 @@ Ferramentas expostas:
 * `approve_codex_task`
 * `list_recent_tasks`
 * `start_development_task`
+* `create_reminder`
+* `cancel_reminder`
 
-São 12 ferramentas. `approve_codex_task` é a que libera tarefa parada em
+São 14 ferramentas. `create_reminder`/`cancel_reminder` (issue #71) escrevem
+no Google Calendar do operador, não em `tasks` — nada a ver com execução de
+código. Exigem escopo `codexbridge.reminders.write` e ficam desligadas com
+erro acionável (nunca 500) quando `CODEX_BRIDGE_GOOGLE_CALENDAR_ID` ou
+`CODEX_BRIDGE_GOOGLE_CALENDAR_CREDENTIALS_FILE` não estão configuradas —
+o resto do gateway continua servindo normalmente. `approve_codex_task` é a que libera tarefa parada em
 `awaiting_approval` pela política de sensibilidade, e exige principal com escopo
 `codexbridge.task.approve` ou `can_approve_sensitive`.
 

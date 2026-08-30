@@ -218,4 +218,56 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "additionalProperties": False,
             },
         },
+        {
+            "name": "create_reminder",
+            "title": "Create reminder",
+            "description": (
+                "Criar um lembrete no Google Calendar do operador. O horario deve ser calculado "
+                "por voce (o modelo) e enviado como data-hora ISO 8601, de preferencia com fuso "
+                "explicito -- o servidor NAO interpreta frases como 'amanha' ou 'sexta que vem'. "
+                "O servidor devolve o horario resolvido para voce confirmar em voz alta com o "
+                "operador antes de dar a tarefa como concluida."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "description": "O que lembrar, em uma linha. Vira o titulo do evento.",
+                    },
+                    "when": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": (
+                            "Instante do lembrete, ISO 8601, de preferencia com offset "
+                            "(ex 2026-09-04T15:00:00-03:00). Sem offset, assume America/Sao_Paulo."
+                        ),
+                    },
+                    "notes": {"type": "string", "maxLength": 4000},
+                    "lead_minutes": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 40320,
+                        "default": 0,
+                        "description": "Quantos minutos antes de 'when' o alerta dispara. 0 = na hora.",
+                    },
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 128},
+                },
+                "required": ["text", "when"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "cancel_reminder",
+            "title": "Cancel reminder",
+            "description": "Cancelar um lembrete previamente criado.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"reminder_id": {"type": "string", "minLength": 1, "maxLength": 1024}},
+                "required": ["reminder_id"],
+                "additionalProperties": False,
+            },
+        },
     ]

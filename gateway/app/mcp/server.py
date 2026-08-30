@@ -528,6 +528,61 @@ async def handle_mcp_call(
             ]
         }
         result = _text_result(f"Returned {len(payload['tasks'])} tasks.", payload)
+    elif tool_name == "create_reminder":
+        # WK-20260830-chatgpt-entry-provider-and-delivery, issue #71. Runs on
+        # the gateway, not the executor -- see google_calendar.py's module
+        # docstring for why (a reminder's whole value is a synchronous reply
+        # in the same conversation, and devel3 being asleep must not mean a
+        # silently queued reminder).
+        require_scope("codexbridge.reminders.write")
+        import httpx as _httpx
+
+        from gateway.app.core.config import settings as _settings
+        from gateway.app.services import google_calendar as _calendar
+
+        calendar_config = _calendar.CalendarConfig(
+            credentials_file=_settings.google_calendar_credentials_file or "",
+            calendar_id=_settings.google_calendar_id or "",
+        )
+        actor = principal.email or principal.user_id if principal is not None else "unknown"
+        try:
+            async with _httpx.AsyncClient() as _client:
+                reminder = await _calendar.create_reminder(
+                    config=calendar_config,
+                    client=_client,
+                    user_id=actor,
+                    text=arguments["text"],
+                    when=arguments["when"],
+                    notes=arguments.get("notes"),
+                    lead_minutes=int(arguments.get("lead_minutes", 0)),
+                    idempotency_key=arguments.get("idempotency_key"),
+                )
+        except (_calendar.CalendarConfigError, _calendar.CalendarAccessError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        verb = "criado" if reminder["created"] else "ja existia"
+        result = _text_result(
+            f"Lembrete {verb} para {reminder['scheduled_for']} ({reminder['timezone']}).",
+            reminder,
+        )
+    elif tool_name == "cancel_reminder":
+        require_scope("codexbridge.reminders.write")
+        import httpx as _httpx
+
+        from gateway.app.core.config import settings as _settings
+        from gateway.app.services import google_calendar as _calendar
+
+        calendar_config = _calendar.CalendarConfig(
+            credentials_file=_settings.google_calendar_credentials_file or "",
+            calendar_id=_settings.google_calendar_id or "",
+        )
+        try:
+            async with _httpx.AsyncClient() as _client:
+                cancelled = await _calendar.cancel_reminder(
+                    config=calendar_config, client=_client, reminder_id=arguments["reminder_id"]
+                )
+        except (_calendar.CalendarConfigError, _calendar.CalendarAccessError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        result = _text_result(f"Lembrete {cancelled['reminder_id']} cancelado.", cancelled)
     else:
         raise HTTPException(status_code=404, detail=f"unknown_tool:{tool_name}")
     return {"jsonrpc": "2.0", "id": rpc_id, "result": result}

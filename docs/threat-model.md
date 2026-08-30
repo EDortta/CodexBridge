@@ -143,6 +143,41 @@ autorizado) push, a pedido de uma tarefa concluída.
 * controle: `systemd` com endurecimento
 * controle: limites de CPU, memória, tarefas e tempo
 
+### Egresso novo do gateway para o Google Calendar (WK-20260830, issue #71)
+
+Até esta mudança o `frida` só *aceita* conexão (WebSocket reverso do
+executor, chamadas MCP do ChatGPT). `create_reminder`/`cancel_reminder`
+introduzem o primeiro caso em que o **gateway** disca para fora, dentro do
+tratamento de uma chamada MCP: `oauth2.googleapis.com` (troca de token) e
+`www.googleapis.com` (Calendar API v3).
+
+* controle: timeout duro em toda chamada HTTP (`connect=10s, read=20s`) —
+  uma indisponibilidade do Google não pode prender um worker do MCP
+  indefinidamente
+* controle: token de acesso em cache no processo por ~55 min (5 min de
+  margem sob o TTL de 60 min do Google) — o subprocess `openssl` e a troca de
+  token são raros, não por chamada
+* controle: a chave privada da service account só toca disco num arquivo
+  temporário modo 0600, apagado em `finally` logo após a assinatura; nunca
+  passada como argumento de linha de comando (apareceria em `/proc/*/cmdline`)
+  e nunca logada — testado explicitamente
+  (`test_no_fixture_private_key_value_ever_appears_in_any_raised_message`)
+* controle: nenhuma mensagem de erro deste módulo pode conter a chave privada
+  — só o `client_email` (não é segredo) para tornar a instrução de
+  compartilhamento acionável
+* controle: `create_reminder`/`cancel_reminder` são a única superfície que
+  toca o Google; falha de configuração ou de rede nelas nunca falha
+  `submit_codex_task`/`start_development_task` — testado explicitamente
+  (`test_an_unconfigured_gateway_still_serves_submit_codex_task_normally`)
+* risco aceito: uma service account comprometida escreve/apaga eventos na
+  agenda que foi compartilhada com ela — mitigado por escopo
+  `codexbridge.reminders.write` separado (nunca implícito no escopo padrão
+  de leitura/tarefas) e pela recomendação de uma agenda dedicada
+  "CodexBridge", não a agenda pessoal do operador
+* recomendação operacional: service account dedicada a este uso, não
+  reaproveitada de outro projeto — revogar a chave de uma SA compartilhada
+  quebraria os outros consumidores dela
+
 ### Fila inconsistente após reinício
 
 * controle: banco transacional
