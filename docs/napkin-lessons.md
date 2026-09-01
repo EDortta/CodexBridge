@@ -1209,3 +1209,10 @@ Vale a pena traçar o caminho completo da requisição — aqui, ChatGPT → MCP
 gateway → executor — e nomear explicitamente qual trecho ficou resolvido e
 qual não, antes de declarar a etapa fechada (feito em
 `docs/threat-model.md` e no handoff desta entrega).
+
+## 2026-08-31 — hard stop de sessão impede começar a importação tardia
+
+Quando a janela operacional já passou do hard stop, a resposta correta não é
+"só baixar mais um artefato": é registrar que o trabalho ficou pendente e
+deixar a próxima execução começar limpa. Isso evita importar conteúdo
+metade-feito e depois ter de descobrir qual parte foi realmente validada.
