@@ -1232,3 +1232,39 @@ sistema. Fonte que *carrega o conceito* da pagina vai embutida em base64, ou
 a entrega depende de um terceiro estar de pe no momento em que a pessoa que
 importa abre o arquivo. Vale tambem o habito que revelou o problema: abrir a
 pagina de verdade, com a rede indisponivel, antes de chamar de pronta.
+
+## 2026-09-01 — a coluna velha não sai na mesma migration que cria a substituta
+
+O plano da #73 mandava remover `projects.path` ao criar `workspace_bindings`,
+que é o substituto correto (o caminho passa a ser do par projeto↔nó, não do
+projeto). Escrevendo a `0009_control_plane.sql` apareceu o que o plano não
+tinha: o backfill de `projects.path` → `workspace_bindings.path` só cobre
+projetos que estão no `registry.json` de hoje. Para qualquer projeto ausente
+dele, a coluna é a **única cópia** do caminho, e reconstruí-la depende de ler
+`executors.metadata_json` — JSON, não exprimível em SQL portável entre SQLite
+e PostgreSQL. Remover junto teria sido uma perda silenciosa e irreversível,
+visível só quando alguém procurasse um projeto antigo.
+
+Lição: numa migration que troca uma representação por outra, a remoção da
+representação antiga só é segura quando o backfill é **total** — não "cobre os
+casos que a gente conhece". Se a cobertura depende de uma fonte que a migration
+não consegue ler, a coluna fica, com o motivo escrito dentro do arquivo, e a
+remoção vira uma migration posterior com o backfill feito em código. Vale também
+a ordem das instruções: como o SQLite não faz rollback de DDL, o `alter table`
+que detecta banco errado vem primeiro — falhar ali deixa o schema intacto em vez
+de meio-criado.
+
+## 2026-09-01 — worktree criado pelo kit nasce com a suíte quebrada (awt × extra="forbid")
+
+O `awt` (kit AI-Agents) escreve um `.env` no worktree novo com as portas que
+alocou. Os `Settings` do CodexBridge usam `extra="forbid"`, então esse `.env`
+faz o processo recusar a subir: o worktree nasce com a suíte inteira vermelha,
+e o sintoma (erro de validação de settings) não aponta para o kit. Contornado
+renomeando para `.env.awt-generated`. O `awt` também instala o extra `[dev]`,
+que este projeto não declara — ele declara `[test]`.
+
+Lição: ferramenta genérica de setup de worktree e projeto com configuração
+estrita colidem por construção. Ao usar `awt` num projeto novo, rodar a suíte
+**antes** de escrever qualquer linha de código — o primeiro `pytest` verde é o
+que separa "quebrei agora" de "nasceu quebrado". E o conflito é do kit, não do
+projeto: vale ticket lá, não `extra="ignore"` aqui.
