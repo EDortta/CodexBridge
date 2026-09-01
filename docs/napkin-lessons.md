@@ -1268,3 +1268,65 @@ estrita colidem por construção. Ao usar `awt` num projeto novo, rodar a suíte
 **antes** de escrever qualquer linha de código — o primeiro `pytest` verde é o
 que separa "quebrei agora" de "nasceu quebrado". E o conflito é do kit, não do
 projeto: vale ticket lá, não `extra="ignore"` aqui.
+
+## 2026-09-01 — a correção de confiança vive antes do despacho, não dentro de um branch
+
+A #16 já tinha corrigido, no `task.ack`, a confiança no `executor_id` que vem
+**dentro** do envelope em vez do autenticado no handshake. A correção ficou
+dentro daquele branch do `if/elif`. Todo tipo de mensagem acrescentado depois —
+`hello` da Stage 2 inclusive — herdou a confiança de novo, e a revisão
+adversarial reproduziu o exploit: um nó autenticado anunciando-se **como
+outro**, forjando capacidades alheias e renovando a liveness de um nó morto.
+
+Lição: quando a correção é "não confie neste campo", ela pertence ao ponto onde
+a mensagem entra, uma vez, antes do despacho — não ao branch onde o problema foi
+notado. Uma guarda por branch é uma guarda que o próximo branch não tem, e o
+próximo branch é escrito por quem não leu a issue que motivou a primeira. Vale o
+teste de leitura: *se eu acrescentar um tipo de mensagem amanhã, ele nasce
+seguro?* Se a resposta depender de alguém lembrar, a guarda está no lugar
+errado.
+
+Corolário sobre descartar vs. redirecionar: reescrever o id reivindicado para o
+autenticado "conserta" o sintoma e aceita, em silêncio, como declaração do
+remetente, uma mensagem que ele não fez sobre si. Descartar é a única leitura
+honesta — e descartar sem derrubar a conexão, porque derrubar transformaria
+agente com bug em interrupção.
+
+## 2026-09-01 — teste negativo que passa porque nada rodou
+
+Os primeiros testes de identidade no websocket passaram de cara. Passavam porque
+o handshake morria antes do laço de recepção: o `AgentHub` foi construído no
+import com a `SessionLocal` de produção e guarda a própria referência, então
+trocar `main.SessionLocal` não alcançava o `hub.register`, que estourava
+`unknown_executor`. A asserção "a linha da vítima não mudou" é verdadeira também
+quando **nenhuma** mensagem foi processada.
+
+Lição: todo teste negativo precisa de um controle positivo no mesmo arquivo —
+uma asserção que só passa se o caminho realmente executou. Aqui foi o teste do
+caminho honesto (`o nó anuncia a si mesmo e é gravado`) mais um `assert
+socket.accepted` no helper. Sem ele, cinco testes verdes provavam apenas que o
+código estava inalcançável.
+
+Segundo achado do mesmo episódio: `TestClient.websocket_connect` roda a app em
+outra thread e outro event loop; compartilhar um engine aiosqlite em memória
+entre os dois trava. Chamar `agent_ws` direto com um socket falso, no loop do
+próprio teste, é determinístico e ainda torna a espera desnecessária — quando o
+`await` volta, o laço acabou.
+
+## 2026-09-01 — dois subagentes num worktree só, e `git stash` como estado compartilhado
+
+Dois agentes implementaram metades da Stage 2 em paralelo **no mesmo worktree**,
+com listas de arquivos disjuntas — o que pareceu suficiente e não era. Um deles,
+para provar que seus testes falhavam contra o código original, rodou `git
+stash`: um comando de escopo *repositório*, não de escopo *arquivo*. Reverteu
+edições não-commitadas do outro agente e do próprio operador, e o `stash pop`
+deu conflito num arquivo já reescrito nesse meio-tempo. A recuperação foi
+manual, e o único motivo de nada ter se perdido é que o snapshot do stash ainda
+existia.
+
+Lição: paralelizar por arquivo só é seguro se as ferramentas também forem por
+arquivo. `git stash`, `git checkout .`, `git restore`, `git clean` agem no
+repositório inteiro e não têm como respeitar uma divisão de escopo que existe só
+no prompt. Ou se dá um worktree por agente, ou se proíbe explicitamente esses
+comandos no prompt e se verifica mutação copiando o arquivo (`cp` e restaura),
+que foi como a prova acabou sendo feita aqui.
