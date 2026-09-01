@@ -1219,7 +1219,7 @@ metade-feito e depois ter de descobrir qual parte foi realmente validada.
 
 ## 2026-09-01 — uma pagina cujo conceito depende de uma fonte precisa embuti-la
 
-A landing page em `docs/landing/index.html` e um caderno manuscrito: a fonte
+A landing page em `docs/index.html` e um caderno manuscrito: a fonte
 de caneta (Shantell Sans) *e* o conceito, nao um enfeite. Renderizando a
 pagina antes de entregar, apareceu o modo de falha: quando o Google Fonts nao
 responde, o navegador cai para Times e a pagina inteira deixa de ser um
