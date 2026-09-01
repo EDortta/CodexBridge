@@ -17,6 +17,162 @@ class ExecutorModel(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     connected: Mapped[bool] = mapped_column(Boolean, default=False)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    # Which Bridge Node this connection belongs to (issue #73). Nullable so
+    # `0009_control_plane.sql`'s ALTER stays portable; every row is backfilled
+    # by that same migration, and the application treats a null as a pre-#73
+    # row to repair at startup rather than as "no node".
+    node_id: Mapped[str | None] = mapped_column(String(128), ForeignKey("nodes.id"), nullable=True)
+
+
+class NodeModel(Base):
+    """A registered CodexBridge installation — issue #73's Bridge Node.
+
+    Distinct from `ExecutorModel` on purpose. #73 warns against "conflating
+    `node`, `executor`, `engine` and `project` into one entity": the node is
+    the machine and its capabilities, the executor is the authenticated
+    connection that carries work to it. They are 1:1 today (seeded that way by
+    `0009_control_plane.sql`) and the schema does not require them to stay so.
+
+    `capabilities_observed_at` and `inventory_observed_at` exist because #42
+    requires last-known capabilities to be persisted "with freshness
+    timestamp" and stale data to be "visibly marked". Freshness is derived
+    from these at read time — the same posture `store.executor_is_live` takes
+    toward `ExecutorModel.connected`, and for the same reason: a stored
+    boolean survives a restart that invalidated it.
+    """
+
+    __tablename__ = "nodes"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(255))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    os: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    arch: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    capabilities_json: Mapped[str] = mapped_column(Text, default="{}")
+    capabilities_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    inventory_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    health_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WorkspaceBindingModel(Base):
+    """A logical Project as it exists on one Node's disk (issue #73).
+
+    This is what makes "the same project on two machines at two paths"
+    representable, which a column on `projects` could not be — #73: "A project
+    MUST NOT be structurally owned by a node or by GitHub."
+
+    `local_path` is sensitive operational data. #73 allows it only on
+    "appropriately authorized operator surfaces"; it must never reach
+    `ProjectStatus`, `Session`, `Mission` or any MCP tool
+    (`docs/api/README.md`, "Fields that must never ship").
+
+    `state` is the OBSERVED world (is this workspace usable right now), which
+    is not the same question as the operator's decision — that one lives in
+    `DiscoveredResourceModel.state`. Collapsing the two would lose the
+    difference between "I revoked this" and "the disk went away".
+    """
+
+    __tablename__ = "workspace_bindings"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    node_id: Mapped[str] = mapped_column(String(128), ForeignKey("nodes.id"))
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    local_path: Mapped[str] = mapped_column(String(2048))
+    head: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    dirty: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    state: Mapped[str] = mapped_column(String(32), default="active")
+    last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ScmAssociationModel(Base):
+    """Project <-> source-control repository, as an association rather than an
+
+    attribute. #73 requires GitHub to be "an external project/repository
+    source and association, not the owner of the project model", and requires
+    a local project with no remote to be "represented honestly as
+    unassociated rather than rejected" — which a non-null column on `projects`
+    would make impossible.
+
+    `confidence` is the direct consequence of #73's "Do not silently infer a
+    trusted association only because directory and repository names happen to
+    match": an unconfirmed guess is recorded as `observed`, never as
+    `confirmed`, and only an operator moves it.
+    """
+
+    __tablename__ = "scm_associations"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    provider: Mapped[str] = mapped_column(String(32), default="github")
+    remote_url: Mapped[str] = mapped_column(String(2048))
+    repo_identity: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    confidence: Mapped[str] = mapped_column(String(32), default="observed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ProjectAuthorizationModel(Base):
+    """What a node may actually do to a project (issue #73's authorization plane).
+
+    Separate from the binding because the two are written by different actors:
+    a node announces a binding, an operator (or a standing discovery-root
+    grant) writes an authorization. #73: "A node cannot grant itself project
+    authorization merely by reporting a discovery."
+
+    `granted_by` is what keeps the automatic half auditable: `root-config:
+    <path>` for a capability that came from a discovery root's
+    `auto_authorize` (revoked by editing that root), `operator:<user_id>` for
+    an explicit decision. A grant with no attributable origin is not a grant.
+    """
+
+    __tablename__ = "project_authorizations"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    node_id: Mapped[str] = mapped_column(String(128), ForeignKey("nodes.id"))
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    capabilities_json: Mapped[str] = mapped_column(Text, default="[]")
+    granted_by: Mapped[str] = mapped_column(String(255))
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DiscoveredResourceModel(Base):
+    """Something a node can see that Control has not necessarily adopted.
+
+    The entity that makes "Discovery is not authorization" structural rather
+    than a convention: a node writes rows here and nothing else, so reporting
+    a directory can never, by construction, produce the right to operate it.
+
+    `state` carries all five values of `shared.protocol.DiscoveredState`.
+    #73 forbids collapsing them into one boolean, and each pair it would merge
+    loses a real distinction — notably `denied` vs `discovered` (without it a
+    refused candidate returns to the adoption queue on every reconnect) and
+    `stale` vs absent (the row and its history survive a project that moved).
+
+    `resource_key` is the node's own identifier for the candidate and is
+    deliberately NOT a foreign key: a candidate exists precisely before there
+    is a `projects` row to point at. `kind` leaves room for the
+    processes/services #73 anticipates without a schema change.
+    """
+
+    __tablename__ = "discovered_resources"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    node_id: Mapped[str] = mapped_column(String(128), ForeignKey("nodes.id"))
+    kind: Mapped[str] = mapped_column(String(32), default="project")
+    resource_key: Mapped[str] = mapped_column(String(255))
+    project_id: Mapped[str | None] = mapped_column(String(128), ForeignKey("projects.id"), nullable=True)
+    evidence_json: Mapped[str] = mapped_column(Text, default="{}")
+    state: Mapped[str] = mapped_column(String(32), default="discovered")
+    root_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ProjectModel(Base):

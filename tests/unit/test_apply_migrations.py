@@ -73,6 +73,29 @@ def legacy_db(tmp_path: Path) -> Path:
         "  ('code-old', 'chatgpt-codexbridge', 'https://chatgpt.com/cb', 'esteban',"
         "   'e@example.com', '[]', 'chal', 'S256', '2099-01-01 00:00:00', null,"
         "   '2026-01-01 00:00:00');"
+        # `executors` and `projects` for the same reason the two OAuth tables
+        # are here: 0009 alters the first and references the second, and a
+        # fixture that omits a table a migration touches tests the runner
+        # against a schema no deployment has. Both carry a row so the node
+        # seeding 0009 performs has something real to seed from.
+        "create table executors ("
+        "  id varchar(128) primary key,"
+        "  display_name varchar(255) not null,"
+        "  enabled boolean not null default 1,"
+        "  last_seen_at timestamp with time zone,"
+        "  connected boolean not null default 0,"
+        "  metadata_json text not null default '{}'"
+        ");"
+        "insert into executors (id, display_name) values ('devel3', 'devel3');"
+        "create table projects ("
+        "  id varchar(128) primary key,"
+        "  name varchar(255) not null,"
+        "  path varchar(2048) not null,"
+        "  enabled boolean not null default 1,"
+        "  config_json text not null default '{}'"
+        ");"
+        "insert into projects (id, name, path) values"
+        "  ('codexbridge', 'CodexBridge', '/srv/projects/codexbridge');"
     )
     connection.commit()
     connection.close()
@@ -290,3 +313,80 @@ def test_engine_and_delivery_columns_default_existing_rows_to_codex(legacy_db: P
         "select engine, issue_ref, delivery_json, delivery_result_json from tasks where id = 't-old'"
     ).fetchone()
     assert row == ("codex", None, None, None)
+
+
+def test_control_plane_seeds_one_node_per_existing_executor(legacy_db: Path) -> None:
+    """0009: an existing deployment must come up with its fleet already
+
+    described. Issue #73 makes the Bridge Node a first-class entity, but every
+    database that predates it already knows which machines exist -- they are
+    its `executors` rows. Seeding from them means no operator has to hand-write
+    a fleet that the system can derive, and `executors.node_id` is never null
+    in practice even though the column is nullable (nullable only so the ALTER
+    stays portable).
+    """
+    adopted = run(legacy_db, "--mark-applied", "0001_init.sql")
+    assert adopted.returncode == 0, adopted.stderr
+    applied = run(legacy_db)
+    assert applied.returncode == 0, applied.stderr
+
+    assert {
+        "nodes",
+        "workspace_bindings",
+        "scm_associations",
+        "project_authorizations",
+        "discovered_resources",
+    } <= tables(legacy_db)
+
+    connection = sqlite3.connect(legacy_db)
+    assert connection.execute("select id, display_name from nodes").fetchall() == [("devel3", "devel3")]
+    assert connection.execute("select id, node_id from executors").fetchall() == [("devel3", "devel3")]
+
+
+def test_control_plane_grants_nothing_by_existing_alone(legacy_db: Path) -> None:
+    """0009 must create the authorization plane EMPTY.
+
+    Issue #73: "Discovery is not authorization." The mirror of that rule at
+    migration time is that adopting the new schema cannot, by itself, hand any
+    node a capability over any project -- not even over the projects it was
+    already allowed to run, whose access keeps flowing through the pre-existing
+    `allowed_projects` path until an authorization is granted deliberately.
+    A migration that pre-filled this table "to preserve behaviour" would be
+    inventing grants nobody made.
+    """
+    run(legacy_db, "--mark-applied", "0001_init.sql")
+    applied = run(legacy_db)
+    assert applied.returncode == 0, applied.stderr
+
+    connection = sqlite3.connect(legacy_db)
+    assert connection.execute("select count(*) from project_authorizations").fetchone() == (0,)
+    assert connection.execute("select count(*) from discovered_resources").fetchone() == (0,)
+    assert connection.execute("select count(*) from workspace_bindings").fetchone() == (0,)
+
+
+def test_control_plane_refuses_a_database_without_executors_before_touching_it(tmp_path: Path) -> None:
+    """A wrong database must be left untouched, not half-migrated.
+
+    SQLite does not roll back DDL, so a migration that creates five tables and
+    only then discovers the table it must ALTER is missing leaves the file
+    PARTIALLY APPLIED -- the state the runner's own error text warns about at
+    length. 0009 therefore puts its `alter table executors` first. This test
+    pins that ordering: without it the assertion below finds `nodes` already
+    created.
+    """
+    db = tmp_path / "wrong.db"
+    sqlite3.connect(db).executescript("create table unrelated (id integer primary key);")
+
+    # Every earlier migration is marked applied so 0009 is the one that
+    # actually runs. Without this the runner stops at 0002 (no `tasks` table)
+    # and never reaches the file under test -- which would make this test pass
+    # for the wrong reason.
+    for name in sorted(path.name for path in (REPO_ROOT / "migrations").glob("*.sql")):
+        if name == "0009_control_plane.sql":
+            break
+        run(db, "--mark-applied", name)
+    result = run(db)
+
+    assert result.returncode != 0
+    assert "no such table: executors" in (result.stdout + result.stderr)
+    assert "nodes" not in tables(db)

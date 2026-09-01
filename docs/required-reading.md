@@ -38,6 +38,9 @@ Documentos específicos deste repositório. Esta seção é 100% do projeto: nen
 a toca. Use `- (none)` se genuinamente não houver nenhum.
 
 - `docs/project-rules.md` — regras específicas deste projeto (também na tabela acima)
+- `docs/control-plane.md` — **obrigatório** ao tocar em nó, projeto lógico,
+  binding de workspace, associação SCM ou autorização (issue #73). Explica por que
+  essas entidades são separadas e o que se perde ao fundi-las.
 - `docs/napkin-lessons.md` — lições curtas; leia ao retomar trabalho relacionado
 
 ## Fontes locais — fora do checkout
