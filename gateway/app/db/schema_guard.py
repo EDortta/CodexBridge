@@ -45,6 +45,13 @@ REQUIRED_TABLES: dict[str, str] = {
     "conversations": "0007_conversations.sql",
     "conversation_messages": "0007_conversations.sql",
     "conversation_read_states": "0007_conversations.sql",
+    # Issue #73's control plane. Registered as a block: the five arrived in one
+    # migration and a database missing any one of them is missing all of them.
+    "nodes": "0009_control_plane.sql",
+    "workspace_bindings": "0009_control_plane.sql",
+    "scm_associations": "0009_control_plane.sql",
+    "project_authorizations": "0009_control_plane.sql",
+    "discovered_resources": "0009_control_plane.sql",
 }
 
 REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
@@ -62,6 +69,13 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     "oauth_access_tokens": {
         "revoked_at": "0003_mobile_auth.sql",
         "grant_id": "0003_mobile_auth.sql",
+    },
+    # Without this, a gateway upgraded past 0009 without running it would
+    # create `nodes` (a brand-new table `create_all` does add) while
+    # `executors` silently kept no `node_id` — so every node lookup would find
+    # a fleet of one project-less machines and report it as normal.
+    "executors": {
+        "node_id": "0009_control_plane.sql",
     },
 }
 

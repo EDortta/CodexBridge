@@ -1,17 +1,16 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-30 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
+> Generated: 2026-09-01 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--gh-73-control`
+> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--gh-73-control map`
 
 ## Summary
 
-- 125 file(s) · 1159 symbol(s) indexed
-- Languages: config (2), python (121), shell (2)
+- 126 file(s) · 1181 symbol(s) indexed
+- Languages: config (2), python (122), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
 
-- `AGENTS.md`
 - `docs/required-reading.md`
 - `docs/project-rules.md`
 - `docs/software-overview.md`
@@ -157,6 +156,7 @@ tests/
     test_agent_auto_project.py  — "`agent.codex_bridge_agent.config.resolve_auto_project` -- the opt-in"
     test_agent_service.py
     test_apply_migrations.py  — "The migration runner, exercised against real throwaway databases."
+    test_capability_vocabulary.py  — "The capability vocabulary issue #73's authorization plane is built on."
     test_claude_runner.py  — "ClaudeRunner's pure logic: command assembly, NDJSON extraction, sandbox mapping."
     test_codex_runner.py  — "CodexRunner's pause/resume/restart/cancel state machine — issue #16 council."
     test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
@@ -607,6 +607,11 @@ tests/
 ### `gateway/app/models/entities.py`
 
 - **`ExecutorModel`** *(class)*
+- **`NodeModel`** *(class)* — "A registered CodexBridge installation — issue #73's Bridge Node."
+- **`WorkspaceBindingModel`** *(class)* — "A logical Project as it exists on one Node's disk (issue #73)."
+- **`ScmAssociationModel`** *(class)* — "Project <-> source-control repository, as an association rather than an"
+- **`ProjectAuthorizationModel`** *(class)* — "What a node may actually do to a project (issue #73's authorization plane)."
+- **`DiscoveredResourceModel`** *(class)* — "Something a node can see that Control has not necessarily adopted."
 - **`ProjectModel`** *(class)*
 - **`TaskModel`** *(class)*
 - **`EpicModel`** *(class)*
@@ -805,11 +810,17 @@ tests/
 
 - **`AgentEngine`** *(class)* — "Which development-agent CLI runs a task's instruction."
 - **`TaskMode`** *(class)*
+- **`Capability`** *(class)* — "What a node is authorized to do to a project, per issue #73."
+- `capabilities_to_modes(capabilities)` — "The task modes a capability set permits. Unknown values are ignored."
 - **`TaskState`** *(class)*
 - **`PolicyLevel`** *(class)*
 - **`TaskPriority`** *(class)*
 - **`AgentMessageType`** *(class)*
 - **`ApprovalDecision`** *(class)*
+- **`DiscoveredState`** *(class)* — "Lifecycle of something a node can see, per issue #73."
+- **`BindingState`** *(class)* — "Whether a Project-on-a-Node workspace is usable right now."
+- **`NodeHealth`** *(class)* — "A Bridge Node's operational condition, derived at read time."
+- **`DiscoveryRoot`** *(class)* — "One directory tree a node is configured to scan, and what that grants."
 - **`ProjectRegistration`** *(class)*
 - **`ExecutorRegistration`** *(class)*
 - **`DeliveryRequest`** *(class)* — "What the requester authorized the executor to do with git, once a task"
@@ -1566,6 +1577,22 @@ tests/
 - `test_dry_run_changes_nothing(legacy_db)`
 - `test_unknown_migration_name_is_refused(legacy_db)`
 - `test_engine_and_delivery_columns_default_existing_rows_to_codex(legacy_db)` — "0008: an existing row must read back as what it always was -- a plain"
+- `test_control_plane_seeds_one_node_per_existing_executor(legacy_db)` — "0009: an existing deployment must come up with its fleet already"
+- `test_control_plane_grants_nothing_by_existing_alone(legacy_db)` — "0009 must create the authorization plane EMPTY."
+- `test_control_plane_refuses_a_database_without_executors_before_touching_it(tmp_path)` — "A wrong database must be left untouched, not half-migrated."
+
+### `tests/unit/test_capability_vocabulary.py`
+
+> The capability vocabulary issue #73's authorization plane is built on.
+
+- `test_every_task_mode_is_reachable_through_some_capability()` — "A mode no capability grants is a mode no authorization can ever permit."
+- `test_read_grants_no_mode_that_can_modify_a_file()` — "The load-bearing claim of the whole read-only tier."
+- `test_deliver_grants_no_mode()` — "Delivery is not a mode, and must not become one by accident."
+- `test_an_unknown_capability_grants_nothing()` — "Forward compatibility must narrow, never widen."
+- `test_a_discovery_root_cannot_grant_write_capabilities()` — "#73: "A node cannot grant itself project authorization merely by"
+- `test_auto_authorizable_capabilities_never_reach_a_file()` — "Guards the constant itself, not just the validator that reads it."
+- `test_a_root_grants_nothing_unless_it_says_so()` — "Scanning a tree and authorizing it are different acts."
+- `test_the_five_discovered_states_are_all_distinct_values()` — "#73: "Do not collapse these into a single `enabled` boolean.""
 
 ### `tests/unit/test_claude_runner.py`
 
