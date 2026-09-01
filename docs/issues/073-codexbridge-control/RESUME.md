@@ -3,15 +3,15 @@
 - work_id: WK-20260901-gh73-control-plane-domain
 - data: 2026-09-01
 - branch: `feature/gh-73/control-plane-domain` (commit `13583f8`), worktree
-  `../CodexBridge--gh-73-control`. NOT pushed, NO PR opened, NOT merged.
+  `../CodexBridge--gh-73-control`. Pushed; **PR #74** open against
+  `development`. NOT merged.
 
 ## Next Step (DO THIS FIRST)
 
-Ask the operator whether to open the PR for Stage 1 now or hold it: there are
-already 4 PRs open (#59/#60/#61/#62) waiting on review, and this would be a
-fifth. Only after that answer, start Stage 2 (fleet visibility: node
-discovery, `Runner.probe()`, gateway handshake, `/nodes` routes) on a branch
-off this one.
+Start Stage 2 (fleet visibility: node discovery, `Runner.probe()`, gateway
+handshake, `/nodes` routes) on a branch cut from
+`feature/gh-73/control-plane-domain` — do not wait for PR #74 to merge, but
+rebase Stage 2 if review changes the Stage 1 schema.
 
 ## Current state
 
@@ -55,5 +55,5 @@ off this one.
 
 ## NOT validated
 
-No push, no PR, no deploy. `0009` never applied to any real gateway database.
-No gateway/agent runtime code consumes the new tables yet.
+No deploy. `0009` never applied to any real gateway database. No gateway/agent
+runtime code consumes the new tables yet. PR #74 not reviewed.
