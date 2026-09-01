@@ -1216,3 +1216,19 @@ Quando a janela operacional já passou do hard stop, a resposta correta não é
 "só baixar mais um artefato": é registrar que o trabalho ficou pendente e
 deixar a próxima execução começar limpa. Isso evita importar conteúdo
 metade-feito e depois ter de descobrir qual parte foi realmente validada.
+
+## 2026-09-01 — uma pagina cujo conceito depende de uma fonte precisa embuti-la
+
+A landing page em `docs/landing/index.html` e um caderno manuscrito: a fonte
+de caneta (Shantell Sans) *e* o conceito, nao um enfeite. Renderizando a
+pagina antes de entregar, apareceu o modo de falha: quando o Google Fonts nao
+responde, o navegador cai para Times e a pagina inteira deixa de ser um
+caderno — vira um documento comum, sem qualquer erro visivel para quem
+publicou. O corpo (IBM Plex) tolera isso; a caneta nao.
+
+Licao: separar as fontes por papel antes de escolher como carrega-las. Fonte
+decorativa cuja ausencia degrada a leitura pode ficar em CDN com fallback de
+sistema. Fonte que *carrega o conceito* da pagina vai embutida em base64, ou
+a entrega depende de um terceiro estar de pe no momento em que a pessoa que
+importa abre o arquivo. Vale tambem o habito que revelou o problema: abrir a
+pagina de verdade, com a rede indisponivel, antes de chamar de pronta.
