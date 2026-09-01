@@ -17,6 +17,7 @@ from gateway.app.models.entities import (
     ExecutorModel,
     IssueModel,
     MessageReceiptModel,
+    NodeModel,
     OAuthAccessTokenModel,
     OAuthAuthorizationCodeModel,
     OAuthRefreshTokenModel,
@@ -46,6 +47,7 @@ from shared.protocol import (
     DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
     DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
     ExecutorRegistration,
+    NodeAnnouncement,
     PolicyLevel,
     ProjectRegistration,
     STOPPABLE_TASK_STATES,
@@ -77,19 +79,24 @@ async def upsert_registry(
         current = await session.get(ExecutorModel, executor.executor_id)
         metadata_json = json.dumps(executor.model_dump(mode="json"), ensure_ascii=True)
         if current is None:
-            session.add(
-                ExecutorModel(
-                    id=executor.executor_id,
-                    display_name=executor.display_name,
-                    enabled=executor.enabled,
-                    connected=False,
-                    metadata_json=metadata_json,
-                )
+            current = ExecutorModel(
+                id=executor.executor_id,
+                display_name=executor.display_name,
+                enabled=executor.enabled,
+                connected=False,
+                metadata_json=metadata_json,
             )
+            session.add(current)
         else:
             current.display_name = executor.display_name
             current.enabled = executor.enabled
             current.metadata_json = metadata_json
+        # Issue #73 Stage 2: every registry executor gets a Bridge Node row.
+        # `0009_control_plane.sql` seeded one per executor that existed at
+        # migration time; without this call, an executor added to
+        # `registry.json` afterwards would have no node and be invisible to
+        # the fleet surface. See `ensure_node_for_executor`'s docstring.
+        await ensure_node_for_executor(session, current)
     for project in projects:
         current = await session.get(ProjectModel, project.project_id)
         config_json = json.dumps(project.model_dump(mode="json"), ensure_ascii=True)
@@ -497,6 +504,120 @@ def executor_is_live(
     grace = settings.reconnect_grace_seconds if grace_seconds is None else grace_seconds
     now = now or datetime.now(timezone.utc)
     return (now - _as_utc(executor.last_seen_at)) <= timedelta(seconds=grace)
+
+
+async def ensure_node_for_executor(session: AsyncSession, executor: ExecutorModel) -> NodeModel:
+    """The Bridge Node bound to `executor`, creating and binding one if needed.
+
+    `migrations/0009_control_plane.sql` seeded a node 1:1 for every executor
+    that existed *at migration time* and backfilled `executors.node_id` for
+    all of them. An executor added to `registry.json` afterwards has no such
+    row -- `upsert_registry` calls this for every executor on every reload so
+    a node added later is never invisible to the fleet surface (issue #73).
+
+    Mirrors exactly what that migration did for the rows it seeded: the
+    node's id is the executor's id, `display_name` and `enabled` start as the
+    executor's own. Idempotent -- an executor whose `node_id` is already set
+    returns that node unchanged, and calling this twice for the same executor
+    creates nothing the second time.
+
+    Does not commit. Callers (`upsert_registry`, `record_node_announcement`)
+    commit their own transaction; this only stages the insert/association so
+    it composes inside either one without an extra round trip.
+    """
+    if executor.node_id is not None:
+        node = await session.get(NodeModel, executor.node_id)
+        if node is not None:
+            return node
+    node = await session.get(NodeModel, executor.id)
+    if node is None:
+        node = NodeModel(
+            id=executor.id,
+            display_name=executor.display_name,
+            enabled=executor.enabled,
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(node)
+    executor.node_id = node.id
+    return node
+
+
+async def record_node_announcement(
+    session: AsyncSession,
+    executor: ExecutorModel,
+    announcement: NodeAnnouncement,
+    *,
+    now: datetime | None = None,
+) -> NodeModel:
+    """Persist a HELLO's `NodeAnnouncement` onto the node bound to `executor`.
+
+    This is an OBSERVATION, never a grant. It never touches `enabled`,
+    `health_reason`, or any row in `project_authorizations` -- issue #73 is
+    explicit that "a node cannot grant itself project authorization merely by
+    reporting a discovery", and those three are exactly the columns/tables an
+    operator (or a standing discovery-root grant) writes, not the node itself.
+
+    `capabilities_json` stores the announcement's `capabilities`, `engines`,
+    `max_concurrent_tasks` and `discovery_root_count` as one JSON object --
+    matching `NodeModel.capabilities_json`'s existing shape, no migration
+    needed. `capabilities_observed_at` is set to `now` so staleness can be
+    derived at read time the same way `executor_is_live` derives connection
+    staleness from `last_seen_at`.
+    """
+    node = await ensure_node_for_executor(session, executor)
+    now = now or datetime.now(timezone.utc)
+    node.os = announcement.os
+    node.arch = announcement.arch
+    node.agent_version = announcement.agent_version
+    node.capabilities_json = json.dumps(
+        {
+            "capabilities": [capability.value for capability in announcement.capabilities],
+            "engines": [engine.model_dump(mode="json") for engine in announcement.engines],
+            "max_concurrent_tasks": announcement.max_concurrent_tasks,
+            "discovery_root_count": announcement.discovery_root_count,
+        },
+        ensure_ascii=True,
+    )
+    node.capabilities_observed_at = now
+    await session.commit()
+    await session.refresh(node)
+    return node
+
+
+async def list_nodes(session: AsyncSession) -> list[tuple[NodeModel, ExecutorModel | None]]:
+    """Every Bridge Node, ordered by id, paired with the executor bound to it.
+
+    The executor is what `health` is derived from at the route layer
+    (`store.executor_is_live` for liveness, `executor.last_seen_at` for
+    "ever seen") -- neither lives on `NodeModel` itself, the same separation
+    `NodeModel`'s own docstring draws between the node (machine and
+    capabilities) and the executor (the authenticated connection). Two
+    queries total, not one per node: the fleet is operator-curated and small,
+    the same reasoning `executors_by_project` documents for grouping in
+    Python rather than joining in SQL.
+    """
+    nodes = list((await session.execute(select(NodeModel).order_by(NodeModel.id))).scalars())
+    executors = list(
+        (await session.execute(select(ExecutorModel).where(ExecutorModel.node_id.isnot(None)))).scalars()
+    )
+    by_node_id = {executor.node_id: executor for executor in executors}
+    return [(node, by_node_id.get(node.id)) for node in nodes]
+
+
+async def get_node(session: AsyncSession, node_id: str) -> tuple[NodeModel, ExecutorModel | None] | None:
+    """One Bridge Node and its bound executor, or None if the node does not exist.
+
+    See `list_nodes` for why the executor travels alongside the node.
+    """
+    node = await session.get(NodeModel, node_id)
+    if node is None:
+        return None
+    executor = (
+        (await session.execute(select(ExecutorModel).where(ExecutorModel.node_id == node_id)))
+        .scalars()
+        .first()
+    )
+    return node, executor
 
 
 async def next_dispatchable_task(session: AsyncSession, executor_id: str) -> TaskModel | None:

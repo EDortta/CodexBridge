@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import platform
 import random
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,7 +22,9 @@ from shared.protocol import (
     EXECUTOR_TOKEN_HEADER,
     AgentEnvelope,
     AgentMessageType,
+    Capability,
     DeliveryRequest,
+    NodeAnnouncement,
     PolicyLevel,
     SubmitTaskRequest,
     TaskMode,
@@ -28,6 +32,16 @@ from shared.protocol import (
     TaskState,
 )
 from shared.security import ensure_within_root
+
+
+logger = logging.getLogger(__name__)
+
+# Sent as `NodeAnnouncement.agent_version` (the `hello` payload) -- the same
+# literal `_run_once` always sent before issue #73 Stage 2, now single-sourced
+# here rather than inlined at the send site. No dependency on the gateway
+# package is introduced to get this value: it stays a plain constant local to
+# the agent, exactly as it always was.
+AGENT_VERSION = "0.1.0"
 
 
 BASE_PROMPT = (
@@ -100,7 +114,10 @@ class AgentService:
         # caught it because every existing test replaces
         # `websockets.connect` with a fake before this line runs.
         async with websockets.connect(url, max_size=2_000_000, additional_headers=headers) as websocket:
-            await websocket.send(self._envelope(AgentMessageType.HELLO, {"version": "0.1.0"}).model_dump_json())
+            announcement = await self._build_announcement()
+            await websocket.send(
+                self._envelope(AgentMessageType.HELLO, announcement.model_dump(mode="json")).model_dump_json()
+            )
             heartbeat_task = asyncio.create_task(self._heartbeat_loop(websocket))
             try:
                 async for raw in websocket:
@@ -344,6 +361,53 @@ class AgentService:
             await websocket.send(self._envelope(AgentMessageType.TASK_RESULT, result).model_dump_json())
         finally:
             self.runners.forget(task_id)
+
+    async def _build_announcement(self) -> NodeAnnouncement:
+        """Issue #73 Stage 2: the `hello` payload's real content.
+
+        `capabilities` here is derived from this node's OWN configuration --
+        what it is set up to *permit* -- never a grant. Per-project
+        authorization still lives entirely server-side, in
+        `project_authorizations` (see `shared/protocol.py:NodeAnnouncement`'s
+        own docstring); a node claiming `MODIFY` here only means "if
+        authorized, I am configured to attempt writes", not "I may write to
+        anything".
+
+        `discovery_root_count`: the agent has no local `DiscoveryRoot` list to
+        count (`auto_project_root` is a single optional path, not a list --
+        see `AgentSettings.auto_project_root`'s own docstring), so this
+        reports 1 when that single opt-in root is set and 0 otherwise, rather
+        than inventing a new setting to carry a count `AgentSettings` does not
+        otherwise track.
+
+        Never allowed to raise past this method: building the announcement
+        must not cost the connection. Any exception here (a runner's `probe`
+        somehow escaping `RunnerPool.probe_all`'s own `return_exceptions`
+        guard, or anything else) is caught and logged, and a minimal
+        announcement is returned instead -- `_run_once` always gets something
+        it can send.
+        """
+        try:
+            capabilities = [Capability.READ, Capability.TEST]
+            if self.settings.allow_workspace_write:
+                capabilities.append(Capability.MODIFY)
+            if self.settings.allow_git_delivery:
+                capabilities.append(Capability.DELIVER)
+            return NodeAnnouncement(
+                agent_version=AGENT_VERSION,
+                os=platform.system(),
+                arch=platform.machine(),
+                engines=await self.runners.probe_all(),
+                capabilities=capabilities,
+                max_concurrent_tasks=self.settings.max_concurrent_tasks,
+                # See this method's own docstring: no local list of discovery
+                # roots exists to count, so the single opt-in
+                # `auto_project_root` collapses to 0 or 1.
+                discovery_root_count=1 if self.settings.auto_project_root else 0,
+            )
+        except Exception:
+            logger.warning("Failed to build full node announcement; sending minimal fallback", exc_info=True)
+            return NodeAnnouncement(agent_version=AGENT_VERSION)
 
     def _envelope(self, message_type: AgentMessageType, payload: dict) -> AgentEnvelope:
         return AgentEnvelope(

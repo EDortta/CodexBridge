@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.6.0
+  version: 1.9.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -471,6 +471,82 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectSummary'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/nodes:
+    get:
+      operationId: listNodes
+      tags: [nodes]
+      summary: Every Bridge Node in the fleet
+      description: |
+        Issue #73 Stage 2. A **node** is a registered CodexBridge installation,
+        distinct from the executor connection that carries work to it. Fleet-wide
+        and administrative: unlike `/api/v1/projects`, there is no per-caller
+        project scope to filter by, so this requires the `nodes.read` action
+        (`codexbridge.admin`) rather than the plain read scope.
+
+        Not paginated — the fleet, like the executor registry it is seeded
+        from, is operator-curated and expected to hold a handful of machines.
+
+        `capabilities`, `engines`, `maxConcurrentTasks` and
+        `discoveryRootCount` are what the node last reported about itself in
+        its own HELLO — an **observation**, never a grant. What a node may
+        actually do to a given project is authorized separately and is not
+        exposed by this endpoint (issue #73: "a node cannot grant itself
+        project authorization merely by reporting a discovery").
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Every node.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NodeStatus'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/nodes/{nodeId}:
+    get:
+      operationId: getNode
+      tags: [nodes]
+      summary: One Bridge Node's fleet status
+      description: |
+        See `GET /api/v1/nodes` for what this reports and why it is
+        administrative rather than project-scoped.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/NodeId'
+      responses:
+        '200':
+          description: The node's fleet status.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeStatus'
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/PermissionDenied'}
         '404': {$ref: '#/components/responses/NotFound'}
@@ -2953,6 +3029,137 @@ components:
                 $ref: '#/components/schemas/ProjectExecutorStatus'
             generatedAt:
               $ref: '#/components/schemas/Timestamp'
+
+    NodeId:
+      allOf:
+        - $ref: '#/components/schemas/Id'
+      description: |
+        Identifier of a registered Bridge Node (issue #73). Today this is
+        1:1 with an `ExecutorId` — every node is seeded from an executor — but
+        clients must treat the two as different identifier spaces, since the
+        schema does not require them to stay 1:1.
+
+    Capability:
+      type: string
+      enum: [read, test, modify, deliver]
+      description: |
+        What a node is authorized to do to a project. `deliver` has no
+        corresponding session mode of its own — it gates
+        `SubmitTaskRequest.delivery` separately. `capabilities` on `NodeStatus`
+        is what the node's own configuration would *permit*; it is not a
+        grant. What a node may actually do to a given project is authorized
+        separately and is not reported by this endpoint.
+
+    EngineAvailability:
+      type: object
+      description: |
+        Whether one execution engine can actually run on this node, right
+        now. Three different facts, kept separate on purpose: `implemented`
+        is a build-time claim (a runner exists in this codebase for the
+        engine), `available` is a runtime fact (the binary answered when
+        probed on this machine), and neither implies the other — an engine
+        this build supports but this machine lacks needs installing;
+        an engine present on the machine that no runner drives is a code gap,
+        not an ops one.
+      required: [engine, implemented, available]
+      properties:
+        engine:
+          type: string
+          maxLength: 64
+        implemented:
+          type: boolean
+        available:
+          type: boolean
+        version:
+          type: [string, 'null']
+          maxLength: 200
+        detail:
+          type: [string, 'null']
+          maxLength: 400
+          description: Why a probe failed, when it did. Never a path or a stack trace.
+
+    NodeHealth:
+      type: string
+      enum: [ok, degraded, offline, unknown]
+      description: |
+        Derived at read time, never stored. `unknown` — this node has never
+        connected, which is a different situation from `offline` and calls
+        for a different response. `offline` — it connected before but is not
+        live right now. `degraded` — it is live but disabled, or flagged with
+        a `healthReason`. `ok` — live, enabled, no flag.
+
+    NodeStatus:
+      type: object
+      description: |
+        A Bridge Node (issue #73 Stage 2): a registered CodexBridge
+        installation, distinct from the executor connection that carries work
+        to it. Never carries a filesystem path or a hostname — see
+        `docs/api/README.md` "Fields that must never ship".
+
+        `capabilities`, `engines`, `maxConcurrentTasks` and
+        `discoveryRootCount` reflect the node's most recent HELLO
+        announcement — an observation with a freshness timestamp
+        (`capabilitiesObservedAt`), not a live query and not an authorization.
+      required: [id, displayName, enabled, health, inventoryStale]
+      properties:
+        id:
+          $ref: '#/components/schemas/NodeId'
+        displayName:
+          type: string
+          maxLength: 255
+        enabled:
+          type: boolean
+        health:
+          $ref: '#/components/schemas/NodeHealth'
+        healthReason:
+          type: [string, 'null']
+          maxLength: 255
+          description: Operator- or node-supplied reason behind a `degraded` health.
+        lastSeenAt:
+          type: [string, 'null']
+          format: date-time
+          description: Most recent heartbeat/HELLO from this node's executor, or `null` if it has never connected.
+        agentVersion:
+          type: [string, 'null']
+          maxLength: 64
+        os:
+          type: [string, 'null']
+          maxLength: 120
+        arch:
+          type: [string, 'null']
+          maxLength: 60
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/Capability'
+          description: What this node's own configuration would permit it to do. Not a grant — see the schema description above.
+        engines:
+          type: array
+          items:
+            $ref: '#/components/schemas/EngineAvailability'
+        maxConcurrentTasks:
+          type: [integer, 'null']
+        discoveryRootCount:
+          type: [integer, 'null']
+          description: |
+            How many discovery roots this node is configured to scan. A
+            count, never the paths themselves — absolute paths are sensitive
+            operational data and are excluded from every response on this
+            contract.
+        capabilitiesObservedAt:
+          type: [string, 'null']
+          format: date-time
+          description: When this node's inventory (capabilities/engines/etc.) was last observed via HELLO. `null` before the first announcement.
+        inventoryObservedAt:
+          type: [string, 'null']
+          format: date-time
+          description: Reserved for the discovery-inventory surface issue #73 anticipates; not written by this build.
+        inventoryStale:
+          type: boolean
+          description: |
+            `true` when `capabilitiesObservedAt` is `null`, or older than the
+            gateway's inventory freshness window. A client should render stale
+            inventory as visibly stale rather than as current fact.
 
     Session:
       type: object

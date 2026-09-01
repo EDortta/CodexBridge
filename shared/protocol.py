@@ -328,6 +328,101 @@ class DiscoveryRoot(BaseModel):
         return value
 
 
+class EngineAvailability(BaseModel):
+    """Whether one `AgentEngine` can actually run on this node, right now.
+
+    Issue #73 Stage 2 asks a node for its "available execution engines". Three
+    different facts get confused under that word, so all three are carried
+    separately:
+
+    * `implemented` — a `Runner` exists in this codebase for the engine. A
+      compile-time claim, the same on every node running the same version.
+    * `available` — the binary answered on this machine when probed. A runtime
+      fact, and the only one that predicts whether a dispatch will start.
+    * `version` — what the binary reported, when it reported anything.
+
+    Collapsing them loses the two cases the operator most needs to see: an
+    engine this build supports but this machine lacks (`implemented` and not
+    `available` — install it), and an engine present on the machine that no
+    runner can drive (`available` and not `implemented` — a code gap, not an
+    ops one). `detail` carries the reason a probe failed, never a stack trace
+    and never a path.
+    """
+
+    engine: str = Field(min_length=1, max_length=64)
+    implemented: bool = False
+    available: bool = False
+    version: str | None = Field(default=None, max_length=200)
+    detail: str | None = Field(default=None, max_length=400)
+
+
+class NodeAnnouncement(BaseModel):
+    """What a node reports about itself when it connects (`hello` payload).
+
+    Issue #73 Stage 2. Deliberately carries **no identity**: the node is the
+    one the authenticated `executor_id` already maps to. "Node identity must
+    survive reconnects and must not be inferred from mutable hostname/IP
+    alone" — accepting a self-declared id would also let a node claim another
+    node's row, which is the announcement-as-authorization failure #73 names.
+
+    Nothing here is a permission. `capabilities` is what the node's own
+    configuration would *permit* it to do; what it may actually do to a given
+    project still lives in `project_authorizations`, written by the operator.
+    The gateway stores this as an observation with a timestamp, so a stale
+    inventory is visibly stale rather than silently believed.
+
+    `discovery_root_count` is a count, not the paths. Absolute paths are
+    sensitive operational data (`docs/api/README.md`); the fleet surface needs
+    to answer "is this node configured to discover anything at all", which a
+    count answers without putting a filesystem layout in every client.
+    """
+
+    agent_version: str | None = Field(default=None, max_length=64)
+    os: str | None = Field(default=None, max_length=120)
+    arch: str | None = Field(default=None, max_length=60)
+    engines: list[EngineAvailability] = Field(default_factory=list)
+    capabilities: list[Capability] = Field(default_factory=list)
+    max_concurrent_tasks: int = Field(default=1, ge=0, le=1000)
+    discovery_root_count: int = Field(default=0, ge=0)
+
+    @field_validator("engines")
+    @classmethod
+    def _refuse_duplicate_engines(cls, value: list[EngineAvailability]) -> list[EngineAvailability]:
+        seen = [engine.engine for engine in value]
+        duplicated = sorted({name for name in seen if seen.count(name) > 1})
+        if duplicated:
+            raise ValueError(f"engine reported more than once: {duplicated}")
+        return value
+
+
+def node_health(
+    *,
+    live: bool,
+    enabled: bool,
+    ever_seen: bool,
+    health_reason: str | None = None,
+) -> "NodeHealth":
+    """Derive a node's health from facts, at read time, never from a column.
+
+    The order matters and is not arbitrary. A node nobody has ever heard from
+    is `UNKNOWN`, not `OFFLINE`: "never connected" and "was here and went
+    away" are different problems with different fixes, and #73 requires that
+    "offline/stale information must be visibly distinguished from current
+    observations". A disabled node reads `OFFLINE` while it is not live —
+    saying `DEGRADED` about a machine that is simply switched off invents an
+    incident. `DEGRADED` is reserved for a node that is answering but that
+    the operator or the node itself has flagged.
+    """
+
+    if not ever_seen:
+        return NodeHealth.UNKNOWN
+    if not live:
+        return NodeHealth.OFFLINE
+    if not enabled or health_reason:
+        return NodeHealth.DEGRADED
+    return NodeHealth.OK
+
+
 class ProjectRegistration(BaseModel):
     project_id: str
     name: str

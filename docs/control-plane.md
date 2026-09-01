@@ -124,3 +124,73 @@ ver `docs/api/README.md`, "Fields that must never ship".
   associação executor↔projeto de fato mora, dentro de `executors.metadata_json`)
   e não é exprimível em SQL portável. A remoção é migration posterior, depois de
   bindings verificados em produção.
+
+## Stage 2 — visibilidade de frota
+
+Stage 1 criou o vocabulário; a Stage 2 o preenche com observação. A pergunta que
+ela responde é a primeira da #73: *"que nós eu tenho, e quais estão utilizáveis?"*
+
+### O nó anuncia, o gateway observa
+
+Quando o agente conecta, o `hello` — que até aqui carregava `{"version":
+"0.1.0"}` e era **ignorado pelo gateway** — passa a carregar um
+`NodeAnnouncement`. O gateway o valida, carimba `capabilities_observed_at` e
+grava em `nodes`. Três propriedades desse desenho não são detalhe:
+
+**O anúncio não tem identidade.** Não existe campo `node_id` no payload. O nó é
+aquele para o qual o `executor_id` autenticado aponta. A #73 exige que a
+identidade *"sobreviva a reconexões e não seja inferida de hostname/IP
+mutáveis"*; aceitar um id declarado pelo próprio nó abriria, além disso, o
+caminho para um nó reivindicar a linha de outro — que é a falha
+anúncio-como-autorização que a issue nomeia.
+
+**O anúncio não concede nada.** `capabilities` no payload é o que a
+*configuração daquela máquina* permitiria (`allow_workspace_write`,
+`allow_git_delivery`), não o que ele pode fazer a um projeto. Isso continua em
+`project_authorizations`, escrito pelo operador. `record_node_announcement` não
+toca `enabled`, `health_reason` nem tabela de autorização alguma.
+
+**O anúncio é datado.** Fica gravado *quando* foi observado, e a rota devolve
+`inventory_stale`. A #73 pede que *"informação offline/obsoleta seja
+visivelmente distinguida de observação corrente"* — sem o carimbo, um inventário
+de três semanas atrás é indistinguível de um de agora.
+
+### Três fatos diferentes sob a palavra "engine"
+
+`EngineAvailability` separa o que seria tentador fundir:
+
+| campo | o que afirma | quando muda |
+|---|---|---|
+| `implemented` | existe um `Runner` no código para esse engine | numa release |
+| `available` | o binário respondeu **nesta** máquina | ao instalar/remover a CLI |
+| `version` | o que o binário disse de si | ao atualizar a CLI |
+
+Fundir os dois primeiros num só booleano apaga justamente os dois casos que o
+operador precisa ver: engine que este build suporta mas esta máquina não tem
+(*instale*) e engine presente na máquina que nenhum runner sabe dirigir (*falta
+código*). São problemas diferentes, com donos diferentes.
+
+`Runner.probe()` é medição, não declaração — e por isso **nunca levanta
+exceção**: um probe que estoura impediria o nó de conectar, e um nó invisível é
+pior que um nó com um engine marcado indisponível.
+
+### Saúde é derivada, nunca coluna
+
+`shared.protocol.node_health` é a única derivação, e a ordem dos testes importa:
+
+- nunca visto → `unknown` (não `offline`: "nunca conectou" e "esteve aqui e
+  sumiu" são problemas distintos, com correções distintas);
+- visto, mas fora da janela de graça → `offline`;
+- vivo, porém desabilitado ou com `health_reason` → `degraded`;
+- vivo e habilitado → `ok`.
+
+Um nó desligado lê `offline`, não `degraded`: chamar de degradada uma máquina
+que está simplesmente apagada inventa um incidente. Nada disso é persistido —
+reinício de gateway não pode deixar um nó afirmando saúde que ninguém remediu.
+
+### Caminho nenhum sai daqui
+
+O anúncio carrega `discovery_root_count`, um número, não as raízes. A pergunta
+de frota é *"este nó está configurado para descobrir alguma coisa?"*, e um
+contador a responde sem publicar o layout de disco da máquina em todo cliente.
+Vale a mesma regra da seção "Caminho absoluto" acima.

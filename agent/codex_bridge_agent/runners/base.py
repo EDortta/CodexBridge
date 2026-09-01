@@ -46,6 +46,30 @@ class RunningTask:
 
 
 @dataclass(frozen=True)
+class EngineProbe:
+    """The runtime answer to "is this engine's binary actually here, right now".
+
+    Issue #73 Stage 2. `capabilities()` is a compile-time claim -- "this code
+    knows how to drive engine X" -- true identically on every node running
+    the same build. `probe()` is the opposite kind of fact: it shells out to
+    the configured binary on THIS machine and reports what actually
+    answered. A node can be `implemented` (a `Runner` exists) and still not
+    `available` (the CLI was never installed here), or vice versa in theory
+    -- the two questions are independent, which is exactly why
+    `EngineAvailability` (`shared/protocol.py`) carries both instead of one
+    collapsed boolean.
+
+    `detail` never carries a filesystem path -- `shared/protocol.py`'s own
+    `EngineAvailability.detail` docstring says the same: a probe's job is to
+    answer "is it here", not to leak where "here" is.
+    """
+
+    available: bool
+    version: str | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
 class RunnerCapabilities:
     """What a provider can and cannot do, declared rather than assumed.
 
@@ -88,6 +112,8 @@ class Runner(Protocol):
     """
 
     def capabilities(self) -> RunnerCapabilities: ...
+
+    async def probe(self) -> EngineProbe: ...
 
     def is_known(self, task_id: str) -> bool: ...
 

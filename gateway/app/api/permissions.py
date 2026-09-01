@@ -190,6 +190,17 @@ MISSIONS_READ_ALL_PROJECTS = Action(
     summary="See missions in every project, not only the actor's own.",
 )
 
+# Issue #73 Stage 2: Bridge Nodes are fleet-wide, not scoped to a project --
+# there is no per-node visible-projects filter the way `PROJECTS_READ` has, so
+# this follows `SESSIONS_READ_ALL_PROJECTS`/`MISSIONS_READ_ALL_PROJECTS` and is
+# administrative rather than a new scope of its own.
+NODES_READ = Action(
+    name="nodes.read",
+    category=ADMINISTRATIVE,
+    scope=ADMIN_SCOPE,
+    summary="List Bridge Nodes and read one, across the whole fleet.",
+)
+
 EPICS_READ = Action(
     name="epics.read",
     category=READ,
@@ -281,6 +292,7 @@ CATALOGUE: tuple[Action, ...] = (
     DECISIONS_READ,
     DECISIONS_DECIDE,
     MISSIONS_READ_ALL_PROJECTS,
+    NODES_READ,
 )
 
 

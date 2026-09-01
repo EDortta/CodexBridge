@@ -67,7 +67,7 @@ version_router = APIRouter()
 # an optional `reason` field on its request body, recorded on the mission's
 # timeline. Additive only (new optional field; an existing client sending no
 # body is unaffected), so another minor bump.
-API_CONTRACT_VERSION = "1.6.0"
+API_CONTRACT_VERSION = "1.9.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a

@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 126 file(s) · 1181 symbol(s) indexed
-- Languages: config (2), python (122), shell (2)
+- 132 file(s) · 1246 symbol(s) indexed
+- Languages: config (2), python (128), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -73,6 +73,7 @@ gateway/
         epics.py  — "Epics — issue #8."
         issues.py  — "Issues — issue #8."
         missions.py  — "Missions: the mission-control view of the same run Sessions exposes — issue #7."
+        nodes.py  — "Bridge Nodes — the fleet visibility surface of issue #73, Stage 2."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
         projects.py  — "Projects and the project operational dashboard — issue #5."
         sessions.py  — "Agent sessions, their logs, and lifecycle control."
@@ -132,6 +133,7 @@ tests/
     test_agent_ack_handling.py  — "`task.ack` handling in the `/agent/ws` message loop — issue #16 council."
     test_agent_hub.py
     test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
+    test_agent_ws_identity.py  — "An envelope's `executor_id` is a claim; the handshake's is the fact."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
     test_claude_runner_real_process.py  — "ClaudeRunner against a REAL `claude` subprocess — not the fakes used elsewhere."
@@ -142,6 +144,7 @@ tests/
     test_epics_issues.py  — "Epics and issues — issue #8."
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
+    test_nodes.py  — "Bridge Node fleet visibility — issue #73 Stage 2."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
     test_project_and_eta_resolution.py  — "`resolve_project_reference` and `estimate_task_duration_seconds`."
@@ -152,6 +155,7 @@ tests/
     test_start_development_task.py  — "The `start_development_task` MCP tool -- the conversational entry point."
     test_store_and_mcp.py
   unit/
+    test_agent_announcement.py  — "The `hello` payload's real content -- issue #73 Stage 2."
     test_agent_auth.py  — "Credential resolution for the `/agent/ws` handshake — issue #15."
     test_agent_auto_project.py  — "`agent.codex_bridge_agent.config.resolve_auto_project` -- the opt-in"
     test_agent_service.py
@@ -166,10 +170,12 @@ tests/
     test_google_calendar.py  — "`gateway.app.services.google_calendar`, without ever touching Google."
     test_instructions.py  — "`resolve_issue_text` and `build_task_instruction`."
     test_main_import.py
+    test_node_store.py  — "`store.ensure_node_for_executor` / `upsert_registry` / `record_node_announcement`"
     test_notify.py  — "`gateway.app.services.notify` -- the task-finished completion email."
     test_policy.py
     test_rate_limiter_bounds.py  — "The limiter's key space must be bounded, or it becomes the resource exhausted."
     test_register_projects.py  — "`scripts/register_projects.py` -- diff-only, never applies anything."
+    test_runner_probe.py  — "`Runner.probe()` and `RunnerPool.probe_all()` -- issue #73 Stage 2."
     test_runner_registry.py  — "The runner abstraction itself: capability declarations and the pool's"
     test_schema_guard.py  — "The guard that refuses to serve a database the code has outgrown."
     test_security.py
@@ -213,9 +219,11 @@ tests/
 > The provider-neutral surface the executor dispatches a task through.
 
 - **`RunningTask`** *(class)* — "A live subprocess plus the control flags `pause`/`cancel`/`restart`"
+- **`EngineProbe`** *(class)* — "The runtime answer to "is this engine's binary actually here, right now"."
 - **`RunnerCapabilities`** *(class)* — "What a provider can and cannot do, declared rather than assumed."
 - **`Runner`** *(class)* — "One provider's implementation of "run this instruction, report back"."
   - `capabilities(self)` *(method)*
+  - `probe(self)` *(async method)*
   - `is_known(self, task_id)` *(method)*
   - `mark_dispatched(self, task_id)` *(method)*
   - `forget(self, task_id)` *(method)*
@@ -234,6 +242,7 @@ tests/
 - **`ClaudeRunner`** *(class)* — "Mirrors `runners.codex.CodexRunner`'s public surface method for method"
   - `__init__(self, settings)` *(method)*
   - `capabilities(self)` *(method)*
+  - `probe(self)` *(async method)* — "Issue #73 Stage 2: is `self.settings.claude_bin` actually here, right now."
   - `is_known(self, task_id)` *(method)*
   - `mark_dispatched(self, task_id)` *(method)*
   - `forget(self, task_id)` *(method)*
@@ -248,6 +257,7 @@ tests/
 - **`CodexRunner`** *(class)*
   - `__init__(self, settings)` *(method)*
   - `capabilities(self)` *(method)*
+  - `probe(self)` *(async method)* — "Issue #73 Stage 2: is `self.settings.codex_bin` actually here, right now."
   - `is_known(self, task_id)` *(method)* — "Whether this runner has any record of the task at all."
   - `mark_dispatched(self, task_id)` *(method)*
   - `forget(self, task_id)` *(method)*
@@ -271,6 +281,7 @@ tests/
   - `pause(self, task_id)` *(async method)*
   - `resume(self, task_id)` *(async method)*
   - `restart(self, task_id)` *(async method)*
+  - `probe_all(self)` *(async method)* — "Issue #73 Stage 2: one `EngineAvailability` for every `KNOWN_ENGINES`"
 
 ### `agent/codex_bridge_agent/runners/registry.py`
 
@@ -443,6 +454,13 @@ tests/
 - `get_mission_timeline(mission_id, response, cursor, limit, principal, session)` *(async function)* — "The mission's recorded events, oldest first — the order a narrative reads in."
 - `cancel_mission(mission_id, response, if_match, idempotency_key, body, principal, session)` *(async function)* — "Cancel a mission that is queued, waiting, running or awaiting approval."
 - `explain_mission(mission_id, principal, session)` *(async function)* — "A structured account of a mission's current state, assembled server-side."
+
+### `gateway/app/api/routes/nodes.py`
+
+> Bridge Nodes — the fleet visibility surface of issue #73, Stage 2.
+
+- `list_nodes_endpoint(principal, session)` *(async function)* — "Every Bridge Node in the fleet, ordered by id."
+- `get_node_detail(node_id, principal, session)` *(async function)* — "One node's fleet status."
 
 ### `gateway/app/api/routes/probes.py`
 
@@ -710,6 +728,10 @@ tests/
 - `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email, can_approve_push)` *(async function)*
 - `mark_executor_connected(session, executor_id, connected)` *(async function)*
 - `executor_is_live(executor)` — "Whether an executor should be presented as connected right now."
+- `ensure_node_for_executor(session, executor)` *(async function)* — "The Bridge Node bound to `executor`, creating and binding one if needed."
+- `record_node_announcement(session, executor, announcement)` *(async function)* — "Persist a HELLO's `NodeAnnouncement` onto the node bound to `executor`."
+- `list_nodes(session)` *(async function)* — "Every Bridge Node, ordered by id, paired with the executor bound to it."
+- `get_node(session, node_id)` *(async function)* — "One Bridge Node and its bound executor, or None if the node does not exist."
 - `next_dispatchable_task(session, executor_id)` *(async function)*
 - `update_task_state(session, task_id, state, error)` *(async function)*
 - `append_log(session, task_id, offset, stream, line)` *(async function)*
@@ -821,6 +843,9 @@ tests/
 - **`BindingState`** *(class)* — "Whether a Project-on-a-Node workspace is usable right now."
 - **`NodeHealth`** *(class)* — "A Bridge Node's operational condition, derived at read time."
 - **`DiscoveryRoot`** *(class)* — "One directory tree a node is configured to scan, and what that grants."
+- **`EngineAvailability`** *(class)* — "Whether one `AgentEngine` can actually run on this node, right now."
+- **`NodeAnnouncement`** *(class)* — "What a node reports about itself when it connects (`hello` payload)."
+- `node_health()` — "Derive a node's health from facts, at read time, never from a column."
 - **`ProjectRegistration`** *(class)*
 - **`ExecutorRegistration`** *(class)*
 - **`DeliveryRequest`** *(class)* — "What the requester authorized the executor to do with git, once a task"
@@ -918,6 +943,23 @@ tests/
 - `test_the_query_parameter_still_works_and_warns(client, caplog)`
 - `test_the_deprecation_warning_does_not_print_the_token(client, caplog)` — "A warning about a leaked credential must not leak it again."
 - `test_the_header_path_logs_no_deprecation_warning(client, caplog)`
+
+### `tests/integration/test_agent_ws_identity.py`
+
+> An envelope's `executor_id` is a claim; the handshake's is the fact.
+
+- **`FakeSocket`** *(class)* — "Just enough `WebSocket` for `agent_ws`: it accepts, sends, and runs dry."
+  - `__init__(self, incoming)` *(method)*
+  - `accept(self)` *(async method)*
+  - `close(self, code)` *(async method)*
+  - `send_json(self, payload)` *(async method)*
+  - `receive_json(self)` *(async method)*
+- `wired(monkeypatch)` *(async function)*
+- `test_a_node_announcing_itself_is_recorded(wired)` *(async function)* — "The honest path, so every refusal below is not passing for want of wiring."
+- `test_a_node_cannot_announce_on_another_nodes_behalf(wired)` *(async function)* — "The exploit: authenticate as one node, claim to be another."
+- `test_the_forged_envelope_is_dropped_not_redirected(wired)` *(async function)* — "Rewriting the claimed id to the authenticated one would be worse."
+- `test_a_forged_heartbeat_does_not_refresh_another_nodes_liveness(wired)` *(async function)* — "Liveness feeds `node_health`, so forging it forges the fleet's health."
+- `test_the_connection_survives_a_forged_envelope(wired)` *(async function)* — "Dropping the message must not drop the socket."
 
 ### `tests/integration/test_api_conventions.py`
 
@@ -1260,6 +1302,34 @@ tests/
 - `test_explain_on_a_blocked_mission_reports_it(api)` *(async function)*
 - `test_explain_of_an_invisible_mission_is_not_found(api)` *(async function)*
 
+### `tests/integration/test_nodes.py`
+
+> Bridge Node fleet visibility — issue #73 Stage 2.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)* — "A real app over a real database, seeded with one executor -> one node."
+- `mark_live(factory, executor_id)` *(async function)*
+- `set_last_seen(factory, executor_id, when)` *(async function)*
+- `set_node_enabled(factory, node_id, enabled)` *(async function)*
+- `set_capabilities_observed_at(factory, node_id, when)` *(async function)*
+- `announce(factory, executor_id, **overrides)` *(async function)*
+- `auth(token)`
+- `test_nodes_require_a_token(api)` *(async function)*
+- `test_an_expired_token_is_refused(api)` *(async function)*
+- `test_a_token_without_the_admin_scope_is_forbidden(api)` *(async function)*
+- `test_a_token_with_no_scopes_at_all_is_forbidden(api)` *(async function)*
+- `test_an_unknown_node_id_is_not_found(api)` *(async function)*
+- `test_list_returns_the_seeded_node(api)` *(async function)*
+- `test_detail_returns_the_seeded_node(api)` *(async function)*
+- `test_health_is_unknown_when_the_node_has_never_been_seen(api)` *(async function)*
+- `test_health_is_offline_when_last_seen_is_older_than_the_reconnect_grace(api)` *(async function)*
+- `test_health_is_degraded_when_live_but_disabled(api)` *(async function)*
+- `test_health_is_ok_when_live_and_enabled(api)` *(async function)*
+- `test_inventory_is_stale_before_any_announcement(api)` *(async function)*
+- `test_inventory_is_not_stale_right_after_an_announcement(api)` *(async function)*
+- `test_a_stale_capabilities_observed_at_is_reported_stale(api)` *(async function)*
+- `test_no_absolute_path_leaks_after_an_announcement(api)` *(async function)* — "`docs/api/README.md` "fields that must never ship" excludes absolute"
+
 ### `tests/integration/test_oauth_authorize.py`
 
 > The browser OAuth form — the *other* caller of the password check.
@@ -1500,6 +1570,14 @@ tests/
 - `test_mcp_continue_codex_session_dispatches_to_a_connected_idle_executor(mcp_hub_factory)` *(async function)* — "Issue #24: unlike its sibling `submit_codex_task` (same file), this"
 - `test_mcp_continue_codex_session_leaves_task_queued_when_the_executor_is_offline(mcp_hub_factory)` *(async function)* — "No regression on the pre-existing (disconnected) case: an offline"
 - `test_mcp_continue_codex_session_at_capacity_does_not_dispatch(mcp_hub_factory)` *(async function)* — "A connected executor already at its concurrency limit must not be sent"
+
+### `tests/unit/test_agent_announcement.py`
+
+> The `hello` payload's real content -- issue #73 Stage 2.
+
+- `test_hello_envelope_validates_as_node_announcement_with_derived_capabilities(monkeypatch, allow_workspace_write, allow_git_delivery, expected_present, expected_absent)` *(async function)*
+- `test_hello_envelope_carries_os_and_arch_but_never_the_hostname(monkeypatch)` *(async function)* — "Issue #73: node identity must not be inferred from mutable hostname --"
+- `test_build_announcement_falls_back_to_minimal_payload_when_probing_raises(monkeypatch)` *(async function)* — "`_build_announcement` must never cost the connection. If anything"
 
 ### `tests/unit/test_agent_auth.py`
 
@@ -1745,6 +1823,17 @@ tests/
 
 - `test_main_app_imports()`
 
+### `tests/unit/test_node_store.py`
+
+> `store.ensure_node_for_executor` / `upsert_registry` / `record_node_announcement`
+
+- `db_session()` *(async function)*
+- `test_ensure_node_for_executor_creates_and_binds_when_node_id_is_null(db_session)` *(async function)*
+- `test_ensure_node_for_executor_is_idempotent(db_session)` *(async function)*
+- `test_upsert_registry_produces_a_node_for_a_newly_added_executor(db_session)` *(async function)*
+- `test_record_node_announcement_writes_observation_fields(db_session)` *(async function)*
+- `test_record_node_announcement_leaves_enabled_health_reason_and_authorizations_untouched(db_session)` *(async function)* — "An announcement is an observation, never a grant (issue #73)."
+
 ### `tests/unit/test_notify.py`
 
 > `gateway.app.services.notify` -- the task-finished completion email.
@@ -1796,6 +1885,18 @@ tests/
 - `test_cli_writes_only_the_report_when_out_is_given(tmp_path)`
 - `test_cli_requires_at_least_one_target_file(tmp_path)`
 - `test_cli_rejects_user_id_without_user_registry_file(tmp_path)`
+
+### `tests/unit/test_runner_probe.py`
+
+> `Runner.probe()` and `RunnerPool.probe_all()` -- issue #73 Stage 2.
+
+- `test_probe_reports_unavailable_when_binary_not_on_path(monkeypatch, runner_cls, bin_field)` *(async function)*
+- `test_probe_reports_available_and_the_parsed_version(monkeypatch, runner_cls, bin_field)` *(async function)*
+- `test_probe_survives_oserror_without_raising(monkeypatch, runner_cls, bin_field)` *(async function)*
+- `test_probe_survives_a_timeout_without_raising(monkeypatch, runner_cls, bin_field, timeout_module)` *(async function)*
+- `test_probe_detail_never_carries_the_configured_binary_path(monkeypatch, runner_cls, bin_field)` *(async function)* — "`detail` is meant to explain a probe failure to an operator, never to"
+- `test_probe_all_returns_one_entry_per_known_engine()` *(async function)*
+- `test_probe_all_survives_one_runner_raising()` *(async function)*
 
 ### `tests/unit/test_runner_registry.py`
 
