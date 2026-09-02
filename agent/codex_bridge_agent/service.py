@@ -11,7 +11,12 @@ from uuid import uuid4
 
 import websockets
 
-from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects, resolve_auto_project
+from agent.codex_bridge_agent.config import (
+    AgentSettings,
+    load_agent_projects,
+    resolve_auto_project,
+    resolve_machine_token,
+)
 from agent.codex_bridge_agent.git_delivery import deliver_changes
 from agent.codex_bridge_agent.instructions import IssueResolutionError, build_task_instruction, resolve_issue_text
 from agent.codex_bridge_agent.issue_materialize import MaterializeError, materialize_epic
@@ -98,7 +103,9 @@ class AgentService:
         # to every access log between here and the gateway (#15).
         query = urlencode({"executor_id": self.settings.executor_id})
         url = f"{self.settings.gateway_ws_url}?{query}"
-        headers = {EXECUTOR_TOKEN_HEADER: self.settings.machine_token}
+        # Issue #76: prefers `machine_token_file` over the static field when
+        # set -- see `resolve_machine_token`'s docstring.
+        headers = {EXECUTOR_TOKEN_HEADER: resolve_machine_token(self.settings)}
         # `additional_headers` -- confirmed live against the installed
         # `websockets` 16.1.1 (2026-08-30). The older `extra_headers` kwarg
         # this line used to pass is accepted by `connect()`'s own signature

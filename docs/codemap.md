@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 152 file(s) · 1646 symbol(s) indexed
-- Languages: config (2), python (148), shell (2)
+- 159 file(s) · 1715 symbol(s) indexed
+- Languages: config (2), python (155), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -73,6 +73,7 @@ gateway/
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
         conversations.py  — "Conversations and contextual messaging — issue #10."
         decisions.py  — "Operational decisions: sensitive tasks held for a human to resolve — issue #6."
+        enrollment.py  — "Node enrollment — issue #76's minimal cut."
         epics.py  — "Epics — issue #8."
         events.py  — "Near-real-time delivery of what changed, and the backlog behind it — issue #13."
         issues.py  — "Issues — issue #8."
@@ -125,6 +126,7 @@ scripts/
   check_contract_compatibility.py  — "Refuse a contract change that breaks the minimum API version mobile still supports."
   diagnose.sh
   discover_projects.py  — "Read-only scan of a directory tree for real git repositories."
+  enroll_node.py  — "Redeem a node-enrollment invite and save the machine token locally."
   install.sh
   publish_contract.py  — "Publish the OpenAPI contract as a pinned, checksummed artifact."
   register_projects.py  — "Turn an operator-approved project list into a diff against the real"
@@ -156,12 +158,14 @@ tests/
     test_conversations.py  — "Conversations and contextual messaging — issue #10."
     test_decisions.py  — "Operational decisions — issue #6."
     test_dispatch_payload_engine_and_delivery.py  — "`AgentHub.dispatch_next` forwards engine/issue_ref/delivery to the executor."
+    test_enrollment.py  — "`POST /api/v1/nodes/invite` / `enroll` / `{id}/revoke` — issue #76 (minimal"
     test_epics_issues.py  — "Epics and issues — issue #8."
     test_events.py  — "The mobile event stream, its polling fallback, and notification preferences — issue #13."
     test_issue_materialize_result.py  — "`issue.materialize_result` handling in the `/agent/ws` message loop --"
     test_mcp_epics_issues.py  — "The epics/issues MCP tools -- issue #78."
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
+    test_node_enrollment_ws.py  — "Enrolled/revoked nodes at the `/agent/ws` handshake — issue #76 (minimal"
     test_nodes.py  — "Bridge Node fleet visibility — issue #73 Stage 2."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
@@ -176,6 +180,7 @@ tests/
     test_agent_announcement.py  — "The `hello` payload's real content -- issue #73 Stage 2."
     test_agent_auth.py  — "Credential resolution for the `/agent/ws` handshake — issue #15."
     test_agent_auto_project.py  — "`agent.codex_bridge_agent.config.resolve_auto_project` -- the opt-in"
+    test_agent_machine_token.py  — "`agent.codex_bridge_agent.config.resolve_machine_token` -- issue #76's"
     test_agent_service.py
     test_agent_service_materialize.py  — "`AgentService._handle_materialize` -- the `ISSUE_MATERIALIZE` handler on"
     test_apply_migrations.py  — "The migration runner, exercised against real throwaway databases."
@@ -185,12 +190,14 @@ tests/
     test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
     test_discover_projects.py  — "`scripts/discover_projects.py` -- read-only repo discovery."
     test_email_templates.py  — "`gateway.app.services.email_templates` -- pure rendering, no I/O."
+    test_enroll_node.py  — "`scripts/enroll_node.py` -- one HTTP call, one file write, issue #76."
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
     test_google_calendar.py  — "`gateway.app.services.google_calendar`, without ever touching Google."
     test_instructions.py  — "`resolve_issue_text` and `build_task_instruction`."
     test_issue_materialize.py  — "`materialize_epic` and the shared numbering scanner -- issue #78, Commit 2c."
     test_issue_render.py  — "`render_epic_markdown` -- issue #78, Commit 2a."
     test_main_import.py
+    test_node_enrollment.py  — "`store.create_node_invite` / `store.enroll_node` / `store.revoke_node` —"
     test_node_store.py  — "`store.ensure_node_for_executor` / `upsert_registry` / `record_node_announcement`"
     test_notify.py  — "`gateway.app.services.notify` -- the task-finished completion email."
     test_policy.py
@@ -212,6 +219,8 @@ tests/
 - **`AgentProjectConfig`** *(class)*
 - `load_agent_projects(path)`
 - `resolve_auto_project(project_id, root)` — "Fallback lookup for a `project_id` the static allowlist does not know."
+- **`MachineTokenFileError`** *(class)* — "`machine_token_file` is set but unusable -- always an operator problem,"
+- `resolve_machine_token(settings)` — "The machine token to present at the `/agent/ws` handshake."
 
 ### `agent/codex_bridge_agent/git_delivery.py`
 
@@ -466,6 +475,16 @@ tests/
 - `approve_decision(decision_id, body, response, if_match, idempotency_key, principal, session)` *(async function)*
 - `reject_decision(decision_id, body, response, if_match, idempotency_key, principal, session)` *(async function)*
 - `request_decision_revision(decision_id, body, response, if_match, idempotency_key, principal, session)` *(async function)*
+
+### `gateway/app/api/routes/enrollment.py`
+
+> Node enrollment — issue #76's minimal cut.
+
+- **`NodeInviteRequest`** *(class)*
+- **`NodeEnrollRequest`** *(class)*
+- `invite_node(body, principal, session)` *(async function)* — "Issue a one-time enrollment invite. The raw token is returned here and"
+- `enroll_node(body, session)` *(async function)* — "Redeem an invite and create the Executor+Node it authorizes."
+- `revoke_node(node_id, principal, session)` *(async function)* — "End `node_id`'s credential and close its live socket in this request."
 
 ### `gateway/app/api/routes/epics.py`
 
@@ -724,6 +743,7 @@ tests/
 - **`OAuthAuthorizationCodeModel`** *(class)*
 - **`OAuthAccessTokenModel`** *(class)*
 - **`OAuthRefreshTokenModel`** *(class)* — "A single-use credential that mints access tokens for one grant."
+- **`NodeInviteModel`** *(class)* — "A bearer credential that authorizes exactly one `POST /api/v1/nodes/enroll`."
 
 ### `gateway/app/services/agent_hub.py`
 
@@ -733,6 +753,7 @@ tests/
   - `is_connected(self, executor_id)` *(method)*
   - `register(self, executor_id, websocket)` *(async method)*
   - `unregister(self, executor_id)` *(async method)*
+  - `force_close(self, executor_id)` *(async method)* — "Close `executor_id`'s live socket, if it has one. Issue #76."
   - `send(self, executor_id, envelope)` *(async method)*
   - `dispatch_next(self, executor_id)` *(async method)*
   - `dispatch_available(self, executor_id)` *(async method)* — "Dispatches the next queued/waiting task to `executor_id`, if one is"
@@ -834,7 +855,7 @@ tests/
 
 ### `gateway/app/services/store.py`
 
-- `upsert_registry(session, executors, projects)` *(async function)*
+- `upsert_registry(session, executors, projects)` *(async function)* — "Seed executors and projects from `registry.json` — issue #76's contract"
 - `list_executors(session)` *(async function)*
 - `list_projects(session)` *(async function)*
 - `list_projects_for_executor(session, executor_id)` *(async function)*
@@ -854,6 +875,9 @@ tests/
 - `record_node_announcement(session, executor, announcement)` *(async function)* — "Persist a HELLO's `NodeAnnouncement` onto the node bound to `executor`."
 - `list_nodes(session)` *(async function)* — "Every Bridge Node, ordered by id, paired with the executor bound to it."
 - `get_node(session, node_id)` *(async function)* — "One Bridge Node and its bound executor, or None if the node does not exist."
+- `create_node_invite(session)` *(async function)* — "Issue a bearer enrollment invite. Only `hash_token(token)` is stored."
+- `enroll_node(session)` *(async function)* — "Redeem `invite_token`: create the Executor+Node it authorizes."
+- `revoke_node(session, node_id)` *(async function)* — "Revoke `node_id`'s credential. Returns `None` if the node does not exist."
 - `next_dispatchable_task(session, executor_id)` *(async function)*
 - `update_task_state(session, task_id, state, error)` *(async function)*
 - `append_log(session, task_id, offset, stream, line)` *(async function)*
@@ -946,6 +970,14 @@ tests/
 
 - **`Candidate`** *(class)*
 - `discover(root)`
+- `main(argv)`
+
+### `scripts/enroll_node.py`
+
+> Redeem a node-enrollment invite and save the machine token locally.
+
+- `enroll(gateway_url, invite_token, display_name)` — "Call `POST /api/v1/nodes/enroll`. Returns the parsed JSON body."
+- `write_machine_token(path, token)` — "Write `token` to `path` with `0600` permissions, creating parent dirs."
 - `main(argv)`
 
 ### `scripts/publish_contract.py`
@@ -1518,6 +1550,26 @@ tests/
 - `test_dispatch_omits_delivery_and_issue_ref_when_neither_was_requested(factory)` *(async function)*
 - `test_dispatch_forwards_engine_issue_ref_and_delivery_when_requested(factory)` *(async function)*
 
+### `tests/integration/test_enrollment.py`
+
+> `POST /api/v1/nodes/invite` / `enroll` / `{id}/revoke` — issue #76 (minimal
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)*
+- `auth(token)`
+- `test_admin_can_issue_an_invite(api)`
+- `test_a_read_only_caller_cannot_issue_an_invite(api)`
+- `test_the_raw_invite_token_never_lands_in_audit_events(api)` *(async function)*
+- `test_enroll_redeems_the_invite_and_the_node_connects_with_the_returned_token(api)`
+- `test_enroll_needs_no_bearer_token_at_all(api)` — "Decision #2: the node has no credential yet -- the invite is the gate."
+- `test_enroll_refuses_an_unknown_invite_token(api)`
+- `test_enroll_refuses_a_consumed_invite_the_second_time(api)`
+- `test_enroll_refuses_an_expired_invite(api)` *(async function)*
+- `test_the_raw_machine_token_never_lands_in_audit_events(api)` *(async function)*
+- `test_admin_can_revoke_an_enrolled_node(api)`
+- `test_a_read_only_caller_cannot_revoke(api)`
+- `test_revoking_an_unknown_node_answers_not_found(api)`
+
 ### `tests/integration/test_epics_issues.py`
 
 > Epics and issues — issue #8.
@@ -1777,6 +1829,23 @@ tests/
 - `test_explain_reports_mission_control_fields_alongside_evidence(api)` *(async function)*
 - `test_explain_on_a_blocked_mission_reports_it(api)` *(async function)*
 - `test_explain_of_an_invisible_mission_is_not_found(api)` *(async function)*
+
+### `tests/integration/test_node_enrollment_ws.py`
+
+> Enrolled/revoked nodes at the `/agent/ws` handshake — issue #76 (minimal
+
+- **`FakeSocket`** *(class)* — "Just enough `WebSocket` for `agent_ws`: it accepts, sends, and runs dry."
+  - `__init__(self, incoming)` *(method)*
+  - `accept(self)` *(async method)*
+  - `close(self, code)` *(async method)*
+  - `send_json(self, payload)` *(async method)*
+  - `receive_json(self)` *(async method)*
+- `wired(monkeypatch)` *(async function)*
+- `test_a_freshly_enrolled_node_connects_with_the_token_enroll_returned(wired)` *(async function)*
+- `test_a_freshly_enrolled_node_is_refused_with_the_wrong_token(wired)` *(async function)*
+- `test_revoke_closes_the_live_socket(wired)` *(async function)* — "`force_close` against a connection that is genuinely still registered."
+- `test_force_close_on_a_node_with_no_live_connection_reports_nothing_closed(wired)` *(async function)*
+- `test_a_revoked_node_is_refused_on_its_next_handshake(wired)` *(async function)*
 
 ### `tests/integration/test_nodes.py`
 
@@ -2079,6 +2148,18 @@ tests/
 - `test_a_symlinked_directory_outside_root_is_never_followed(tmp_path)` — "`walk_for_git_repos` never follows a symlink -- this proves the"
 - `test_the_resolved_id_matches_what_discover_projects_would_suggest(tmp_path)` — "Consistency property this module's own docstring promises: an id a"
 
+### `tests/unit/test_agent_machine_token.py`
+
+> `agent.codex_bridge_agent.config.resolve_machine_token` -- issue #76's
+
+- `test_falls_back_to_the_static_field_when_no_file_is_configured()`
+- `test_prefers_the_file_over_the_static_field_when_both_are_set(tmp_path)`
+- `test_strips_surrounding_whitespace_from_the_file_content(tmp_path)`
+- `test_raises_when_the_configured_file_does_not_exist(tmp_path)`
+- `test_raises_when_the_file_is_readable_by_group(tmp_path)`
+- `test_raises_when_the_file_is_empty(tmp_path)`
+- `test_a_correctly_permissioned_file_actually_works(tmp_path)` — "The positive control sitting next to every refusal above: `0600` is"
+
 ### `tests/unit/test_agent_service.py`
 
 - **`DummyWebSocket`** *(class)*
@@ -2237,6 +2318,16 @@ tests/
 - `test_no_inline_svg_shipped_in_a_real_email()` — "Outlook's desktop renderer does not support <svg> -- a broken icon in"
 - `test_no_rows_and_no_cta_omits_the_highlight_card()`
 
+### `tests/unit/test_enroll_node.py`
+
+> `scripts/enroll_node.py` -- one HTTP call, one file write, issue #76.
+
+- `test_write_machine_token_creates_the_file_with_0600(tmp_path)`
+- `test_write_machine_token_overwrites_an_existing_file(tmp_path)`
+- `test_main_enrolls_and_writes_the_token(tmp_path, monkeypatch)`
+- `test_main_reports_a_refused_invite_and_writes_nothing(tmp_path, monkeypatch)`
+- `test_main_strips_a_trailing_slash_from_the_gateway_url(monkeypatch, tmp_path)`
+
 ### `tests/unit/test_git_delivery.py`
 
 > `git_delivery.deliver_changes` against real throwaway git repos.
@@ -2336,6 +2427,22 @@ tests/
 
 - `test_main_app_imports()`
 
+### `tests/unit/test_node_enrollment.py`
+
+> `store.create_node_invite` / `store.enroll_node` / `store.revoke_node` —
+
+- `db_session()` *(async function)*
+- `test_create_node_invite_stores_only_the_hash(db_session)` *(async function)*
+- `test_create_node_invite_never_writes_the_raw_token_to_audit_events(db_session)` *(async function)*
+- `test_enroll_node_creates_executor_and_node_and_consumes_the_invite(db_session)` *(async function)*
+- `test_enroll_node_refuses_an_unknown_token(db_session)` *(async function)*
+- `test_enroll_node_refuses_a_consumed_invite_the_second_time(db_session)` *(async function)*
+- `test_claiming_an_invite_is_conditional_so_only_one_racer_wins(db_session)` *(async function)* — "The `WHERE consumed_at IS NULL` `enroll_node` relies on."
+- `test_enroll_node_refuses_an_expired_invite(db_session)` *(async function)*
+- `test_enroll_node_generates_an_id_rather_than_trusting_the_caller(db_session)` *(async function)* — "No `executor_id`/`node_id` field on the request at all -- this is what"
+- `test_revoke_node_disables_both_the_node_and_its_executor(db_session)` *(async function)*
+- `test_revoke_node_refuses_an_unknown_node(db_session)` *(async function)*
+
 ### `tests/unit/test_node_store.py`
 
 > `store.ensure_node_for_executor` / `upsert_registry` / `record_node_announcement`
@@ -2344,6 +2451,10 @@ tests/
 - `test_ensure_node_for_executor_creates_and_binds_when_node_id_is_null(db_session)` *(async function)*
 - `test_ensure_node_for_executor_is_idempotent(db_session)` *(async function)*
 - `test_upsert_registry_produces_a_node_for_a_newly_added_executor(db_session)` *(async function)*
+- `test_upsert_registry_never_overwrites_an_existing_executor_or_project_row(db_session)` *(async function)* — "The correction issue #76 item 4 makes: a revoked node stays revoked"
+- `test_upsert_registry_hashes_the_machine_token_of_a_new_executor(db_session)` *(async function)*
+- `test_upsert_registry_backfills_an_empty_machine_token_hash(db_session)` *(async function)* — "Issue #76's compatibility rule: a pre-#76 executor row, whose only"
+- `test_upsert_registry_does_not_overwrite_an_already_backfilled_hash(db_session)` *(async function)* — "The other half of the same rule: once the hash column is populated,"
 - `test_record_node_announcement_writes_observation_fields(db_session)` *(async function)*
 - `test_record_node_announcement_leaves_enabled_health_reason_and_authorizations_untouched(db_session)` *(async function)* — "An announcement is an observation, never a grant (issue #73)."
 

@@ -97,8 +97,19 @@ Códigos de fechamento no handshake:
 | Código | Significado |
 |---|---|
 | `4401` | nenhuma credencial apresentada |
-| `4403` | token não confere com o registro |
+| `4403` | token não confere com o registro, **ou** o nó foi revogado (issue #76: `admission_state == "revoked"`) — mesmo código para os dois motivos, sem estado novo no protocolo em si |
 | `4404` | `executor_id` desconhecido |
+
+Issue #76 (corte mínimo): o gateway não compara mais o token apresentado contra
+texto claro em `metadata_json` — compara `hash_token(presented)` contra
+`executors.machine_token_hash`. Isso é interno (`gateway/app/main.py:agent_ws`,
+`gateway/app/services/store.py:upsert_registry`) e não muda nada do que está
+descrito acima: mesmo header, mesmos códigos, mesma semântica de `4403` para
+quem já estava lá antes — só passa a valer também para um nó revogado por
+`POST /api/v1/nodes/{nodeId}/revoke` (`docs/api/README.md`, seção "Nodes and
+enrollment"). Um socket já aberto no momento da revogação é fechado com este
+mesmo `4403` por `AgentHub.force_close`, chamado pelo endpoint de revoke — não
+pelo laço de recepção deste handshake.
 
 Mensagens (`AgentMessageType` em `shared/protocol.py`):
 

@@ -22,6 +22,16 @@ class ExecutorModel(Base):
     # by that same migration, and the application treats a null as a pre-#73
     # row to repair at startup rather than as "no node".
     node_id: Mapped[str | None] = mapped_column(String(128), ForeignKey("nodes.id"), nullable=True)
+    # SHA-256 of the machine token, issue #76's minimal cut. `/agent/ws`
+    # (`gateway/app/main.py:agent_ws`) compares `hash_token(presented)`
+    # against this column instead of a clear-text value read out of
+    # `metadata_json`. Nullable for the same portability reason as `node_id`
+    # above: an executor seeded from `registry.json` before this column
+    # existed has none until `store.upsert_registry` backfills it from its
+    # own `metadata_json["machine_token"]` at startup -- see that function's
+    # docstring for why the backfill lives in Python rather than in the
+    # migration.
+    machine_token_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 class NodeModel(Base):
@@ -54,6 +64,18 @@ class NodeModel(Base):
     inventory_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     health_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Issue #76 (minimal cut): why this node may or may not be dispatched to,
+    # distinct from `enabled` -- `enabled` keeps meaning "may this node be
+    # given work right now" and is flipped alongside a revoke as a matter of
+    # course; `admission_state` is what `/agent/ws` actually gates the
+    # handshake on (`admission_state == "revoked"` closes the reconnect with
+    # `4403`), so a future reason to disable a node without revoking its
+    # credential does not have to reuse revocation's enforcement path.
+    # `"invited"`/`"suspended"` are states the issue anticipates; only
+    # `"enrolled"` (the default, and every pre-#76 row via
+    # `0013_node_enrollment.sql`'s backfill) and `"revoked"` are written by
+    # this cut.
+    admission_state: Mapped[str] = mapped_column(String(32), default="enrolled")
 
 
 class WorkspaceBindingModel(Base):
@@ -665,3 +687,38 @@ class OAuthRefreshTokenModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class NodeInviteModel(Base):
+    """A bearer credential that authorizes exactly one `POST /api/v1/nodes/enroll`.
+
+    Issue #76 (minimal cut). `id` is a separate surrogate key from
+    `token_hash` on purpose, unlike `OAuthAccessTokenModel`/
+    `OAuthRefreshTokenModel` (where the hash IS the primary key): an invite is
+    read by the operator surface that issued it (an id) as often as it is
+    looked up by the token a would-be node presents (`token_hash`), and those
+    are two different callers with two different keys on hand.
+
+    Protected by `expires_at` (15 minutes, decided at issue time, not
+    reconfigurable per invite) rather than by binding it to a claimed
+    hostname or machine identity -- `migrations/0009_control_plane.sql`
+    already refused to trust a hostname for node identity, for the same
+    reason: it is mutable and spoofable, and the TTL is the real boundary.
+
+    `token_hash` only. The raw value is returned once, in the
+    `POST /api/v1/nodes/invite` response body, and `gateway/app/api/routes/
+    enrollment.py` never passes it to `record_event` or to a log call.
+    """
+
+    __tablename__ = "node_invites"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True)
+    created_by: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consumed_by_node_id: Mapped[str | None] = mapped_column(
+        String(128), ForeignKey("nodes.id"), nullable=True
+    )
+    display_name_hint: Mapped[str | None] = mapped_column(String(255), nullable=True)

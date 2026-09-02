@@ -16,6 +16,7 @@ from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import decisions, missions, nodes as nodes_routes, probes, projects, sessions
 from gateway.app.api.routes import artifacts as artifacts_routes
 from gateway.app.api.routes import conversations as conversations_routes
+from gateway.app.api.routes import enrollment as enrollment_routes
 from gateway.app.api.routes import epics as epics_routes
 from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import issues as issues_routes
@@ -52,7 +53,7 @@ from gateway.app.services.audit import record_event
 from gateway.app.services.agent_hub import AgentHub
 from gateway.app.services.notify import notify_task_finished
 from shared.protocol import EXECUTOR_TOKEN_HEADER, AgentEnvelope, AgentMessageType, NodeAnnouncement, TaskState
-from shared.security import sanitize_log_line, secure_compare
+from shared.security import hash_token, sanitize_log_line, secure_compare
 
 
 configure_logging()
@@ -163,6 +164,13 @@ app.include_router(notifications_routes.router, dependencies=[Depends(RateLimitD
 # the fleet-wide `permissions.NODES_READ` action rather than the
 # project-scoped `visible_projects` pattern the routers above use.
 app.include_router(nodes_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# Node enrollment (issue #76, minimal cut): invite/enroll/revoke. Same
+# limiter and the same shared `rate_limiter` instance `POST /oauth/authorize`
+# uses -- `POST /api/v1/nodes/enroll` is, like that endpoint, unauthenticated
+# and mints a credential, so it gets the identical per-IP bucket rather than a
+# router-specific one.
+app.include_router(enrollment_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:
@@ -817,9 +825,33 @@ async def agent_ws(
         if executor is None:
             await websocket.close(code=4404)
             return
-        metadata = json.loads(executor.metadata_json)
-        accepted_machine_tokens = [metadata["machine_token"], *metadata.get("machine_tokens", [])]
-        if not any(secure_compare(presented, accepted) for accepted in accepted_machine_tokens):
+        # Issue #76: the credential this handshake checks is
+        # `executor.machine_token_hash`, never `metadata_json`. An executor
+        # seeded by `registry.json` still carries its clear-text token inside
+        # `metadata_json["machine_token"]`, but that is no longer what gets
+        # compared here -- `store.upsert_registry` backfills the hash column
+        # from it once, at startup, and this handshake reads only the hash
+        # from then on. A `machine_token_hash` that is still empty (a
+        # database that has not run `0013_node_enrollment.sql`, or an
+        # executor row nothing has ever backfilled) can never match a
+        # presented token, and is refused the same as a wrong one.
+        if not executor.machine_token_hash or not secure_compare(
+            hash_token(presented), executor.machine_token_hash
+        ):
+            await websocket.close(code=4403)
+            return
+        # Issue #76 decision #4: revoking closes a live socket via
+        # `AgentHub.force_close` (called from the revoke endpoint) AND refuses
+        # the next reconnect -- this is the refusal half. Checked on
+        # `admission_state`, not on `executor.enabled`: `enabled` already
+        # means something softer today (may this executor be given new work),
+        # is left alone by an ordinary disable, and gating the handshake on it
+        # would change behaviour for every executor an operator has ever
+        # disabled without revoking. A revoked node has no `node_id` only if
+        # its row predates issue #73 entirely, which cannot happen for a node
+        # enrolled through this cut.
+        node = await session.get(store.NodeModel, executor.node_id) if executor.node_id else None
+        if node is not None and node.admission_state == "revoked":
             await websocket.close(code=4403)
             return
 

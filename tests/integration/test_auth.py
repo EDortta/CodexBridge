@@ -31,6 +31,7 @@ from gateway.app.api.routes import artifacts as artifacts_routes
 from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import decisions as decisions_routes
+from gateway.app.api.routes import enrollment as enrollment_routes
 from gateway.app.api.routes import epics as epics_routes
 from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import issues as issues_routes
@@ -172,6 +173,7 @@ async def api(users_file, monkeypatch):
     app.include_router(events_routes.router)
     app.include_router(notifications_routes.router)
     app.include_router(nodes_routes.router)
+    app.include_router(enrollment_routes.router)
 
     async def override():
         async with factory() as s:
@@ -1322,6 +1324,12 @@ async def test_me_separates_read_operational_and_administrative(api) -> None:
 # describes.
 ENDPOINT_FOR_ACTION = {
     "nodes.read": ("GET", "/api/v1/nodes"),
+    # Neither test principal below carries `codexbridge.admin`, so both are
+    # refused by `require_action` itself before the body (invite) or the path
+    # id (revoke, which does not resolve to a real node) is ever looked at —
+    # same reasoning as `decisions.decide` below.
+    "nodes.invite": ("POST", "/api/v1/nodes/invite"),
+    "nodes.revoke": ("POST", "/api/v1/nodes/{id}/revoke"),
     "sessions.read": ("GET", "/api/v1/sessions"),
     "sessions.readLogs": ("GET", "/api/v1/sessions/{id}/logs"),
     "sessions.explainError": ("POST", "/api/v1/sessions/{id}/explain-error"),

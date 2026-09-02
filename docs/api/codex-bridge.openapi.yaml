@@ -556,6 +556,169 @@ paths:
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
 
+  /api/v1/nodes/invite:
+    post:
+      operationId: inviteNode
+      tags: [nodes]
+      summary: Issue a bearer enrollment invite for a new Bridge Node
+      description: |
+        Issue #76 (minimal cut). Administrative: gated by `nodes.invite`
+        (`codexbridge.admin`), the same fleet-wide posture as `nodes.read`.
+
+        `inviteToken` is returned **once**, in this response, and nowhere
+        else — never in an audit record, never in a log line. It is a bearer
+        credential valid for 15 minutes and exactly one redemption via
+        `POST /api/v1/nodes/enroll`; it is not bound to any claimed machine
+        identity, by design (a hostname is mutable and spoofable — the TTL is
+        the actual boundary).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayNameHint:
+                  type: string
+                  maxLength: 255
+                  description: Operator-supplied label to help recognise this invite later. Not the node's final `displayName` — that is set at `POST /api/v1/nodes/enroll`.
+      responses:
+        '201':
+          description: The invite. `inviteToken` will not be shown again.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, inviteToken, expiresAt]
+                properties:
+                  id:
+                    $ref: '#/components/schemas/Id'
+                  inviteToken:
+                    type: string
+                    description: Bearer credential for `POST /api/v1/nodes/enroll`. Shown once.
+                  expiresAt:
+                    $ref: '#/components/schemas/Timestamp'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/nodes/enroll:
+    post:
+      operationId: enrollNode
+      tags: [nodes]
+      summary: Redeem an invite and register a new Bridge Node
+      description: |
+        Issue #76 (minimal cut). **Unauthenticated by design**: the node
+        presenting `inviteToken` has no bearer credential of its own yet —
+        this call mints its first one. The invite itself is the gate, and it
+        is refused identically (`400 validation_failed`) whether it is
+        unknown, already consumed, or expired, so a probing caller cannot
+        tell which reason applied.
+
+        `machineToken` is returned **once**, in this response, and nowhere
+        else. Save it before doing anything else with it —
+        `scripts/enroll_node.py` writes it straight to a local file with
+        `0600` permissions for exactly this reason.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [inviteToken, displayName]
+              properties:
+                inviteToken:
+                  type: string
+                  minLength: 1
+                  maxLength: 4096
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+      responses:
+        '201':
+          description: The new node's identity and its machine token.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [nodeId, displayName, machineToken]
+                properties:
+                  nodeId:
+                    $ref: '#/components/schemas/NodeId'
+                  displayName:
+                    type: string
+                    maxLength: 255
+                  machineToken:
+                    type: string
+                    description: Credential for `X-Executor-Token` on `/agent/ws` (`docs/protocol.md`). Shown once.
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/nodes/{nodeId}/revoke:
+    post:
+      operationId: revokeNode
+      tags: [nodes]
+      summary: Revoke a Bridge Node's credential and close its live connection
+      description: |
+        Issue #76 (minimal cut). Administrative: gated by `nodes.revoke`
+        (`codexbridge.admin`).
+
+        Ends the node's credential (`admissionState` moves to `revoked`,
+        `enabled` to `false`) AND closes its socket if one is open right now,
+        in the same request — a revoke that only refused the next handshake
+        while leaving an already-open connection running would not actually
+        revoke anything. Does not touch the node's local checkouts; that is
+        an operator concern on the machine itself, not this API's.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/NodeId'
+      responses:
+        '200':
+          description: The node's post-revoke state.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, admissionState, enabled, connectionClosed]
+                properties:
+                  id:
+                    $ref: '#/components/schemas/NodeId'
+                  admissionState:
+                    type: string
+                    enum: [enrolled, revoked]
+                  enabled:
+                    type: boolean
+                  connectionClosed:
+                    type: boolean
+                    description: Whether a live socket was actually closed by this call, as opposed to none being open.
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
   /api/v1/sessions:
     get:
       operationId: listSessions
@@ -4062,7 +4225,7 @@ components:
         `discoveryRootCount` reflect the node's most recent HELLO
         announcement — an observation with a freshness timestamp
         (`capabilitiesObservedAt`), not a live query and not an authorization.
-      required: [id, displayName, enabled, health, inventoryStale]
+      required: [id, displayName, enabled, admissionState, health, inventoryStale]
       properties:
         id:
           $ref: '#/components/schemas/NodeId'
@@ -4071,6 +4234,16 @@ components:
           maxLength: 255
         enabled:
           type: boolean
+        admissionState:
+          type: string
+          enum: [enrolled, revoked]
+          description: |
+            Issue #76 (minimal cut). Why this node may or may not be
+            dispatched to, distinct from `enabled` above: `enabled` is
+            flipped alongside a revoke as a matter of course, but
+            `admissionState` is what `/agent/ws` actually gates the
+            handshake on. `invited`/`suspended` are anticipated by the issue
+            and not written by this build.
         health:
           $ref: '#/components/schemas/NodeHealth'
         healthReason:

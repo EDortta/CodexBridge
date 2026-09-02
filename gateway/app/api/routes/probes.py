@@ -97,6 +97,10 @@ version_router = APIRouter()
 # 1.9.0/1.10.0 are already claimed by concurrently open PRs (#61, #62, #75)
 # and another track of this same orchestration, none of which had merged
 # into this branch's ancestry when this line was written.
+# 1.9.0 -> 1.10.0: issue #76 (minimal cut) adds `POST /api/v1/nodes/invite`,
+# `POST /api/v1/nodes/enroll` and `POST /api/v1/nodes/{nodeId}/revoke`, and
+# `NodeStatus` gains `admissionState`. Additive only (three new endpoints, one
+# new response field on an existing schema), so another minor bump.
 API_CONTRACT_VERSION = "1.11.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the

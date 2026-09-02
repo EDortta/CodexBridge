@@ -61,6 +61,10 @@ REQUIRED_TABLES: dict[str, str] = {
     # which 0001 already created. This is the notification-preferences table, the
     # one thing that issue does persist.
     "notification_preferences": "0011_event_subscriptions.sql",
+    # Issue #76 (minimal cut): enrollment invites. Missing this table means
+    # `POST /api/v1/nodes/invite` and `POST /api/v1/nodes/enroll` fail on
+    # their first query with a driver error instead of at startup.
+    "node_invites": "0013_node_enrollment.sql",
 }
 
 # READ THIS BEFORE TRUSTING THE TABLE ABOVE.
@@ -104,12 +108,24 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
         "revoked_at": "0003_mobile_auth.sql",
         "grant_id": "0003_mobile_auth.sql",
     },
-    # Without this, a gateway upgraded past 0009 without running it would
+    # Without `node_id`, a gateway upgraded past 0009 without running it would
     # create `nodes` (a brand-new table `create_all` does add) while
     # `executors` silently kept no `node_id` — so every node lookup would find
     # a fleet of one project-less machines and report it as normal.
+    #
+    # Without `machine_token_hash` (issue #76), `/agent/ws` reads a column that
+    # does not exist on its very first handshake, and every existing executor
+    # is refused with a driver error that looks nothing like "run the
+    # migration".
     "executors": {
         "node_id": "0009_control_plane.sql",
+        "machine_token_hash": "0013_node_enrollment.sql",
+    },
+    # Without this, `revoke_node` (issue #76) writes a value the ORM believes
+    # in but the table has no column for, and the first revoke fails at commit
+    # time instead of at startup.
+    "nodes": {
+        "admission_state": "0013_node_enrollment.sql",
     },
     # Without these, a gateway upgraded past 0011 without running it starts
     # fine (both columns are nullable, so `create_all` on a FRESH database
