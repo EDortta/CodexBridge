@@ -380,6 +380,75 @@ class TaskLogModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ForgeOperationModel(Base):
+    """One request to act on an external forge (GitHub today) -- issue #80/#79,
+    WK-20260902-forge-wiring-and-gate (PR B3).
+
+    Deliberately its OWN table, not a `TaskModel` row, even though the two
+    look similar at a glance (both name a project/executor, both can sit
+    `awaiting_approval`, both resolve to a stored result). `TaskModel`'s
+    columns -- `mode`, `instruction`, `engine`, `timeout_seconds`,
+    `session_id`, `delivery_json` -- all encode one specific thing: a
+    coding-agent session running inside a sandbox on the executor. A forge
+    operation has none of that shape: it is `kind` + `repo_identity` + a
+    handful of optional fields, it runs OUTSIDE any sandbox as one bounded
+    `gh` subprocess call, and `shared.policy.forge_operation_policy_level`'s
+    own docstring is explicit that a forge write's `SENSITIVE` classification
+    has no bypass field, structurally, unlike `TaskModel`'s
+    `push_is_preauthorized`. Reusing `TaskModel` would mean inventing sentinel
+    `TaskMode`/`engine` values nothing else in this codebase understands, or
+    teaching `AgentHub.dispatch_next`/`RunnerPool` to special-case a `kind` no
+    coding session has -- a worse coupling than the small parallel table this
+    is. See `docs/protocol.md` and this migration's own commit message for
+    the fuller writeup of that decision.
+
+    What IS reused, deliberately, is the *vocabulary*: `state` values below
+    read like `TaskState` (`awaiting_approval`, `approved`, `dispatched`,
+    `completed`, `failed`) plus the two rejection outcomes
+    `shared.protocol.ApprovalDecision` already names (`rejected`,
+    `revision_requested`) -- an operator who has approved/rejected a task
+    decision before sees the same shape here, never a third semantics to
+    learn. `TaskState` itself is not imported: no forge operation is ever
+    `QUEUED`/`RUNNING`/`PAUSED`/etc, so importing it would invite a branch on
+    a value that can never occur here.
+
+    Lifecycle: a row is born `awaiting_approval` (a write --
+    `shared.policy.forge_operation_policy_level` returned `SENSITIVE`) or
+    `approved` (a read, i.e. `issue_list` -- never gated at all) ->
+    `approved` (a human decided, via `store.decide_forge_operation`) ->
+    `dispatched` (the `FORGE_OPERATION` envelope left the gateway, via
+    `AgentHub.dispatch_forge_operation`) -> `completed`/`failed` (a
+    `FORGE_OPERATION_RESULT` came back). Or terminal without ever
+    dispatching: `rejected`/`revision_requested`, set once by
+    `decide_task_approval`'s forge sibling and never revisited -- this
+    protocol has no message that reopens a forge operation, the same gap
+    `routes/decisions.py` documents for `TaskModel`.
+    """
+
+    __tablename__ = "forge_operations"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    executor_id: Mapped[str] = mapped_column(String(128), ForeignKey("executors.id"))
+    kind: Mapped[str] = mapped_column(String(32))
+    repo_identity: Mapped[str] = mapped_column(String(200))
+    # The full `ForgeOperationRequest`, serialized -- `title`/`body`/
+    # `issue_number`/`state` all live here rather than as their own columns,
+    # the same "one JSON blob, not five nullable columns" choice
+    # `TaskModel.delivery_json` already makes for `DeliveryRequest`.
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    state: Mapped[str] = mapped_column(String(32))
+    # `ForgeOutcome.to_dict()`, once a `FORGE_OPERATION_RESULT` resolves this
+    # row. Null until then -- same "what happened, not what was asked"
+    # split `TaskModel.result_json` already has against `payload_json` above.
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_by_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    requested_by_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    approval_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AuditEventModel(Base):
     __tablename__ = "audit_events"
 

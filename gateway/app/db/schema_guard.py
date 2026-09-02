@@ -52,6 +52,8 @@ REQUIRED_TABLES: dict[str, str] = {
     "scm_associations": "0009_control_plane.sql",
     "project_authorizations": "0009_control_plane.sql",
     "discovered_resources": "0009_control_plane.sql",
+    # Issue #80/#79's human approval gate for a forge write.
+    "forge_operations": "0012_forge_operations.sql",
 }
 
 REQUIRED_COLUMNS: dict[str, dict[str, str]] = {

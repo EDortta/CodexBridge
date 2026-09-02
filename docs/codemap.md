@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-forge-github-module`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-forge-github-module map`
+> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-forge-wiring-and-gate`
+> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-forge-wiring-and-gate map`
 
 ## Summary
 
-- 133 file(s) · 1235 symbol(s) indexed
-- Languages: config (2), python (129), shell (2)
+- 134 file(s) · 1257 symbol(s) indexed
+- Languages: config (2), python (130), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -145,6 +145,7 @@ tests/
     test_decisions.py  — "Operational decisions — issue #6."
     test_dispatch_payload_engine_and_delivery.py  — "`AgentHub.dispatch_next` forwards engine/issue_ref/delivery to the executor."
     test_epics_issues.py  — "Epics and issues — issue #8."
+    test_forge_wiring.py  — "End-to-end wiring for a forge operation -- issue #80/#79,"
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
@@ -625,6 +626,7 @@ tests/
 - `mcp_endpoint(request, authorization, session)` *(async function)*
 - `handle_task_ack(session, envelope)` *(async function)* — "Handles one `task.ack` from the `/agent/ws` message loop."
 - `handle_task_cancelled(session, envelope)` *(async function)* — "Handles one `task.cancelled` ack from the `/agent/ws` message loop."
+- `handle_forge_operation_result(session, envelope)` *(async function)* — "Handles one `forge.operation_result` from the `/agent/ws` message loop."
 - `agent_ws(websocket, executor_id, token, x_executor_token)` *(async function)*
 
 ### `gateway/app/mcp/server.py`
@@ -651,6 +653,7 @@ tests/
 - **`ConversationMessageModel`** *(class)* — "One message in a conversation. Immutable once written — no update path."
 - **`ConversationReadStateModel`** *(class)* — "How far one actor has read into one conversation."
 - **`TaskLogModel`** *(class)*
+- **`ForgeOperationModel`** *(class)* — "One request to act on an external forge (GitHub today) -- issue #80/#79,"
 - **`AuditEventModel`** *(class)*
 - **`MessageReceiptModel`** *(class)*
 - **`IdempotencyRecordModel`** *(class)* — "A completed write, keyed so an offline retry replays instead of repeating."
@@ -669,6 +672,7 @@ tests/
   - `send(self, executor_id, envelope)` *(async method)*
   - `dispatch_next(self, executor_id)` *(async method)*
   - `dispatch_available(self, executor_id)` *(async method)* — "Dispatches the next queued/waiting task to `executor_id`, if one is"
+  - `dispatch_forge_operation(self, operation_id)` *(async method)* — "Sends one approved forge operation to its executor, if connected."
   - `mark_task_finished(self, executor_id, task_id)` *(async method)* — "Releases the slot `task_id` held and, if the executor is still"
 - `hub_envelope(executor_id, message_type, payload)` — "Build a message for an executor."
 
@@ -745,6 +749,11 @@ tests/
 - `update_task_state(session, task_id, state, error)` *(async function)*
 - `append_log(session, task_id, offset, stream, line)` *(async function)*
 - `decide_task_approval(session, task_id, decision, reason)` *(async function)*
+- `create_forge_operation(session)` *(async function)* — "Creates a forge operation row, gated exactly like `create_task` gates a"
+- `get_forge_operation(session, operation_id)` *(async function)*
+- `decide_forge_operation(session, operation_id, decision, reason)` *(async function)* — "The human decision a forge write is born waiting for. Mirrors"
+- `mark_forge_operation_dispatched(session, operation_id)` *(async function)* — "Flips an `approved` forge operation to `dispatched`. The gate itself:"
+- `resolve_forge_operation(session, operation_id, outcome)` *(async function)* — "Resolves a forge operation from its `FORGE_OPERATION_RESULT` outcome"
 - `recover_tasks_after_startup(session)` *(async function)*
 - `get_logs(session, task_id, offset, limit)` *(async function)*
 - `store_result(session, task_id, result, final_state)` *(async function)*
@@ -1228,6 +1237,20 @@ tests/
 - `test_the_epic_list_cursor_walks_every_epic_once(api)` *(async function)*
 - `test_list_epics_filters_by_status(api)` *(async function)*
 
+### `tests/integration/test_forge_wiring.py`
+
+> End-to-end wiring for a forge operation -- issue #80/#79,
+
+- `db()` *(async function)* — "A real database and session factory, seeded with one executor/project"
+- `test_forge_write_is_born_awaiting_approval(db)` *(async function)*
+- `test_dispatch_refuses_a_write_still_awaiting_approval(db)` *(async function)* — "THE required test: a forge write cannot be dispatched without passing"
+- `test_rejected_forge_operation_never_dispatches(db)` *(async function)* — "A human `REJECTED` decision is just as terminal as never deciding at"
+- `test_issue_list_read_does_not_stop_at_the_gate(db)` *(async function)* — "Positive control for the two refusals above, and for issue #80/#79's"
+- `test_create_forge_operation_refuses_a_project_not_allowed_for_the_executor(db)` *(async function)* — "The gateway's OWN allowlist check (`executors.metadata_json`), separate"
+- `test_full_pipeline_write_completes_after_a_human_approves(db, tmp_path, monkeypatch)` *(async function)*
+- `test_executor_kill_switch_refuses_even_after_gateway_approval(db, tmp_path, monkeypatch)` *(async function)* — "The two locks are independent: a gateway approval is not, by itself,"
+- `test_project_outside_executor_local_allowlist_refuses_even_after_gateway_approval(db, tmp_path, monkeypatch)` *(async function)* — "The executor's own project allowlist is the second independent gate:"
+
 ### `tests/integration/test_mcp_reminders.py`
 
 > The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer.
@@ -1591,6 +1614,11 @@ tests/
 - `test_handle_dispatch_sends_read_only_for_a_read_mode_task(tmp_path)` *(async function)*
 - `test_handle_dispatch_sends_workspace_write_for_a_write_mode_task(tmp_path)` *(async function)*
 - `test_handle_dispatch_honours_the_machine_level_read_only_override(tmp_path)` *(async function)* — "A write-mode task still only gets `read-only` when this executor's own"
+- `test_forge_operation_runs_when_allowed_and_project_is_known(tmp_path, monkeypatch)` *(async function)* — "Positive control for every refusal test below: with the kill switch on"
+- `test_forge_operation_refuses_when_executor_kill_switch_is_off(tmp_path, monkeypatch)` *(async function)* — "The machine-level trava: off by default, and independent of anything"
+- `test_forge_operation_refuses_for_a_project_outside_the_local_allowlist(tmp_path, monkeypatch)` *(async function)* — "The executor's own project allowlist is a second, independent gate --"
+- `test_forge_operation_refuses_an_invalid_payload_without_touching_gh(tmp_path, monkeypatch)` *(async function)* — "A malformed envelope (unknown `kind`) is refused at parse time, the"
+- `test_forge_operation_write_kind_reaches_gh_when_approved_and_allowed(tmp_path, monkeypatch)` *(async function)* — "Positive control proving a WRITE kind (not just the read-only"
 
 ### `tests/unit/test_apply_migrations.py`
 

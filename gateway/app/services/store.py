@@ -15,6 +15,7 @@ from gateway.app.models.entities import (
     ConversationReadStateModel,
     EpicModel,
     ExecutorModel,
+    ForgeOperationModel,
     IssueModel,
     MessageReceiptModel,
     OAuthAccessTokenModel,
@@ -40,12 +41,13 @@ from gateway.app.services.issue_types import (
     ISSUE_STATUSES,
     IssuePlanningError,
 )
-from shared.policy import evaluate_task_policy
+from shared.policy import evaluate_task_policy, forge_operation_policy_level
 from shared.protocol import (
     ApprovalDecision,
     DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
     DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
     ExecutorRegistration,
+    ForgeOperationRequest,
     PolicyLevel,
     ProjectRegistration,
     STOPPABLE_TASK_STATES,
@@ -572,6 +574,202 @@ async def decide_task_approval(
     await session.commit()
     await session.refresh(task)
     return task
+
+
+# --------------------------------------------------------------------------
+# Forge operations -- issue #80/#79, WK-20260902-forge-wiring-and-gate (PR B3)
+#
+# A deliberately SEPARATE approval path from `create_task`/`decide_task_approval`
+# above, not a reuse of them. See `gateway/app/models/entities.py::ForgeOperationModel`'s
+# docstring for the reasoning against folding this into `TaskModel`, and this
+# work's own commit message for the fuller writeup. What IS shared with the
+# task path: the vocabulary (`ApprovalDecision`, the same "awaiting_approval
+# born SENSITIVE, resolved by a human" shape `create_task`/`decide_task_approval`
+# already established for issue #6) -- an operator who has approved or rejected
+# a task decision before sees the same shape here, never a third semantics.
+#
+# `shared.policy.forge_operation_policy_level` is the other half of the gate
+# these two functions enforce: it returns SENSITIVE for every write kind,
+# unconditionally, with no field anywhere that can change that -- so
+# `create_forge_operation` below has no equivalent of `create_task`'s
+# `push_preauthorized`/`can_approve_push` branch, on purpose. A forge write
+# ALWAYS starts `awaiting_approval`; the only way out is a real human
+# decision through `decide_forge_operation`.
+# --------------------------------------------------------------------------
+
+FORGE_OPERATION_DECIDABLE_STATE = "awaiting_approval"
+
+# `ApprovalDecision` value -> the `forge_operations.state` it resolves to.
+# `REVISION_REQUESTED` gets its own terminal value rather than collapsing
+# into `rejected`, the same distinction `ApprovalDecision`'s own docstring
+# draws for `TaskModel` ("tell an operator 'send this back for changes' apart
+# from 'this will not run'") -- even though, like there, this protocol has no
+# message that reopens a forge operation for editing, so both still just stop.
+_FORGE_DECISION_TO_STATE: dict[ApprovalDecision, str] = {
+    ApprovalDecision.APPROVED: "approved",
+    ApprovalDecision.REJECTED: "rejected",
+    ApprovalDecision.REVISION_REQUESTED: "revision_requested",
+}
+
+
+async def create_forge_operation(
+    session: AsyncSession,
+    *,
+    executor_id: str,
+    project_id: str,
+    operation: ForgeOperationRequest,
+    requested_by_user_id: str | None = None,
+    requested_by_email: str | None = None,
+) -> ForgeOperationModel:
+    """Creates a forge operation row, gated exactly like `create_task` gates a
+
+    sensitive task -- same checks, same audit shape, different table. A write
+    (`forge_operation_policy_level(operation.kind) is SENSITIVE`) is born
+    `awaiting_approval`; a read (`issue_list`) is born `approved` -- ready to
+    dispatch immediately, because `shared.policy.forge_operation_policy_level`
+    never gates it at all.
+    """
+    executor = await session.get(ExecutorModel, executor_id)
+    if executor is None or not executor.enabled:
+        raise ValueError("unknown_or_disabled_executor")
+    project = await session.get(ProjectModel, project_id)
+    if project is None or not project.enabled:
+        raise ValueError("unknown_or_disabled_project")
+    executor_metadata = json.loads(executor.metadata_json)
+    if project_id not in executor_metadata.get("allowed_projects", []):
+        raise ValueError("project_not_allowed_for_executor")
+
+    level = forge_operation_policy_level(operation.kind)
+    state = FORGE_OPERATION_DECIDABLE_STATE if level == PolicyLevel.SENSITIVE else "approved"
+
+    row = ForgeOperationModel(
+        id=str(uuid4()),
+        project_id=project_id,
+        executor_id=executor_id,
+        kind=operation.kind.value,
+        repo_identity=operation.repo_identity,
+        payload_json=operation.model_dump_json(),
+        state=state,
+        requested_by_user_id=requested_by_user_id,
+        requested_by_email=requested_by_email,
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(row)
+    await record_event(
+        session,
+        "forge_operation",
+        row.id,
+        "forge_operation.created",
+        {
+            "state": row.state,
+            "policy_level": level.value,
+            "kind": row.kind,
+            "repo_identity": row.repo_identity,
+            "requested_by_user_id": requested_by_user_id,
+            "requested_by_email": requested_by_email,
+        },
+    )
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def get_forge_operation(session: AsyncSession, operation_id: str) -> ForgeOperationModel | None:
+    return await session.get(ForgeOperationModel, operation_id)
+
+
+async def decide_forge_operation(
+    session: AsyncSession,
+    operation_id: str,
+    decision: ApprovalDecision,
+    reason: str | None = None,
+) -> ForgeOperationModel:
+    """The human decision a forge write is born waiting for. Mirrors
+
+    `decide_task_approval`'s shape (same precondition, same audit event
+    style) without sharing its table or its dispatch side effect: approving
+    here only flips `state` to `approved` -- it is `AgentHub.dispatch_forge_operation`,
+    called separately, that actually sends the `FORGE_OPERATION` envelope,
+    the same separation `decide_task_approval`/`hub.dispatch_available` have
+    for tasks (`gateway/app/api/routes/decisions.py:_resolve` is what glues
+    them there; nothing in this PR adds that glue at the route level -- see
+    this work's own commit message).
+    """
+    row = await session.get(ForgeOperationModel, operation_id)
+    if row is None:
+        raise ValueError("unknown_forge_operation")
+    if row.state != FORGE_OPERATION_DECIDABLE_STATE:
+        raise ValueError("forge_operation_not_awaiting_approval")
+    row.approval_reason = reason
+    row.state = _FORGE_DECISION_TO_STATE[decision]
+    if row.state != "approved":
+        row.resolved_at = datetime.now(timezone.utc)
+    await record_event(
+        session,
+        "forge_operation",
+        row.id,
+        "forge_operation.approval_decision",
+        {"decision": decision.value, "reason": reason, "state": row.state},
+    )
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def mark_forge_operation_dispatched(session: AsyncSession, operation_id: str) -> ForgeOperationModel:
+    """Flips an `approved` forge operation to `dispatched`. The gate itself:
+
+    raises rather than flipping a row that is not `approved`, so a caller
+    cannot send a `FORGE_OPERATION` envelope by construction unless a human
+    (or, for a read, nobody -- see `create_forge_operation`) already put this
+    row in the one state that means "safe to run". Called by
+    `AgentHub.dispatch_forge_operation` AFTER it has already confirmed the
+    executor is connected -- so a row never reads `dispatched` while no
+    envelope was actually sent.
+    """
+    row = await session.get(ForgeOperationModel, operation_id)
+    if row is None:
+        raise ValueError("unknown_forge_operation")
+    if row.state != "approved":
+        raise ValueError("forge_operation_not_approved")
+    row.state = "dispatched"
+    await record_event(
+        session,
+        "forge_operation",
+        row.id,
+        "forge_operation.dispatched",
+        {"executor_id": row.executor_id},
+    )
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def resolve_forge_operation(session: AsyncSession, operation_id: str, outcome: dict) -> ForgeOperationModel:
+    """Resolves a forge operation from its `FORGE_OPERATION_RESULT` outcome
+
+    (`agent.codex_bridge_agent.forge.base.ForgeOutcome.to_dict()`). `state`
+    becomes `completed` when the executor reports `outcome == "succeeded"`,
+    `failed` for `"refused"`/`"skipped"`/anything else -- the same two-way
+    split `store_result` draws for a task's `final_state`, just against the
+    forge vocabulary instead of `TaskState`.
+    """
+    row = await session.get(ForgeOperationModel, operation_id)
+    if row is None:
+        raise ValueError("unknown_forge_operation")
+    row.result_json = json.dumps(outcome, ensure_ascii=True)
+    row.state = "completed" if outcome.get("outcome") == "succeeded" else "failed"
+    row.resolved_at = datetime.now(timezone.utc)
+    await record_event(
+        session,
+        "forge_operation",
+        row.id,
+        "forge_operation.result",
+        {"state": row.state, "outcome": outcome.get("outcome"), "reason": outcome.get("reason")},
+    )
+    await session.commit()
+    await session.refresh(row)
+    return row
 
 
 async def recover_tasks_after_startup(session: AsyncSession) -> dict[str, int]:
