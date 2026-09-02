@@ -3,6 +3,8 @@ __pycache__/
 .pytest_cache/
 .coverage
 codex_bridge.db
+# Local database snapshots. They carry real rows; see backups/README.md.
+backups/
 dist/
 build/
 *.egg-info/
