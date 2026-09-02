@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-09-01 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--gh-73-control`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--gh-73-control map`
+> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-forge-protocol-and-policy`
+> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-forge-protocol-and-policy map`
 
 ## Summary
 
-- 126 file(s) · 1181 symbol(s) indexed
-- Languages: config (2), python (122), shell (2)
+- 127 file(s) · 1195 symbol(s) indexed
+- Languages: config (2), python (123), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -162,6 +162,7 @@ tests/
     test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
     test_discover_projects.py  — "`scripts/discover_projects.py` -- read-only repo discovery."
     test_email_templates.py  — "`gateway.app.services.email_templates` -- pure rendering, no I/O."
+    test_forge_policy.py  — "The forge vocabulary and policy issue #80/#79 build the write gate on."
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
     test_google_calendar.py  — "`gateway.app.services.google_calendar`, without ever touching Google."
     test_instructions.py  — "`resolve_issue_text` and `build_task_instruction`."
@@ -795,6 +796,7 @@ tests/
 - `policy_level_for_mode(mode)`
 - `push_branch_is_allowed(delivery)` — "Whether `delivery.branch` is a branch a pre-authorized push may target."
 - `push_is_preauthorized(request)` — "Whether this request's own `delivery` block authorizes a push."
+- `forge_operation_policy_level(kind)` — "The policy tier a forge operation is classified at -- issue #80/#79."
 - `evaluate_task_policy(request)`
 
 ### `shared/project_discovery.py`
@@ -824,6 +826,8 @@ tests/
 - **`ProjectRegistration`** *(class)*
 - **`ExecutorRegistration`** *(class)*
 - **`DeliveryRequest`** *(class)* — "What the requester authorized the executor to do with git, once a task"
+- **`ForgeOperationKind`** *(class)* — "The only things a forge operation may do, per issue #80/#79."
+- **`ForgeOperationRequest`** *(class)* — "One forge operation a `FORGE_OPERATION` envelope may carry."
 - **`SubmitTaskRequest`** *(class)*
 - **`ContinueSessionRequest`** *(class)*
 - **`AgentEnvelope`** *(class)*
@@ -1669,6 +1673,22 @@ tests/
 - `test_no_style_block_and_no_class_attribute()` — "Email clients strip <style> blocks and class selectors unpredictably"
 - `test_no_inline_svg_shipped_in_a_real_email()` — "Outlook's desktop renderer does not support <svg> -- a broken icon in"
 - `test_no_rows_and_no_cta_omits_the_highlight_card()`
+
+### `tests/unit/test_forge_policy.py`
+
+> The forge vocabulary and policy issue #80/#79 build the write gate on.
+
+- `test_issue_list_is_read_and_every_other_kind_is_sensitive()` — "Iterates `ForgeOperationKind` itself, not a literal list of names."
+- `test_every_write_kind_is_sensitive_across_every_plausible_field_combination()` — "The property that must survive any future field added to the request."
+- `test_repo_identity_pattern_accepts_plausible_identities(value)`
+- `test_repo_identity_pattern_rejects_dangerous_or_malformed_identities(value)` — "Mirrors the role `_REMOTE_NAME_PATTERN` plays for git remotes."
+- `test_forge_operation_request_refuses_a_bad_repo_identity_at_parse()`
+- `test_issue_comment_without_issue_number_is_refused_at_parse()`
+- `test_issue_close_without_issue_number_is_refused_at_parse()`
+- `test_issue_open_without_title_is_refused_at_parse()`
+- `test_issue_list_requires_neither_title_nor_issue_number()`
+- `test_state_outside_the_closed_set_is_refused_at_parse()`
+- `test_forge_message_types_exist_and_are_distinct_from_task_dispatch()` — "Sanity check on the two new `AgentMessageType` members this PR adds."
 
 ### `tests/unit/test_git_delivery.py`
 

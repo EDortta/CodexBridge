@@ -70,6 +70,27 @@ class AgentSettings(BaseSettings):
     git_author_name: str = "CodexBridge"
     git_author_email: str = "codexbridge@invalid"
     git_push_timeout_seconds: float = 120
+    # WK-20260902-forge-protocol-and-policy, issue #80/#79. Same "last
+    # barrier on this machine" shape as `allow_git_delivery` above, and the
+    # same reasoning: a new capability with no existing behavior to
+    # preserve, so the safe default is off until an operator turns it on.
+    # This flag alone is table stakes, not a bypass -- even with it True,
+    # every forge WRITE still stops at the human approval gate
+    # (`shared.policy.forge_operation_policy_level`: there is no
+    # pre-authorization for a forge write, structurally, on purpose). Turning
+    # this on lets an executor run forge operations at all; it cannot let one
+    # skip approval.
+    allow_forge_operations: bool = False
+    # The `gh` CLI binary this executor invokes for forge operations -- the
+    # same "operator can point at a shim or a pinned path" role `codex_bin`
+    # and `claude_bin` already play above. Not called anywhere yet: this PR
+    # is protocol and policy only.
+    forge_gh_bin: str = "gh"
+    # Upper bound on a single forge operation (issue open/comment/close/list).
+    # Short on purpose: a forge operation is one bounded API call through
+    # `gh`, not a coding-agent session -- `git_push_timeout_seconds` above
+    # sets the analogous bound for git delivery.
+    forge_operation_timeout_seconds: float = 60
 
     model_config = SettingsConfigDict(env_prefix="CODEX_BRIDGE_AGENT_", env_file=".env")
 
