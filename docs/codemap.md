@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-forge-wiring-and-gate`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-forge-wiring-and-gate map`
+> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-forge-binding`
+> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-forge-binding map`
 
 ## Summary
 
-- 134 file(s) · 1257 symbol(s) indexed
-- Languages: config (2), python (130), shell (2)
+- 138 file(s) · 1309 symbol(s) indexed
+- Languages: config (2), python (134), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -74,7 +74,7 @@ gateway/
         __init__.py  — "HTTP routers for the mobile contract surface."
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
         conversations.py  — "Conversations and contextual messaging — issue #10."
-        decisions.py  — "Operational decisions: sensitive tasks held for a human to resolve — issue #6."
+        decisions.py  — "Operational decisions: sensitive tasks AND sensitive forge writes held for"
         epics.py  — "Epics — issue #8."
         issues.py  — "Issues — issue #8."
         missions.py  — "Missions: the mission-control view of the same run Sessions exposes — issue #7."
@@ -108,6 +108,7 @@ gateway/
       audit.py
       conversation_types.py  — "Closed vocabulary for conversation context references, and their error."
       email_templates.py  — "Branded HTML for every CodexBridge transactional email."
+      forge_routing.py  — "The one place that answers "is this project bound to a forge repository?""
       google_calendar.py  — "A Google Calendar client for reminders, built to be tested without ever"
       issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
       metrics.py
@@ -141,10 +142,12 @@ tests/
     test_auth.py  — "The mobile credential lifecycle — issue #4."
     test_claude_runner_real_process.py  — "ClaudeRunner against a REAL `claude` subprocess — not the fakes used elsewhere."
     test_codex_runner_real_process.py  — "CodexRunner against a REAL `codex` subprocess — not the fake used everywhere else."
+    test_codex_sandbox_has_no_network.py  — "Re-executable proof that `codex exec -s workspace-write` has no network --"
     test_conversations.py  — "Conversations and contextual messaging — issue #10."
     test_decisions.py  — "Operational decisions — issue #6."
     test_dispatch_payload_engine_and_delivery.py  — "`AgentHub.dispatch_next` forwards engine/issue_ref/delivery to the executor."
     test_epics_issues.py  — "Epics and issues — issue #8."
+    test_forge_mcp_tools.py  — "The forge-routed MCP tools -- issue #79/#80, WK-20260902-forge-binding"
     test_forge_wiring.py  — "End-to-end wiring for a forge operation -- issue #80/#79,"
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
@@ -170,6 +173,7 @@ tests/
     test_email_templates.py  — "`gateway.app.services.email_templates` -- pure rendering, no I/O."
     test_forge_github.py  — "`forge.github.run_forge_operation` -- argv assembly, the kill switch, local"
     test_forge_policy.py  — "The forge vocabulary and policy issue #80/#79 build the write gate on."
+    test_forge_repo_identity_confirmation.py  — "`forge.github._confirm_repo_identity_live` -- the live, never-cached check"
     test_gh_tool.py  — "`gh_tool.run_gh`/`resolve_gh_token` against a fake `gh` subprocess."
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
     test_google_calendar.py  — "`gateway.app.services.google_calendar`, without ever touching Google."
@@ -434,7 +438,7 @@ tests/
 
 ### `gateway/app/api/routes/decisions.py`
 
-> Operational decisions: sensitive tasks held for a human to resolve — issue #6.
+> Operational decisions: sensitive tasks AND sensitive forge writes held for
 
 - **`DecisionApproveRequest`** *(class)*
 - **`DecisionRejectRequest`** *(class)*
@@ -695,6 +699,13 @@ tests/
 - `subject_prefix(kind)` — "The bracketed tag this ecosystem's other notifications already use."
 - `render_email(kind)` — "Render one full HTML document for `kind`. Every text argument is"
 
+### `gateway/app/services/forge_routing.py`
+
+> The one place that answers "is this project bound to a forge repository?"
+
+- **`ForgeBinding`** *(class)* — "What `project_forge_binding` found: a project IS bound, here's to what."
+- `project_forge_binding(session, project_id)` *(async function)* — "The project's current forge binding, or `None` -- "not bound" included."
+
 ### `gateway/app/services/google_calendar.py`
 
 > A Google Calendar client for reminders, built to be tested without ever
@@ -754,6 +765,7 @@ tests/
 - `decide_forge_operation(session, operation_id, decision, reason)` *(async function)* — "The human decision a forge write is born waiting for. Mirrors"
 - `mark_forge_operation_dispatched(session, operation_id)` *(async function)* — "Flips an `approved` forge operation to `dispatched`. The gate itself:"
 - `resolve_forge_operation(session, operation_id, outcome)` *(async function)* — "Resolves a forge operation from its `FORGE_OPERATION_RESULT` outcome"
+- `upsert_scm_association(session)` *(async function)* — "Declares (or re-declares, or confirms) a project's forge binding."
 - `recover_tasks_after_startup(session)` *(async function)*
 - `get_logs(session, task_id, offset, limit)` *(async function)*
 - `store_result(session, task_id, result, final_state)` *(async function)*
@@ -774,8 +786,11 @@ tests/
 - `get_recent_logs(session, task_id)` *(async function)* — "The most recent log lines, oldest-first within the slice."
 - `list_tasks_requiring_cancel_replay(session, executor_id)` *(async function)* — "Cancelled tasks whose executor has not yet acknowledged the cancellation."
 - `list_tasks_requiring_control_replay(session, executor_id)` *(async function)* — "Tasks stuck in a pending pause/resume/restart, waiting for a `task.ack`"
-- `list_decisions_page(session)` *(async function)* — "Decisions the caller may see, newest first, over-fetched by one (issue #6)."
-- `get_decision_for_projects(session, decision_id, project_ids)` *(async function)* — "A decision the caller may see, or None — "not a decision" included (issue #6)."
+- `forge_decision_public_id(operation_id)` — "The `id` a `ForgeOperationModel` row is exposed under on"
+- `is_forge_decision_id(decision_id)`
+- `decision_state_of(row)` — "The caller-facing decision state for either source -- `pending`, or"
+- `list_decisions_page(session)` *(async function)* — "Decisions the caller may see, newest first, over-fetched by one (issue"
+- `get_decision_for_projects(session, decision_id, project_ids)` *(async function)* — "A decision the caller may see, or None — "not a decision" included"
 - `mission_risk(task)` — "The mission-control risk level for one task (issue #7). See `_risk_filter_clause`."
 - `mission_stage(task)`
 - `list_missions_page(session)` *(async function)* — "Missions (tasks, in mission-control framing) the caller may see, newest"
@@ -1094,6 +1109,13 @@ tests/
 - `test_run_task_actually_writes_when_dispatched_with_workspace_write_sandbox(tmp_path)` *(async function)* — "The override side of finding (3): the same scratch repo, still not"
 - `test_run_task_resume_actually_resumes_the_real_session(tmp_path)` *(async function)* — "Finding (2), now fixed, driven through `run_task` itself end to end:"
 
+### `tests/integration/test_codex_sandbox_has_no_network.py`
+
+> Re-executable proof that `codex exec -s workspace-write` has no network --
+
+- `test_workspace_write_sandbox_has_no_network(tmp_path)` *(async function)* — "THE property `docs/security.md`'s rejected-paths subsection and"
+- `test_network_works_outside_the_sandbox_on_this_host(tmp_path)` — "Positive control for the test above, per docs/napkin-lessons.md's"
+
 ### `tests/integration/test_conversations.py`
 
 > Conversations and contextual messaging — issue #10.
@@ -1141,6 +1163,8 @@ tests/
 - `api(users_file, monkeypatch)` *(async function)* — "A real app over a real database, seeded with two projects."
 - `make_decision(factory, project_id, instruction, requested_by_user_id, requested_by_email)` *(async function)*
 - `make_plain_task(factory, project_id)` *(async function)* — "A task nobody was ever asked to decide on — not a decision."
+- `make_forge_decision(factory, project_id, repo_identity, title, body)` *(async function)* — "A forge WRITE — born `awaiting_approval` — issue #79/#80 (PR B4)."
+- `make_forge_read(factory, project_id, repo_identity)` *(async function)* — "A forge READ (`issue_list`) — born `approved`, never a decision."
 - `auth(token)`
 - `audit_events(factory, event_type)` *(async function)*
 - `test_decisions_require_a_token(api)` *(async function)*
@@ -1179,6 +1203,17 @@ tests/
 - `test_request_revision_requires_a_non_empty_reason(api)` *(async function)*
 - `test_request_revision_is_a_distinct_outcome_from_reject(api)` *(async function)*
 - `test_request_revision_on_a_resolved_decision_is_a_conflict(api)` *(async function)*
+- `test_a_forge_read_is_not_a_decision(api)` *(async function)* — "`issue_list` is born `approved` — it never needed a human, so it must"
+- `test_a_forge_write_appears_as_a_decision_with_an_honest_discriminator(api)` *(async function)*
+- `test_a_task_decisions_shape_is_unchanged_when_forge_rows_also_exist(api)` *(async function)* — "The exact regression this PR must never cause: a task decision's DTO"
+- `test_forge_and_task_decisions_share_one_sorted_list(api)` *(async function)*
+- `test_forge_and_task_decision_ids_never_collide(api)` *(async function)*
+- `test_forge_risk_and_urgency_filters(api)` *(async function)* — "A forge decision has no `urgency` — an active `urgency` filter must"
+- `test_approving_a_critical_forge_decision_without_confirm_is_refused(api)` *(async function)*
+- `test_approving_a_forge_decision_dispatches(api)` *(async function)* — "The forge sibling of issue #20's own regression test above"
+- `test_approving_a_forge_decision_leaves_it_approved_when_the_executor_is_offline(api)` *(async function)*
+- `test_rejecting_a_forge_decision_never_dispatches(api)` *(async function)*
+- `test_approve_records_the_deciding_actor_for_a_forge_decision(api)` *(async function)*
 
 ### `tests/integration/test_dispatch_payload_engine_and_delivery.py`
 
@@ -1236,6 +1271,30 @@ tests/
 - `test_a_failed_link_does_not_keep_the_key_claimed(api)` *(async function)*
 - `test_the_epic_list_cursor_walks_every_epic_once(api)` *(async function)*
 - `test_list_epics_filters_by_status(api)` *(async function)*
+
+### `tests/integration/test_forge_mcp_tools.py`
+
+> The forge-routed MCP tools -- issue #79/#80, WK-20260902-forge-binding
+
+- **`DummyHub`** *(class)* — "Mirrors `tests/integration/test_start_development_task.py`'s own"
+  - `__init__(self)` *(method)*
+  - `is_connected(self, executor_id)` *(method)*
+  - `dispatch_next(self, executor_id)` *(async method)*
+  - `send(self, executor_id, envelope)` *(async method)*
+  - `dispatch_forge_operation(self, operation_id)` *(async method)*
+- `db_session()` *(async function)*
+- `test_bind_requires_admin_scope(db_session)` *(async function)*
+- `test_bind_declares_by_default_and_confirms_on_request(db_session)` *(async function)*
+- `test_bind_rejects_a_malformed_repo_identity(db_session)` *(async function)*
+- `test_create_issue_unbound_creates_local_issue_immediately(db_session)` *(async function)*
+- `test_create_issue_bound_opens_a_forge_operation_awaiting_approval(db_session)` *(async function)*
+- `test_list_project_issues_routes_identically_bound_vs_unbound(db_session)` *(async function)* — "THE required test: the exact same MCP call (`list_project_issues`,"
+- `test_list_project_issues_needs_no_scope_beyond_read(db_session)` *(async function)*
+- `test_comment_unbound_is_a_typed_refusal(db_session)` *(async function)*
+- `test_comment_bound_opens_a_forge_operation(db_session)` *(async function)*
+- `test_close_unbound_marks_the_local_issue_done(db_session)` *(async function)*
+- `test_close_unbound_unknown_issue_is_not_found(db_session)` *(async function)*
+- `test_close_bound_opens_a_forge_operation(db_session)` *(async function)*
 
 ### `tests/integration/test_forge_wiring.py`
 
@@ -1619,6 +1678,10 @@ tests/
 - `test_forge_operation_refuses_for_a_project_outside_the_local_allowlist(tmp_path, monkeypatch)` *(async function)* — "The executor's own project allowlist is a second, independent gate --"
 - `test_forge_operation_refuses_an_invalid_payload_without_touching_gh(tmp_path, monkeypatch)` *(async function)* — "A malformed envelope (unknown `kind`) is refused at parse time, the"
 - `test_forge_operation_write_kind_reaches_gh_when_approved_and_allowed(tmp_path, monkeypatch)` *(async function)* — "Positive control proving a WRITE kind (not just the read-only"
+- `test_gh_issue_ref_without_a_binding_is_refused_exactly_like_before(tmp_path)` *(async function)* — "No `forge_repo_identity` on the envelope (the gateway found the"
+- `test_gh_issue_ref_with_a_binding_resolves_through_the_forge(tmp_path, monkeypatch)` *(async function)* — "Positive control: a bound project's `gh:N` reaches `gh issue view`"
+- `test_gh_issue_ref_without_the_local_allow_forge_operations_switch_is_refused(tmp_path)` *(async function)* — "The same machine-level kill switch a forge WRITE respects also gates"
+- `test_gh_issue_body_never_reaches_policy_evaluation(tmp_path, monkeypatch)` *(async function)* — "THE invariant B4 is explicit must hold: an issue's third-party,"
 
 ### `tests/unit/test_apply_migrations.py`
 
@@ -1768,8 +1831,21 @@ tests/
 - `test_issue_close_without_issue_number_is_refused_at_parse()`
 - `test_issue_open_without_title_is_refused_at_parse()`
 - `test_issue_list_requires_neither_title_nor_issue_number()`
+- `test_issue_view_without_issue_number_is_refused_at_parse()`
+- `test_issue_view_is_read_like_issue_list()` — "The one property #79's `gh:N` resolution depends on: a lookup by"
 - `test_state_outside_the_closed_set_is_refused_at_parse()`
 - `test_forge_message_types_exist_and_are_distinct_from_task_dispatch()` — "Sanity check on the two new `AgentMessageType` members this PR adds."
+
+### `tests/unit/test_forge_repo_identity_confirmation.py`
+
+> `forge.github._confirm_repo_identity_live` -- the live, never-cached check
+
+- `test_matching_remote_lets_the_operation_through(tmp_path, monkeypatch, remote_url)` *(async function)*
+- `test_a_different_repository_on_the_real_remote_is_refused(tmp_path, monkeypatch)` *(async function)*
+- `test_a_missing_or_unreadable_remote_is_refused(tmp_path, monkeypatch)` *(async function)*
+- `test_a_non_github_remote_is_refused(tmp_path, monkeypatch)` *(async function)* — "A remote that parses as a URL but is not GitHub at all -- this module"
+- `test_the_check_runs_for_a_write_kind_too_not_only_reads(tmp_path, monkeypatch)` *(async function)* — "Positive-adjacent: the mismatch refusal is not special-cased to reads."
+- `test_the_check_is_local_and_uses_its_own_configured_timeout(tmp_path, monkeypatch)` *(async function)* — "`forge_remote_check_timeout_seconds` is threaded through, distinct"
 
 ### `tests/unit/test_gh_tool.py`
 

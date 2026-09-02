@@ -1351,3 +1351,40 @@ branch condicional em quem já lê essas colunas. Quando não descrevem,
 duplicar honestamente — reusando só o vocabulário que o operador precisa
 reconhecer — é mais barato de manter do que uma coluna emprestada que dois
 domínios brigam para interpretar.
+
+## 2026-09-02 — projetar uma tabela paralela numa API existente sem fundi-las
+
+A #79/#80 (WK-20260902-forge-binding, PR B4) precisou colocar
+`ForgeOperationModel` (a tabela paralela que a entrada anterior deste
+arquivo justifica) dentro de `/api/v1/decisions`, que só conhecia
+`TaskModel`. A tentação natural seria "já que os dois cabem numa mesma
+listagem, talvez devessem ter sido a mesma tabela desde o início" — o
+oposto do que a entrada anterior concluiu. Não era: os dois continuam
+precisando de colunas diferentes, gates diferentes, ciclos de vida
+diferentes. O que mudou foi só a CAMADA — a API, não o armazenamento — que
+precisava enxergar as duas.
+
+A solução (`store.list_decisions_page` consultando as duas tabelas
+separadamente e fazendo merge em Python, não um `UNION` SQL) generaliza uma
+lição que já valia para uma fonte só: paginação por cursor sobre DUAS fontes
+heterogêneas precisa de um desempate cross-fonte determinístico
+(`_TASK_DECISION_RANK`/`_FORGE_DECISION_RANK`) mesmo quando o caso que ele
+resolve — dois registros de fontes diferentes com o mesmo `created_at` até o
+microssegundo — é praticamente impossível de ocorrer de verdade. Escrever o
+código como se fosse acontecer (em vez de assumir "nunca vai colidir")
+custou pouco a mais e evita um bug silencioso e raríssimo de reproduzir se
+algum dia colidir.
+
+A colisão de id entre as duas fontes foi resolvida da mesma forma: em vez de
+confiar que dois `uuid4()` de tabelas diferentes nunca vão coincidir (verdade
+na prática, mas não uma garantia), um prefixo (`forge:`) que uma string
+`uuid4()` estruturalmente não pode conter torna as duas faixas de id
+disjuntas por construção. As duas decisões — desempate por rank fixo,
+prefixo de id — têm o mesmo formato: onde a probabilidade real de colisão é
+baixíssima mas não nula, prefira uma garantia estrutural barata a confiar na
+baixa probabilidade, principalmente quando o código que depende disso é um
+endpoint de aprovação humana.
+
+Lição: "duas fontes muito improváveis de colidir" não é o mesmo problema que
+"duas fontes que nunca colidem" — e o código deveria refletir qual das duas
+frases é realmente verdadeira, não a que é mais conveniente de escrever.

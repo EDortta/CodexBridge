@@ -234,3 +234,110 @@ Nesta PR (B3) o único jeito de criar/aprovar/despachar uma operação de forge
 `AgentHub.dispatch_forge_operation` diretamente — não existe rota REST nem
 ferramenta MCP ainda (por isso o contrato OpenAPI não muda nesta PR). Expor
 isso para o operador via ChatGPT é B4.
+
+## Binding de forge, `gh:N` e as ferramentas MCP (B4)
+
+WK-20260902-forge-binding, issue #79/#80 (PR B4). B3 (acima) deixou a
+operação de forge com portão humano mas sem superfície: nenhuma rota REST,
+nenhuma ferramenta MCP, `gh:N` sempre recusado. Esta PR fecha os três.
+
+### `project_forge_binding` — o único ponto que decide "ligado" ou não
+
+`gateway/app/services/forge_routing.py`'s `project_forge_binding(session,
+project_id) -> ForgeBinding | None` lê `scm_associations` (migration `0009`,
+vazia e sem código até esta PR) e é a única função que qualquer chamador —
+as ferramentas MCP abaixo, `AgentHub.dispatch_next` para `gh:N` — deveria
+consultar para essa pergunta. `None` significa "roteie para as tabelas
+locais", não um erro.
+
+O `confidence` da associação começa `declared` (um operador nomeou o
+repositório via `bind_project_forge`) e só vira `confirmed` por um
+`confirm=true` explícito, na mesma chamada — nunca automaticamente. Ver
+`ScmAssociationModel`'s docstring (`gateway/app/models/entities.py`) para a
+razão completa.
+
+### O executor confirma o remote real antes de qualquer operação
+
+`agent/codex_bridge_agent/forge/github.py`'s `_confirm_repo_identity_live`
+roda `git remote get-url origin` (via `git_tools.run_git`) antes de CADA
+operação de forge — leitura ou escrita, `issue_list`/`issue_view` incluídos
+— e recusa `repo_identity_mismatch` se o remote real divergir do
+`repo_identity` que o gateway declarou no envelope. Sempre ao vivo, nunca
+cacheada: uma chamada `git` local não custa rede nenhuma, e elimina a
+necessidade de um job de reconciliação para o caso "a pasta perdeu ou
+trocou o remote depois que o binding foi declarado".
+
+### `gh:N` deixa de ser recusado incondicionalmente
+
+Novo quinto membro em `ForgeOperationKind`: `ISSUE_VIEW` (`gh issue view
+--json title,body`), classificado `READ` como `ISSUE_LIST` —
+`shared.policy.forge_operation_policy_level` nunca gate nenhum dos dois.
+
+Fluxo para um `issue_ref` no formato `gh:N`:
+
+1. Na criação da task (`gateway/app/mcp/server.py:start_development_task`),
+   `gh:N` não é mais recusado incondicionalmente — só quando
+   `project_forge_binding(project_id)` devolve `None`. Ligado, segue para
+   dispatch como qualquer outro `issue_ref`, sem tentar resolver o conteúdo
+   no gateway (o gateway nunca aprende o path real do projeto,
+   `docs/architecture.md`).
+2. No dispatch (`AgentHub.dispatch_next`), se `task.issue_ref` começa com
+   `"gh:"`, o binding é resolvido e `repo_identity` viaja no payload como
+   `forge_repo_identity` — só computado para esse formato, para não pagar
+   uma consulta extra em todo dispatch normal.
+3. No executor (`AgentService._handle_dispatch`), sem `forge_repo_identity`
+   no envelope, a recusa é `issue_source_unsupported`, byte a byte igual à
+   de antes desta PR. Com ele, o executor monta um `ForgeOperationRequest`
+   `ISSUE_VIEW` e chama `run_forge_operation` — a mesma trava
+   `allow_forge_operations`, a mesma confirmação de remote ao vivo, o mesmo
+   módulo `forge/github.py` que qualquer outra operação usa.
+
+**Invariante inegociável, testado diretamente**
+(`tests/unit/test_agent_service.py::test_gh_issue_body_never_reaches_policy_evaluation`):
+o texto devolvido por `gh issue view` só alcança
+`instructions.build_task_instruction`'s `issue_text`, dentro do bloco
+`--- BEGIN UNTRUSTED ISSUE CONTENT ---` — nunca `SubmitTaskRequest.instruction`
+nem `evaluate_task_policy`, que só vê as próprias palavras do operador,
+montadas pelo gateway antes de `_handle_dispatch` rodar. Issue de repositório
+público é gravável por qualquer um; deixar seu texto influenciar a
+classificação de política deixaria um estranho forçar (ou evitar) o portão
+de aprovação sensível de uma tarefa deste operador.
+
+### As ferramentas MCP de forge — roteamento é um `if`, não uma escolha do operador
+
+Cinco ferramentas novas em `gateway/app/mcp/server.py`/`tools.py`:
+
+* `bind_project_forge` (escopo `codexbridge.admin`) — declara/confirma a
+  associação. É o que liga o roteamento das outras quatro.
+* `create_project_issue`, `list_project_issues`, `comment_project_issue`,
+  `close_project_issue` — cada uma faz `binding = await
+  project_forge_binding(session, project.id)`; `binding is not None` roteia
+  para uma operação de forge (`store.create_forge_operation`, mesmo portão
+  de toda escrita de forge); `None` roteia para as tabelas locais deste
+  gateway (issue #8: `store.create_issue`/`list_issues_page`/`update_issue`).
+  O operador chama a mesma ferramenta, com os mesmos argumentos, nos dois
+  casos — nunca precisa dizer em qual projeto está.
+
+`comment_project_issue` não tem equivalente local (este gateway não modela
+comentário em issue local) e devolve `forge_binding_required` quando o
+projeto não está ligado — uma recusa tipada honesta, não uma tentativa de
+forçar o conceito onde ele não existe.
+
+Uma leitura de forge (`list_project_issues` ligado) é despachada na mesma
+chamada — `hub.dispatch_forge_operation`, o mesmo "nunca no-op silencioso"
+que `dispatch_available` já tem para uma task, mas nunca espera decisão
+humana (`issue_list` nasce `approved`). Uma escrita de forge de qualquer
+uma dessas ferramentas nunca é despachada pela própria ferramenta — nasce
+`awaiting_approval` e espera na Central de Decisões, como toda escrita de
+forge desde B3.
+
+### A Central de Decisões projeta as duas fontes
+
+`gateway/app/api/routes/decisions.py`'s módulo docstring e
+`docs/api/README.md`'s seção "Decisions" têm o desenho completo: uma decisão
+de forge tem `id` prefixado (`forge:<uuid>`, nunca colide com um `TaskModel.id`
+por construção), `decisionType: "forge_operation"`, e aprovar despacha via
+`AgentHub.dispatch_forge_operation` — o mesmo par
+`decide_task_approval`/`dispatch_available` que a issue #20 corrigiu para
+task, aplicado à tabela de forge para que o mesmo bug não aconteça de novo
+num lugar diferente.
