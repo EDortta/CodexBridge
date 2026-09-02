@@ -85,7 +85,7 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     # forge row -- the same "fresh install fine, existing install broken on
     # first read" shape this module exists to catch early.
     "forge_operations": {
-        "revision": "0013_forge_binding.sql",
+        "revision": "0014_forge_binding.sql",
     },
 }
 

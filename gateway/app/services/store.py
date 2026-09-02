@@ -802,7 +802,7 @@ async def upsert_scm_association(
     """Declares (or re-declares, or confirms) a project's forge binding.
 
     One row per `(project_id, provider)` (`scm_associations_project_provider_idx`,
-    `migrations/0013_forge_binding.sql`) -- a second call for a project
+    `migrations/0014_forge_binding.sql`) -- a second call for a project
     already bound UPDATES that row rather than creating a second one, so
     `forge_routing.project_forge_binding` never has to pick among several.
 
