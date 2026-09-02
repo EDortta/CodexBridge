@@ -2722,6 +2722,34 @@ x-contract-excluded-paths:
       OAuth 2.0 Protected Resource Metadata (RFC 9728), consumed by the MCP
       client during discovery.
 
+  - path: /control
+    methods: [GET]
+    reason: >-
+      CodexBridge Control's server-rendered fleet screen (issue #73 Stage 5,
+      gateway/app/api/routes/control_ui.py). Returns HTML for a browser, not a
+      contract JSON body, the same reason /oauth/authorize is excluded above;
+      it consumes GET /api/v1/nodes and the other endpoints this document
+      already describes rather than defining a shape of its own. Not part of
+      the CodexBridgeMobile contract.
+
+  - path: /control/nodes/{nodeId}
+    methods: [GET]
+    reason: >-
+      CodexBridge Control's node-detail screen. Same reasoning as /control
+      above: HTML, gated by HTTP Basic (see the module's own docstring for
+      why), driving the same /api/v1/nodes/{nodeId}, .../discovered-resources,
+      .../adopt, .../deny, .../authorize and .../revoke endpoints this
+      document already contracts.
+
+  - path: /control/invite
+    methods: [GET]
+    reason: >-
+      Placeholder screen. This build has no node-enrollment endpoint for it to
+      call — see gateway/app/api/routes/control_ui.py's module docstring,
+      "/control/invite" — so it renders an explanation, not a form. Excluded
+      for the same reason as the other two /control paths: HTML, not a
+      contract JSON body.
+
   # FastAPI's /openapi.json, /docs, /docs/oauth2-redirect and /redoc are NOT
   # listed here. They are not served at all — main.py passes openapi_url=None,
   # docs_url=None and redoc_url=None. An exclusion entry for a route the gateway

@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-gh73-authorization-plane`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-gh73-authorization-plane map`
+> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-gh73-control-ui`
+> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-gh73-control-ui map`
 
 ## Summary
 
-- 141 file(s) · 1373 symbol(s) indexed
-- Languages: config (2), python (137), shell (2)
+- 143 file(s) · 1406 symbol(s) indexed
+- Languages: config (2), python (139), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -69,6 +69,7 @@ gateway/
         __init__.py  — "HTTP routers for the mobile contract surface."
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
         authorizations.py  — "The explicit operator grant: `POST .../authorize` and `.../revoke`."
+        control_ui.py  — "CodexBridge Control — the first server-rendered screens (issue #73 Stage 5)."
         conversations.py  — "Conversations and contextual messaging — issue #10."
         decisions.py  — "Operational decisions: sensitive tasks held for a human to resolve — issue #6."
         discovery.py  — "Discovered resources: the panel's half of "the node proposes, the panel adopts"."
@@ -143,6 +144,7 @@ tests/
     test_authorization_routes.py  — "`POST .../authorize` and `.../revoke` -- issue #73 Stage 4."
     test_claude_runner_real_process.py  — "ClaudeRunner against a REAL `claude` subprocess — not the fakes used elsewhere."
     test_codex_runner_real_process.py  — "CodexRunner against a REAL `codex` subprocess — not the fake used everywhere else."
+    test_control_ui.py  — "CodexBridge Control's server-rendered screens — issue #73 Stage 5."
     test_conversations.py  — "Conversations and contextual messaging — issue #10."
     test_decisions.py  — "Operational decisions — issue #6."
     test_discovery_routes.py  — "Discovered-resource adoption routes — issue #73 Stage 3 adoption half."
@@ -414,6 +416,14 @@ tests/
 - **`AuthorizeNodeProjectRequest`** *(class)*
 - `authorize_node_project(node_id, project_id, payload, principal, session)` *(async function)* — "Grant `payload.capabilities` to `node_id` on `project_id`."
 - `revoke_node_project(node_id, project_id, principal, session)` *(async function)* — "Revoke the active authorization for `node_id` on `project_id`."
+
+### `gateway/app/api/routes/control_ui.py`
+
+> CodexBridge Control — the first server-rendered screens (issue #73 Stage 5).
+
+- `control_home(request, session)` *(async function)*
+- `control_node_detail(node_id, request, cursor, state, session)` *(async function)*
+- `control_invite(request)` *(async function)*
 
 ### `gateway/app/api/routes/conversations.py`
 
@@ -774,6 +784,9 @@ tests/
 - `deny_discovered_resource(session, resource_id)` *(async function)* — "Refuse one discovered candidate. See `DECIDABLE_DISCOVERY_STATES` --"
 - `list_nodes(session)` *(async function)* — "Every Bridge Node, ordered by id, paired with the executor bound to it."
 - `get_node(session, node_id)` *(async function)* — "One Bridge Node and its bound executor, or None if the node does not exist."
+- `count_decidable_discovered_resources(session, node_id)` *(async function)* — "How many of `node_id`'s discovered resources are awaiting an operator"
+- `list_active_authorizations_for_node(session, node_id)` *(async function)* — "Every non-revoked `project_authorizations` row for `node_id`."
+- `get_project_names(session, project_ids)` *(async function)* — "`{project_id: name}` for the given ids, silently dropping unknown ones."
 - `next_dispatchable_task(session, executor_id)` *(async function)*
 - `update_task_state(session, task_id, state, error)` *(async function)*
 - `append_log(session, task_id, offset, stream, line)` *(async function)*
@@ -1174,6 +1187,38 @@ tests/
 - `test_run_task_drives_a_real_codex_process_end_to_end(tmp_path)` *(async function)* — "A real `codex exec --json -C <dir> -o <file> <instruction>` subprocess,"
 - `test_run_task_actually_writes_when_dispatched_with_workspace_write_sandbox(tmp_path)` *(async function)* — "The override side of finding (3): the same scratch repo, still not"
 - `test_run_task_resume_actually_resumes_the_real_session(tmp_path)` *(async function)* — "Finding (2), now fixed, driven through `run_task` itself end to end:"
+
+### `tests/integration/test_control_ui.py`
+
+> CodexBridge Control's server-rendered screens — issue #73 Stage 5.
+
+- `basic(username, password)`
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)*
+- `set_node_display_name(factory, node_id, display_name)` *(async function)*
+- `seed_resource(factory)` *(async function)*
+- `seed_project(factory)` *(async function)*
+- `grant(factory)` *(async function)*
+- `test_control_home_requires_a_credential(api)` *(async function)*
+- `test_control_home_with_a_wrong_password_is_refused(api)` *(async function)*
+- `test_control_home_without_the_admin_scope_is_forbidden(api)` *(async function)*
+- `test_control_home_with_the_admin_scope_is_allowed(api)` *(async function)* — "Positive control for the previous three: the credential and scope alone are sufficient."
+- `test_control_home_escapes_a_hostile_display_name(api)` *(async function)*
+- `test_control_home_counts_pending_candidates(api)` *(async function)*
+- `test_control_node_detail_requires_a_credential(api)` *(async function)*
+- `test_control_node_detail_unknown_node_is_404(api)` *(async function)*
+- `test_control_node_detail_renders_capabilities_for_an_admin(api)` *(async function)* — "Positive control for the previous two."
+- `test_control_node_detail_escapes_a_hostile_resource_path_and_suggested_name(api)` *(async function)*
+- `test_control_node_detail_shows_the_candidate_resource_path(api)` *(async function)* — "The one authorized surface `resourcePath` may appear on (docs/api/README.md)."
+- `test_control_node_detail_paginates_discovered_candidates(api)` *(async function)*
+- `test_control_node_detail_shows_a_grant_form_for_an_adopted_unauthorized_project(api)` *(async function)* — "`ADOPTED` with no capability grant yet has no `project_authorizations`"
+- `test_control_node_detail_shows_active_capabilities_and_a_revoke_form(api)` *(async function)*
+- `test_control_node_detail_warns_that_modify_and_deliver_need_more_than_admin_scope(api)` *(async function)*
+- `test_control_node_detail_mints_no_audit_event(api)` *(async function)* — "Reading a page, and the token minted for its own fetch() calls, are not audited."
+- `test_control_node_detail_embeds_a_real_bearer_token_for_its_own_fetch_calls(api)` *(async function)* — "The page-scoped token is an ordinary row in the same table `/api/v1/**` reads."
+- `test_control_invite_requires_a_credential(api)` *(async function)*
+- `test_control_invite_without_the_admin_scope_is_forbidden(api)` *(async function)*
+- `test_control_invite_explains_the_gap_honestly(api)` *(async function)* — "Positive control for the previous two, and the point of this screen today:"
 
 ### `tests/integration/test_conversations.py`
 

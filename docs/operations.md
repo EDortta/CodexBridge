@@ -40,6 +40,56 @@ segundos, não uma falha única.
 * `cancel_codex_task` cancela em qualquer estado cancelável (fila, aprovação pendente, execução, pausa/retomada/reinício pendentes), marcando a tarefa `cancelled` de imediato; o `task.cancel` só é entregue ao agente na hora se ele estiver conectado, senão é reenviado na reconexão — limitado a `cancel_replay_max_age_seconds` (padrão 24h) desde o cancelamento; passado esse prazo não há novo reenvio;
 * no retorno do agente, o gateway reavalia e redispara a próxima tarefa elegível.
 
+## CodexBridge Control (issue #73 Stage 5)
+
+Três telas server-rendered: `GET /control` (frota), `GET
+/control/nodes/{nodeId}` (detalhe: capacidades/engines, candidatos
+descobertos, autorizações) e `GET /control/invite` (hoje só explica por que
+não funciona ainda — não há `POST /api/v1/nodes/invite` nem
+`scripts/enroll_node.py` neste build; ver `docs/control-plane.md`, seção
+"Stage 5"). Servidas pelo próprio processo do gateway, sem deployable novo.
+
+**Ação do operador — nginx.** O vhost `deploy/nginx/frida-codex-bridge.conf`
+é uma allowlist de `location`s sem catch-all: sem a entrada `/control`, o
+painel simplesmente não responde (404 na borda), mesmo funcionando na
+aplicação. O bloco já está no arquivo versionado do repositório desde esta
+PR; falta **aplicá-lo em produção** — copiar o trecho abaixo (ou o arquivo
+inteiro) para o nginx do `frida` e recarregar:
+
+```nginx
+location = /control {
+    proxy_pass http://127.0.0.1:18080/control;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+}
+
+location /control/ {
+    proxy_pass http://127.0.0.1:18080/control/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+}
+```
+
+Depois de copiar: `nginx -t` e `systemctl reload nginx` (ou equivalente) no
+`frida`. Nenhum passo deste trabalho aplica isso automaticamente — deploy
+autônomo é proibido neste projeto; aplicar em produção é sempre ação humana.
+
+**Credenciais.** Não é um mecanismo novo: o painel pede usuário/senha via o
+diálogo nativo de HTTP Basic do próprio browser, verificados contra o mesmo
+`users.json` que `/oauth/authorize` já usa. Qualquer conta com o escopo
+`codexbridge.admin` (`GET /api/v1/auth/me` confirma) enxerga a frota;
+conceder `modify`/`deliver` a um nó, na tela de detalhe, exige além disso
+`can_approve_sensitive` ou o papel `admin` — a mesma escada de privilégio da
+Stage 4 (`docs/control-plane.md`). Nenhuma conta nova precisa ser criada só
+para o painel.
+
+**Nada de migração.** Esta PR não adiciona schema; usa exatamente as tabelas
+que a Stage 1-4 já criaram.
+
 ## Ambiente atual levantado em 2026-07-28
 
 * `frida` responde por `ssh -p 2200 esteban@frida.inovacaosistemas.com.br`

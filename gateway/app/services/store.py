@@ -1398,6 +1398,70 @@ async def get_node(session: AsyncSession, node_id: str) -> tuple[NodeModel, Exec
     return node, executor
 
 
+async def count_decidable_discovered_resources(session: AsyncSession, node_id: str) -> int:
+    """How many of `node_id`'s discovered resources are awaiting an operator
+
+    decision right now -- issue #73 Stage 5 (CodexBridge Control), the
+    fleet list's "candidates pending decision" count. Reuses
+    `DECIDABLE_DISCOVERY_STATES` (`discovery_types.py`), the one place
+    "pending" is already defined for `adopt`/`deny` -- a second, ad hoc
+    definition in the UI layer is exactly the template-side recomputation
+    `docs/control-plane.md` and this PR's own brief warn against. A single
+    `COUNT`, not a fetch-and-len: the fleet list renders one row per node and
+    cannot afford `N` full row fetches to show `N` badges.
+    """
+    result = await session.execute(
+        select(func.count())
+        .select_from(DiscoveredResourceModel)
+        .where(
+            DiscoveredResourceModel.node_id == node_id,
+            DiscoveredResourceModel.state.in_(DECIDABLE_DISCOVERY_STATES),
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def list_active_authorizations_for_node(
+    session: AsyncSession, node_id: str
+) -> list[ProjectAuthorizationModel]:
+    """Every non-revoked `project_authorizations` row for `node_id`.
+
+    Display-only, for the Control node-detail screen's authorization section
+    (issue #73 Stage 5): an operator deciding whether to grant or revoke a
+    capability needs to see what is granted today, the same way
+    `effective_task_modes` reads this table to decide what a dispatch may do
+    -- this is the read half of that table, never a second writer. Ordered by
+    `project_id` so repeated renders of the same node produce a stable list.
+    """
+    result = await session.execute(
+        select(ProjectAuthorizationModel)
+        .where(
+            ProjectAuthorizationModel.node_id == node_id,
+            ProjectAuthorizationModel.revoked_at.is_(None),
+        )
+        .order_by(ProjectAuthorizationModel.project_id)
+    )
+    return list(result.scalars().all())
+
+
+async def get_project_names(session: AsyncSession, project_ids: list[str]) -> dict[str, str]:
+    """`{project_id: name}` for the given ids, silently dropping unknown ones.
+
+    Display-only helper for Control (issue #73 Stage 5): a discovered
+    resource or an authorization row carries a `project_id`, never a name,
+    and `ProjectModel.name` is the only field of `ProjectModel` this surface
+    may show -- `ProjectModel.path` is the exact filesystem-path trap
+    `docs/api/README.md` ("Fields that must never ship") names, so this
+    selects `id`/`name` only, never the ORM row itself.
+    """
+    if not project_ids:
+        return {}
+    result = await session.execute(
+        select(ProjectModel.id, ProjectModel.name).where(ProjectModel.id.in_(project_ids))
+    )
+    return {row.id: row.name for row in result.all()}
+
+
 async def next_dispatchable_task(session: AsyncSession, executor_id: str) -> TaskModel | None:
     now = datetime.now(timezone.utc)
     result = await session.execute(

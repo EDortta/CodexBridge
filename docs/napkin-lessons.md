@@ -1401,3 +1401,35 @@ próprio docstring de `permissions.is_allowed` — quem copiar o padrão
 administrativo, deve voltar a usar `is_admin()`; quem copiar para uma ação
 cujo escopo base JÁ seja `codexbridge.admin` deve repetir esta checagem
 antes de confiar no copy-paste.
+
+## 2026-09-02 — um plano de UI pode descrever um endpoint que nunca foi construído
+
+O plano da PR C5 (WK-20260902-gh73-control-ui, issue #73 Stage 5) descrevia a
+quarta tela — `GET /control/invite` — chamando `POST /api/v1/nodes/invite` e
+montando um comando `scripts/enroll_node.py` pronto para copiar. Nenhum dos
+dois existe: `gateway/app/api/routes/nodes.py` só serve `GET /nodes` e `GET
+/nodes/{nodeId}`; `scripts/` não tem `enroll_node.py`; e
+`docs/project-onboarding.md` já documentava, antes desta PR, que registrar um
+nó é um procedimento manual de dois arquivos (`registry.json` no gateway,
+allowlist local no executor) com reinício dos dois processos — nunca um
+fluxo HTTP.
+
+A confirmação foi puramente por busca (`grep -rn "invite"`, `ls scripts/`,
+leitura de `docs/project-onboarding.md`), antes de escrever uma linha de UI
+para essa tela — não por assumir que "C1-C4 já expõem os mesmos endpoints"
+(a frase literal do plano) valia para as quatro telas por igual só porque
+valia para as outras três.
+
+Lição: um plano de UI que descreve "a tela chama o endpoint X" é uma
+afirmação sobre o código, não uma instrução que dispensa verificação — o
+mesmo nível de ceticismo que já se aplica a specs de negócio vale para specs
+de interface. Quando a verificação mostra que o endpoint não existe, a
+resposta certa não é inventar um (a lógica de negócio de um endpoint de
+convite — geração de token, hashing em repouso, trilha de auditoria,
+revogação — pertence à sua própria PR, com sua própria revisão de segurança)
+nem simplesmente pular a tela (o link ficaria quebrado e a lacuna, muda). A
+resposta que preserva confiança é renderizar uma explicação honesta no lugar
+exato onde a tela iria — nomeando o endpoint e o script que faltam pelos
+nomes exatos que o plano previu — e registrar o achado no relatório da PR
+como trabalho pendente para uma PR própria, nunca como algo silenciosamente
+resolvido "de outro jeito".
