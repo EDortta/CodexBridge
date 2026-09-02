@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 165 file(s) · 1804 symbol(s) indexed
-- Languages: config (2), python (161), shell (2)
+- 168 file(s) · 1842 symbol(s) indexed
+- Languages: config (2), python (164), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -71,6 +71,7 @@ gateway/
         __init__.py  — "HTTP routers for the mobile contract surface."
         artifacts.py  — "The artifact catalogue, Android build metadata, and the download flow — issue #11."
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
+        authorizations.py  — "The explicit operator grant: `POST .../authorize` and `.../revoke`."
         conversations.py  — "Conversations and contextual messaging — issue #10."
         decisions.py  — "Operational decisions: sensitive tasks held for a human to resolve — issue #6."
         discovery.py  — "Discovered resources: the panel's half of "the node proposes, the panel adopts"."
@@ -156,6 +157,7 @@ tests/
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
     test_artifacts.py  — "Artifacts, Android build metadata and the download flow — issue #11."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
+    test_authorization_routes.py  — "`POST .../authorize` and `.../revoke` -- issue #73 Stage 4."
     test_claude_runner_real_process.py  — "ClaudeRunner against a REAL `claude` subprocess — not the fakes used elsewhere."
     test_codex_runner_real_process.py  — "CodexRunner against a REAL `codex` subprocess — not the fake used everywhere else."
     test_conversations.py  — "Conversations and contextual messaging — issue #10."
@@ -195,6 +197,7 @@ tests/
     test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
     test_discover_projects.py  — "`scripts/discover_projects.py` -- read-only repo discovery."
     test_discovery_store.py  — "`store.record_discovery_report` -- issue #73 Stage 3."
+    test_effective_task_modes.py  — "`store.effective_task_modes` -- issue #73 Stage 4, WK-20260902-gh73-authorization-plane."
     test_email_templates.py  — "`gateway.app.services.email_templates` -- pure rendering, no I/O."
     test_enroll_node.py  — "`scripts/enroll_node.py` -- one HTTP call, one file write, issue #76."
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
@@ -455,6 +458,14 @@ tests/
 - `refresh(body, response, session)` *(async function)* — "Rotate a refresh token into a new pair."
 - `revoke(request, response, body, session)` *(async function)* — "Sign out: end the grant now rather than at expiry."
 - `current_actor(response, principal)` *(async function)* — "Who is calling, and what this build will let them do."
+
+### `gateway/app/api/routes/authorizations.py`
+
+> The explicit operator grant: `POST .../authorize` and `.../revoke`.
+
+- **`AuthorizeNodeProjectRequest`** *(class)*
+- `authorize_node_project(node_id, project_id, payload, principal, session)` *(async function)* — "Grant `payload.capabilities` to `node_id` on `project_id`."
+- `revoke_node_project(node_id, project_id, principal, session)` *(async function)* — "Revoke the active authorization for `node_id` on `project_id`."
 
 ### `gateway/app/api/routes/conversations.py`
 
@@ -891,6 +902,7 @@ tests/
 - `latest_project_activity_at(session, project_id)` *(async function)* — "The most recent task creation time for a project, or None if it has none."
 - `get_task(session, task_id)` *(async function)*
 - `list_recent_tasks(session, limit, states)` *(async function)* — "`states` narrows to a caller-given set of `TaskState` values."
+- `effective_task_modes(session, executor, project)` *(async function)* — "The task modes `executor` may actually run on `project`, right now."
 - `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email, can_approve_push)` *(async function)*
 - `mark_executor_connected(session, executor_id, connected)` *(async function)*
 - `executor_is_live(executor)` — "Whether an executor should be presented as connected right now."
@@ -899,6 +911,8 @@ tests/
 - `record_discovery_report(session, executor, report)` *(async function)* — "Persist one root's `DiscoveryReport` into `discovered_resources` -- and nothing else."
 - `list_discovered_resources_page(session, node_id)` *(async function)* — "One node's discovered candidates, ordered by id, over-fetched by one."
 - `get_discovered_resource(session, resource_id)` *(async function)*
+- `grant_project_authorization(session)` *(async function)* — "Get-or-create the standing authorization row for `(node_id, project_id)`."
+- `revoke_project_authorization(session)` *(async function)* — "Revoke the ACTIVE authorization row for `(node_id, project_id)`, if any."
 - `adopt_discovered_resource(session, resource_id)` *(async function)* — "Adopt one discovered candidate: bind it to a project and, when either"
 - `deny_discovered_resource(session, resource_id)` *(async function)* — "Refuse one discovered candidate. See `DECIDABLE_DISCOVERY_STATES` --"
 - `list_nodes(session)` *(async function)* — "Every Bridge Node, ordered by id, paired with the executor bound to it."
@@ -1483,6 +1497,27 @@ tests/
 - `test_the_administrative_action_describes_what_the_list_endpoint_does(api)` *(async function)* — "`sessions.readAllProjects` is administrative because it crosses projects."
 - `test_the_administrative_action_describes_what_the_missions_list_endpoint_does(api)` *(async function)* — "`missions.readAllProjects` mirrors `sessions.readAllProjects` — same widening."
 
+### `tests/integration/test_authorization_routes.py`
+
+> `POST .../authorize` and `.../revoke` -- issue #73 Stage 4.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)*
+- `auth(token)`
+- `test_authorize_requires_a_token(api)` *(async function)*
+- `test_authorize_without_the_admin_scope_is_forbidden(api)` *(async function)*
+- `test_authorize_read_with_the_admin_scope_is_allowed(api)` *(async function)* — "Positive control: the base scope alone is sufficient for `read`/`test`."
+- `test_granting_modify_without_can_approve_sensitive_or_admin_role_is_refused(api)` *(async function)* — "The scope alone (`codexbridge.admin`, no real admin role, no"
+- `test_granting_modify_with_can_approve_sensitive_is_allowed(api)` *(async function)* — "Positive control: the sensitive-approval flag alone is sufficient, no admin role needed."
+- `test_granting_deliver_with_a_real_admin_role_is_allowed(api)` *(async function)* — "Positive control: a real `"admin"` role alone is sufficient, no `can_approve_sensitive` needed."
+- `test_granting_read_and_modify_together_still_needs_the_second_gate(api)` *(async function)* — "Mixing a sensitive capability into an otherwise-plain request still trips the gate."
+- `test_authorize_overwrites_rather_than_merges_capabilities(api)` *(async function)*
+- `test_revoke_then_regrant_reuses_the_same_row_and_both_events_are_audited(api)` *(async function)*
+- `test_revoking_a_pair_with_no_active_authorization_is_not_found(api)` *(async function)*
+- `test_revoke_never_needs_the_sensitive_gate(api)` *(async function)* — "Positive control for the "no second gate on revoke" claim: the"
+- `test_authorizing_an_unknown_node_is_not_found(api)` *(async function)*
+- `test_authorizing_an_unknown_project_is_not_found(api)` *(async function)*
+
 ### `tests/integration/test_claude_runner_real_process.py`
 
 > ClaudeRunner against a REAL `claude` subprocess — not the fakes used elsewhere.
@@ -1599,6 +1634,8 @@ tests/
 - `test_list_with_the_admin_scope_is_allowed(api)` *(async function)* — "Positive control for the previous two: the scope alone is sufficient."
 - `test_a_principal_without_the_administrative_scope_cannot_adopt(api)` *(async function)*
 - `test_a_principal_with_the_administrative_scope_can_adopt(api)` *(async function)* — "Positive control for the previous test."
+- `test_adoption_cannot_grant_modify_without_the_sensitive_ladder(api)` *(async function)* — "The second door to `modify`/`deliver`, closed."
+- `test_the_same_actor_may_adopt_when_it_asks_for_no_sensitive_capability(api)` *(async function)* — "Positive control: the ladder gates the capability, not the adoption."
 - `test_a_token_with_no_scopes_cannot_deny(api)` *(async function)*
 - `test_an_unknown_node_id_is_not_found(api)` *(async function)*
 - `test_an_invalid_state_filter_is_rejected(api)` *(async function)*
@@ -2297,7 +2334,8 @@ tests/
 - `test_sandbox_for_machine_override_forces_read_only_even_for_write_levels()` — "`AgentSettings.allow_workspace_write=False` is the executor's own kill"
 - `test_handle_dispatch_sends_read_only_for_a_read_mode_task(tmp_path)` *(async function)*
 - `test_handle_dispatch_sends_workspace_write_for_a_write_mode_task(tmp_path)` *(async function)*
-- `test_handle_dispatch_honours_the_machine_level_read_only_override(tmp_path)` *(async function)* — "A write-mode task still only gets `read-only` when this executor's own"
+- `test_handle_dispatch_refuses_a_write_mode_when_workspace_write_is_off(tmp_path)` *(async function)* — "WK-20260902-gh73-authorization-plane, issue #73 Stage 4."
+- `test_handle_dispatch_allows_a_write_mode_when_workspace_write_is_on(tmp_path)` *(async function)* — "Positive control for the refusal above, in the same file (napkin-lessons"
 
 ### `tests/unit/test_agent_service_materialize.py`
 
@@ -2429,6 +2467,24 @@ tests/
 - `test_resource_key_is_a_fixed_width_hash_and_resource_path_carries_the_real_path(db_session)` *(async function)* — "The defect this PR fixes: a MySQL `varchar(255)` cannot hold every"
 - `test_a_pre_migration_row_self_heals_its_resource_key_on_next_report(db_session)` *(async function)* — "A row written before 0013 has `resource_key` = the raw path (the"
 - `test_a_large_report_does_not_cost_one_round_trip_per_candidate(db_session)` *(async function)* — "247 candidates -- the real root that motivated this work, rounded up"
+
+### `tests/unit/test_effective_task_modes.py`
+
+> `store.effective_task_modes` -- issue #73 Stage 4, WK-20260902-gh73-authorization-plane.
+
+- `db_session()` *(async function)*
+- `test_no_binding_returns_the_project_base_unchanged(db_session)` *(async function)* — "Non-regression: a pair that never went through discovery adoption is"
+- `test_a_binding_with_no_authorization_permits_nothing(db_session)` *(async function)*
+- `test_a_binding_with_read_and_test_permits_exactly_those_modes(db_session)` *(async function)*
+- `test_a_revoked_authorization_permits_nothing(db_session)` *(async function)* — "Positive control for the "no authorization" case: an authorization row"
+- `test_authorization_never_widens_past_the_projects_own_allowed_modes(db_session)` *(async function)* — "A capability grant intersects with `allowed_modes`, it never adds to it:"
+- `test_create_task_for_an_unbound_pair_behaves_exactly_as_before_this_pr(db_session)` *(async function)* — "This is the test that would have passed before `effective_task_modes`"
+- `test_create_task_for_a_bound_but_unauthorized_pair_refuses_every_mode(db_session)` *(async function)*
+- `test_create_task_for_a_bound_and_partially_authorized_pair_allows_only_the_granted_modes(db_session)` *(async function)*
+- `test_granting_a_new_pair_creates_one_row(db_session)` *(async function)*
+- `test_granting_twice_overwrites_rather_than_merges(db_session)` *(async function)* — "Unlike adoption's own `_grant_project_authorization` (merge-only), this"
+- `test_revoke_then_regrant_reuses_the_same_row(db_session)` *(async function)*
+- `test_revoking_a_pair_with_no_active_authorization_returns_none(db_session)` *(async function)* — "Positive control for the revoke/regrant test: revoking nothing is a"
 
 ### `tests/unit/test_email_templates.py`
 

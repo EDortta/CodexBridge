@@ -111,7 +111,18 @@ version_router = APIRouter()
 # orchestration (issue #73's other Stage 3/4 tracks) not yet merged onto this
 # one; only one bump survives the eventual merge, same reasoning the 1.4.0
 # comment above already gives for four branches sharing one line.
-API_CONTRACT_VERSION = "1.12.0"
+#
+# 1.12.0 -> 1.14.0 (WK-20260902-gh73-authorization-plane, issue #73 Stage 4):
+# `POST /api/v1/nodes/{nodeId}/projects/{projectId}/authorize` and
+# `.../revoke` -- the explicit operator grant/revoke of `project_
+# authorizations`, and the first build whose enforcement actually reads that
+# table (`store.effective_task_modes`, wired into `create_task`, and the
+# executor's own mirrored gate). Additive only (two new endpoints, two new
+# schemas, no existing shape changed), so a minor bump -- jumping straight to
+# 1.14.0 rather than 1.13.0 for the same reason the paragraph above jumped
+# over 1.10.0/1.11.0: 1.13.0 is claimed by another not-yet-merged branch of
+# this same orchestration.
+API_CONTRACT_VERSION = "1.14.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a

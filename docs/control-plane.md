@@ -430,3 +430,122 @@ responde `409 conflict`. Isso não é um defensive check em cima da escrita: é
 o que impede uma segunda chamada de `adopt` de duplicar o
 `WorkspaceBindingModel`/`ScmAssociationModel` que a primeira já produziu —
 a segunda chamada nunca chega à escrita.
+
+## Stage 4 — o plano de autorização passa a valer (issue #73, WK-20260902-gh73-authorization-plane)
+
+Até aqui, `project_authorizations` só recebia escritas — Stage 1 criou a
+tabela e o vocabulário, Stage 3 fez a adoção gravar nela pela primeira vez.
+Nenhum código **lia** essa tabela para decidir o que um dispatch podia fazer:
+uma autorização concedida não mudava nada, na prática. Esta PR fecha esse
+buraco, em dois lugares — o gateway e o executor — sem criar um segundo ponto
+de verdade em nenhum dos dois.
+
+### O gate estreita `allowed_modes`, nunca o substitui
+
+O único enforcement de modo, hoje como antes, é um `if` em
+`gateway/app/services/store.py::create_task`. O que muda é que a lista
+consultada por esse `if` passa a ser calculada por
+`store.effective_task_modes(session, executor, project)`, em vez de ser lida
+direto de `project.config_json["allowed_modes"]`:
+
+1. `base` = os modos de `allowed_modes` do projeto — exatamente o que
+   `create_task` já lia antes desta PR;
+2. se o par `(executor.node_id, project.id)` **não tem** linha em
+   `workspace_bindings`, a resposta é `base`, sem mudança nenhuma. Isto não é
+   um período de graça: é permanente, para sempre, para qualquer par que
+   nunca passou pela adoção — a mesma garantia que a migração `0009` já
+   registrou por escrito ("access continues flowing through the pre-existing
+   `allowed_projects`"). Até esta PR, essa frase era só uma promessa em
+   comentário; `tests/unit/test_effective_task_modes.py::
+   test_no_binding_returns_the_project_base_unchanged` e `test_create_task_
+   for_an_unbound_pair_behaves_exactly_as_before_this_pr` são os primeiros
+   testes que a provam contra código de verdade;
+3. se tem binding, a resposta é `base` interseccionado com
+   `capabilities_to_modes(...)` da linha ATIVA (`revoked_at is null`) de
+   `project_authorizations` para aquele par. Nenhuma linha = nenhuma
+   capacidade = conjunto vazio — adoção sozinha não autoriza nada, exatamente
+   como a Stage 3 já dizia.
+
+A interseção nunca alarga o que `allowed_modes` já permitia — só pode
+estreitar. `project_authorizations` tira, nunca acrescenta, por nó.
+
+### A checagem espelhada no executor
+
+`agent/codex_bridge_agent/service.py::_handle_dispatch` ganha seu próprio
+gate, logo depois de montar o `SubmitTaskRequest` do dispatch: computa as
+`Capability` que a configuração DESTE executor permite
+(`_configured_capabilities`, o mesmo cálculo que `_build_announcement` já
+fazia para o `hello` — fatorado numa função só para as duas nunca divergirem),
+deriva `capabilities_to_modes(...)`, e recusa com
+`capability_not_configured:<mode>` se o modo do dispatch não estiver nesse
+conjunto.
+
+Isto não duplica o gate do gateway — protege contra um gateway comprometido
+ou com bug mandando um modo que este nó específico nunca se ofereceu para
+rodar, o mesmo raciocínio de defesa em profundidade que `git_delivery.py` já
+aplica reconferindo o padrão de branch que o gateway já validou. As duas
+checagens são independentes: `tests/unit/test_agent_service.py::
+test_handle_dispatch_refuses_a_write_mode_when_workspace_write_is_off` prova
+que o executor recusa um modo mesmo quando nada no payload do dispatch diz
+que o gateway não aprovou.
+
+### Conceder e revogar: `gateway/app/api/routes/authorizations.py`
+
+`POST /api/v1/nodes/{nodeId}/projects/{projectId}/authorize` (corpo
+`{capabilities: [...]}`) e `POST .../revoke` — a metade explícita, fora do
+fluxo de descoberta, de escrever `project_authorizations`. Separado de
+`routes/discovery.py` porque as duas são ações distintas com pré-condições
+distintas: adoção exige uma linha de `discovered_resources` para agir; isto
+exige só um nó e um projeto que já existam.
+
+`store.grant_project_authorization` faz get-or-create pelo par
+`(node_id, project_id)` — a constraint única já garante no máximo uma linha
+não revogada. Se a linha existir revogada, REATIVA (limpa `revoked_at`,
+sobrescreve `capabilities_json`/`granted_by`/`granted_at`) em vez de inserir
+uma segunda. Diferente de `_grant_project_authorization` (o helper interno da
+adoção, que só funde capacidades e nunca revoga), esta é a superfície do
+operador: uma chamada aqui declara a autorização que o operador quer AGORA,
+não soma ao que já havia. `store.revoke_project_authorization` marca
+`revoked_at`; a linha nunca é apagada, e um `grant` seguinte reativa a mesma
+linha. O histórico completo — cada concessão, cada revogação — vive em
+`audit_events` via `record_event`, como todo o resto deste sistema;
+`tests/unit/test_effective_task_modes.py::
+test_revoke_then_regrant_reuses_the_same_row` prova a linha única e os dois
+tipos de evento.
+
+### A escada de privilégio, e por que ela não pode reusar `principal.is_admin()`
+
+`permissions.NODES_AUTHORIZATIONS_MANAGE` é administrativa, `codexbridge.admin`
+— a mesma classe que `NODES_READ`/`NODES_DISCOVERIES_DECIDE` já usam. Conceder
+`modify` ou `deliver` exige uma condição a mais, aplicada dentro de
+`permissions.is_allowed` (nunca num `if` solto na rota): `principal.
+can_approve_sensitive or "admin" in principal.roles`.
+
+Note que essa condição NÃO chama `principal.is_admin()`, ao contrário do
+segundo portão de `DECISIONS_DECIDE` — e essa diferença é deliberada, não um
+descuido. `is_admin()` é `"admin" in principal.roles or "codexbridge.admin"
+in principal.scopes`. O escopo de `DECISIONS_DECIDE` é
+`codexbridge.task.approve`, disjunto de `codexbridge.admin`, então ali
+`is_admin()` acrescenta uma condição de verdade. Mas o escopo BASE de
+`NODES_AUTHORIZATIONS_MANAGE` já É `codexbridge.admin` — então, para esta
+ação, `principal.has_scope(action.scope)` e `principal.is_admin()` são O
+MESMO PREDICADO: qualquer principal que passa pelo portão de base já teria
+passado por um segundo portão baseado em `is_admin()`, tornando esse segundo
+portão tautológico e o `can_approve_sensitive` irrelevante — exatamente a
+escalada que este portão existe para fechar. `tests/integration/
+test_authorization_routes.py::
+test_granting_modify_without_can_approve_sensitive_or_admin_role_is_refused`
+prova isso com um principal que tem só o escopo `codexbridge.admin` (sem
+papel `admin`, sem `can_approve_sensitive`) sendo recusado; os dois testes de
+controle positivo ao lado provam que `can_approve_sensitive` sozinho e o
+papel `admin` sozinho, cada um isoladamente, já bastam.
+
+### O que ainda não muda
+
+A allowlist local do agente (`AgentSettings.allowed_projects_file`, ou o
+registro estático em `agent.codex_bridge_agent.config`) continua existindo e
+continua sendo consultada — esta PR não a remove nem a substitui.
+`project_authorizations` estreita o que já era permitido por
+`allowed_modes`/allowlist local; nunca alarga. Ver
+`docs/project-onboarding.md` para o que muda no fluxo operacional de cadastro
+de projeto e o que continua manual.

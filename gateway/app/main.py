@@ -15,6 +15,7 @@ from gateway.app.api.rate_limit import RateLimitDependency, client_key
 from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import decisions, missions, nodes as nodes_routes, probes, projects, sessions
 from gateway.app.api.routes import artifacts as artifacts_routes
+from gateway.app.api.routes import authorizations as authorizations_routes
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import enrollment as enrollment_routes
 from gateway.app.api.routes import discovery as discovery_routes
@@ -185,6 +186,13 @@ app.include_router(enrollment_routes.router, dependencies=[Depends(RateLimitDepe
 # limiter, same administrative/fleet-wide posture as nodes.router above --
 # guarded by `NODES_DISCOVERIES_READ`/`NODES_DISCOVERIES_DECIDE`.
 app.include_router(discovery_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# The explicit operator grant/revoke of `project_authorizations` (issue #73,
+# Stage 4). Same limiter, same administrative/fleet-wide posture as
+# discovery_routes above -- guarded by `NODES_AUTHORIZATIONS_MANAGE`, whose
+# own second gate (granting `modify`/`deliver` needs `can_approve_sensitive`
+# or admin) lives inside `permissions.is_allowed`, not here.
+app.include_router(authorizations_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:

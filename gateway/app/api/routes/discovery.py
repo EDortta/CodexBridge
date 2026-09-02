@@ -51,7 +51,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.api import idempotency, pagination, permissions, timestamps
 from gateway.app.api.auth import require_action
-from gateway.app.api.errors import CONFLICT, NOT_FOUND, VALIDATION_FAILED, ApiError
+from gateway.app.api.errors import CONFLICT, NOT_FOUND, PERMISSION_DENIED, VALIDATION_FAILED, ApiError
 from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.db.session import get_session
 from gateway.app.services import store
@@ -198,6 +198,26 @@ async def adopt_discovered_resource(
     `grantCapabilities` is given, the resulting `project_authorizations` row
     is granted here -- never by the node itself (see the module docstring).
     """
+    # The same privilege ladder the dedicated authorize route applies
+    # (`routes/authorizations.py`). Adoption writes `project_authorizations`
+    # directly through `grantCapabilities`, so gating only that route would
+    # leave a second door to `modify`/`deliver` standing open, reachable by
+    # exactly the principal the ladder exists to stop: one whose token carries
+    # `codexbridge.admin` for fleet visibility without the account being
+    # trusted for a sensitive grant. Checked before the idempotency claim, so
+    # a refused request never consumes a key.
+    if not permissions.is_allowed(
+        principal, permissions.NODES_DISCOVERIES_DECIDE, capabilities=payload.grant_capabilities
+    ):
+        raise ApiError(
+            status_code=403,
+            code=PERMISSION_DENIED,
+            message=(
+                "Granting 'modify' or 'deliver' requires can_approve_sensitive or "
+                "admin. GET /api/v1/auth/me reports what this actor may do."
+            ),
+        )
+
     endpoint = f"{DISCOVERED_RESOURCES_ENDPOINT}/{{resourceId}}/adopt"
     fingerprint = idempotency.fingerprint(
         f"adopt:{resource_id}:{payload.project_id}:"

@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from gateway.app.api import permissions
 from gateway.app.api.routes import artifacts as artifacts_routes
 from gateway.app.api.routes import auth as auth_routes
+from gateway.app.api.routes import authorizations as authorizations_routes
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import decisions as decisions_routes
 from gateway.app.api.routes import enrollment as enrollment_routes
@@ -176,6 +177,7 @@ async def api(users_file, monkeypatch):
     app.include_router(nodes_routes.router)
     app.include_router(enrollment_routes.router)
     app.include_router(discovery_routes.router)
+    app.include_router(authorizations_routes.router)
 
     async def override():
         async with factory() as s:
@@ -1341,6 +1343,14 @@ ENDPOINT_FOR_ACTION = {
     # `epics`/`issues` entries above already document.
     "nodes.discoveries.read": ("GET", "/api/v1/nodes/{id}/discovered-resources"),
     "nodes.discoveries.decide": ("POST", "/api/v1/discovered-resources/{id}/deny"),
+    # `revoke`, not `authorize`, for the same reason `nodes.discoveries.decide`
+    # above picks `deny` over `adopt`: `revoke` carries no request body, so a
+    # caller lacking the scope is refused by `require_action` before any body
+    # would even need to validate, keeping this parity check about the 403
+    # boundary alone. `{id}` fills both `{nodeId}` and `{projectId}` — neither
+    # resolves to a real row, which is fine here for the same reason the
+    # `{id}` comment above gives: this only asserts the 403/not-403 boundary.
+    "nodes.authorizations.manage": ("POST", "/api/v1/nodes/{id}/projects/{id}/revoke"),
     "sessions.read": ("GET", "/api/v1/sessions"),
     "sessions.readLogs": ("GET", "/api/v1/sessions/{id}/logs"),
     "sessions.explainError": ("POST", "/api/v1/sessions/{id}/explain-error"),
