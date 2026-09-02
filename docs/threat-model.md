@@ -66,6 +66,58 @@ real sob esta raiz" (`shared/project_discovery.py`, `resolve_auto_project`).
   ponta a ponta" — só remove o segundo cadastro (o do executor), não o
   primeiro (o do gateway).
 
+### Descoberta de projetos pelo nó (WK-20260902, issue #73 Stage 3)
+
+Distinta da válvula anterior: `AgentSettings.discovery_roots` não amplia o que
+um despacho pode resolver (`auto_project_root` continua sendo isso, inalterado
+por este trabalho). Ela faz o nó **relatar** o que vê sob raízes configuradas
+por ele mesmo — para um humano decidir depois, numa PR seguinte, que ainda
+não existe.
+
+* controle: opt-in explícito e vazio por padrão
+  (`AgentSettings.discovery_roots`) — nenhum comportamento novo sem
+  configuração
+* controle: a varredura reusa `shared.project_discovery.walk_for_git_repos`,
+  herdando as mesmas duas garantias já testadas para
+  `resolve_auto_project`: nunca segue symlink, nunca sobe diretório
+* controle: só lê — nenhum comando de varredura escreve no repositório
+  candidato (`git remote get-url origin`, `git rev-parse HEAD`,
+  `git status --porcelain`, todos read-only)
+* controle: **nenhuma escrita de autorização é alcançável por este caminho**.
+  `store.record_discovery_report` só tem acesso de escrita a
+  `discovered_resources`; não importa, não consulta para escrita, e não
+  atribui a `ProjectAuthorizationModel`, `ProjectModel` nem
+  `WorkspaceBindingModel` — propriedade estrutural, testada diretamente
+  (`tests/unit/test_discovery_store.py::
+  test_record_discovery_report_never_writes_authorization_or_projects`,
+  `tests/integration/test_agent_ws_discovery.py::
+  test_the_receiving_branch_writes_only_discovered_resources`). Um nó
+  comprometido que relata candidatos fabricados só polui a fila de adoção —
+  não tem, por construção, nenhum caminho para conceder capacidade a nada
+* controle: `resource_key` (o path absoluto do candidato) nunca sai por
+  nenhuma rota REST hoje — não há rota nesta PR — e quando a rota de adoção
+  existir, cai na mesma regra de `local_path`
+  (`docs/api/README.md`, "Fields that must never ship")
+* controle: o mesmo guard de identidade do `hello`/`heartbeat`
+  (`envelope.executor_id` reivindicado vs. autenticado no handshake) já cobre
+  `discovery.report` por estar antes de qualquer branch no laço de
+  recepção — um nó não pode relatar descobertas **como** outro nó
+* controle: um `DiscoveryReport` malformado é descartado com `WARNING`, nunca
+  derruba a conexão — mesma postura já adotada para um `hello` inválido
+* risco aceito, sem mitigação nova nesta PR: nenhum teto explícito no número
+  de candidatos por relatório (`DiscoveryReport.candidates` não tem
+  `max_length`). Na prática limitado pelo filesystem real do nó e por
+  `max_size=2_000_000` bytes na conexão WebSocket que o próprio nó abre
+  (`agent/codex_bridge_agent/service.py:_run_once`); o gateway não impõe um
+  limite equivalente do seu lado hoje — o mesmo estado, não pior, que já vale
+  para `task.log` e os demais tipos de mensagem deste canal. O pior caso
+  continua sendo ruído em `discovered_resources`, nunca escalada de
+  privilégio, pela mesma garantia estrutural do controle acima
+* recomendação operacional: um nó cujo `discovery_roots` aponta para uma
+  árvore que o operador não controla totalmente relata o que existir nela —
+  a mitigação é a mesma de sempre: escolher a raiz com cuidado, não confiar
+  cegamente no que ela aponta
+
 ### Execução de comandos arbitrários
 
 * controle: nenhuma ferramenta MCP genérica de shell

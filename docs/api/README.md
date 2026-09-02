@@ -221,6 +221,12 @@ by the contract itself, not by a filter applied late:
   model, the artifacts router and the tests all cite *this* section as the rule
   that forbids it, and a council round found the citation pointing at a list
   that did not contain it;
+  are addressed by `ProjectId` and nothing else. Same category, same rule:
+  `WorkspaceBindingModel.local_path` (issue #73) and
+  `DiscoveredResourceModel.resource_key` (issue #73 Stage 3) — the latter IS
+  the candidate's absolute path on the node, not a project id
+  (`docs/control-plane.md`, "`resource_key` é dado sensível"). Both are
+  operator-surface-only, exactly like `ProjectModel.path`;
 - executor hostnames, internal IPs, ports, or anything that would let a client
   reach an executor without going through the gateway;
 - raw stack traces and raw driver errors. These map to `internal_error` plus a

@@ -146,6 +146,50 @@ async def test_hello_envelope_carries_os_and_arch_but_never_the_hostname(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_discovery_root_count_reflects_the_nodes_own_scan_roots(monkeypatch) -> None:
+    """Issue #73 Stage 3: `discovery_root_count` counts `AgentSettings.
+
+    discovery_roots` (the node's own scan-root list), never `auto_project_root`
+    -- a positive/negative pair in one test, since `auto_project_root` alone
+    used to be Stage 2's only source for this number and must no longer move
+    it at all.
+    """
+    service = AgentService(
+        AgentSettings(
+            discovery_roots=["/srv/projects/a", "/srv/projects/b"],
+            auto_project_root="/srv/projects",
+        )
+    )
+
+    async def fake_probe_all() -> list:
+        return []
+
+    monkeypatch.setattr(service.runners, "probe_all", fake_probe_all)
+
+    announcement = await service._build_announcement()
+    assert announcement.discovery_root_count == 2
+
+
+@pytest.mark.asyncio
+async def test_discovery_root_count_is_zero_with_only_auto_project_root_set(monkeypatch) -> None:
+    """The negative half of the pair above: `auto_project_root` alone never
+
+    produces a `DiscoveryReport` (`AgentSettings.auto_project_root`'s own
+    docstring -- it only widens local `project_id` resolution), so it must
+    not move this count either.
+    """
+    service = AgentService(AgentSettings(auto_project_root="/srv/projects"))
+
+    async def fake_probe_all() -> list:
+        return []
+
+    monkeypatch.setattr(service.runners, "probe_all", fake_probe_all)
+
+    announcement = await service._build_announcement()
+    assert announcement.discovery_root_count == 0
+
+
+@pytest.mark.asyncio
 async def test_build_announcement_falls_back_to_minimal_payload_when_probing_raises(monkeypatch) -> None:
     """`_build_announcement` must never cost the connection. If anything
 

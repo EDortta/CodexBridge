@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 159 file(s) · 1715 symbol(s) indexed
-- Languages: config (2), python (155), shell (2)
+- 162 file(s) · 1759 symbol(s) indexed
+- Languages: config (2), python (158), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -148,6 +148,7 @@ tests/
   integration/
     test_agent_ack_handling.py  — "`task.ack` handling in the `/agent/ws` message loop — issue #16 council."
     test_agent_hub.py
+    test_agent_ws_discovery.py  — "`AgentMessageType.DISCOVERY_REPORT` through the real `/agent/ws` receive loop."
     test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
     test_agent_ws_identity.py  — "An envelope's `executor_id` is a claim; the handshake's is the fact."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
@@ -180,6 +181,7 @@ tests/
     test_agent_announcement.py  — "The `hello` payload's real content -- issue #73 Stage 2."
     test_agent_auth.py  — "Credential resolution for the `/agent/ws` handshake — issue #15."
     test_agent_auto_project.py  — "`agent.codex_bridge_agent.config.resolve_auto_project` -- the opt-in"
+    test_agent_discovery.py  — "`AgentService._scan_root`/`_discovery_loop` -- issue #73 Stage 3."
     test_agent_machine_token.py  — "`agent.codex_bridge_agent.config.resolve_machine_token` -- issue #76's"
     test_agent_service.py
     test_agent_service_materialize.py  — "`AgentService._handle_materialize` -- the `ISSUE_MATERIALIZE` handler on"
@@ -189,6 +191,7 @@ tests/
     test_codex_runner.py  — "CodexRunner's pause/resume/restart/cancel state machine — issue #16 council."
     test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
     test_discover_projects.py  — "`scripts/discover_projects.py` -- read-only repo discovery."
+    test_discovery_store.py  — "`store.record_discovery_report` -- issue #73 Stage 3."
     test_email_templates.py  — "`gateway.app.services.email_templates` -- pure rendering, no I/O."
     test_enroll_node.py  — "`scripts/enroll_node.py` -- one HTTP call, one file write, issue #76."
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
@@ -873,6 +876,7 @@ tests/
 - `executor_is_live(executor)` — "Whether an executor should be presented as connected right now."
 - `ensure_node_for_executor(session, executor)` *(async function)* — "The Bridge Node bound to `executor`, creating and binding one if needed."
 - `record_node_announcement(session, executor, announcement)` *(async function)* — "Persist a HELLO's `NodeAnnouncement` onto the node bound to `executor`."
+- `record_discovery_report(session, executor, report)` *(async function)* — "Persist one root's `DiscoveryReport` into `discovered_resources` -- and nothing else."
 - `list_nodes(session)` *(async function)* — "Every Bridge Node, ordered by id, paired with the executor bound to it."
 - `get_node(session, node_id)` *(async function)* — "One Bridge Node and its bound executor, or None if the node does not exist."
 - `create_node_invite(session)` *(async function)* — "Issue a bearer enrollment invite. Only `hash_token(token)` is stored."
@@ -1035,6 +1039,8 @@ tests/
 - **`DiscoveryRoot`** *(class)* — "One directory tree a node is configured to scan, and what that grants."
 - **`EngineAvailability`** *(class)* — "Whether one `AgentEngine` can actually run on this node, right now."
 - **`NodeAnnouncement`** *(class)* — "What a node reports about itself when it connects (`hello` payload)."
+- **`DiscoveredCandidate`** *(class)* — "One directory a node's own scan found under one of its `discovery_roots`."
+- **`DiscoveryReport`** *(class)* — "One node's scan of one `discovery_root`, sent as `AgentMessageType.DISCOVERY_REPORT`."
 - `node_health()` — "Derive a node's health from facts, at read time, never from a column."
 - **`ProjectRegistration`** *(class)*
 - **`ExecutorRegistration`** *(class)*
@@ -1219,6 +1225,22 @@ tests/
 - `test_cancel_replay_still_happens_within_max_age(factory)` *(async function)*
 - `test_control_replay_expires_after_max_age(factory)` *(async function)* — "issue #17 council round 1, "the sweep skeptic": unlike cancel replay,"
 - `test_control_replay_still_happens_within_max_age(factory)` *(async function)*
+
+### `tests/integration/test_agent_ws_discovery.py`
+
+> `AgentMessageType.DISCOVERY_REPORT` through the real `/agent/ws` receive loop.
+
+- **`FakeSocket`** *(class)*
+  - `__init__(self, incoming)` *(method)*
+  - `accept(self)` *(async method)*
+  - `close(self, code)` *(async method)*
+  - `send_json(self, payload)` *(async method)*
+  - `receive_json(self)` *(async method)*
+- `wired(monkeypatch)` *(async function)*
+- `test_a_discovery_report_is_recorded_for_the_authenticated_node(wired)` *(async function)*
+- `test_the_receiving_branch_writes_only_discovered_resources(wired)` *(async function)* — "The structural guarantee, proven through the real handler this time:"
+- `test_a_malformed_discovery_report_is_dropped_not_closed(wired)` *(async function)* — "Same tolerant-parse posture as a malformed HELLO: a broken payload"
+- `test_a_forged_discovery_report_is_dropped_not_recorded_against_the_victim(wired)` *(async function)* — "The claimed-vs-authenticated `executor_id` guard at the top of the"
 
 ### `tests/integration/test_agent_ws_handshake.py`
 
@@ -2125,6 +2147,8 @@ tests/
 
 - `test_hello_envelope_validates_as_node_announcement_with_derived_capabilities(monkeypatch, allow_workspace_write, allow_git_delivery, expected_present, expected_absent)` *(async function)*
 - `test_hello_envelope_carries_os_and_arch_but_never_the_hostname(monkeypatch)` *(async function)* — "Issue #73: node identity must not be inferred from mutable hostname --"
+- `test_discovery_root_count_reflects_the_nodes_own_scan_roots(monkeypatch)` *(async function)* — "Issue #73 Stage 3: `discovery_root_count` counts `AgentSettings."
+- `test_discovery_root_count_is_zero_with_only_auto_project_root_set(monkeypatch)` *(async function)* — "The negative half of the pair above: `auto_project_root` alone never"
 - `test_build_announcement_falls_back_to_minimal_payload_when_probing_raises(monkeypatch)` *(async function)* — "`_build_announcement` must never cost the connection. If anything"
 
 ### `tests/unit/test_agent_auth.py`
@@ -2147,6 +2171,27 @@ tests/
 - `test_a_directory_without_git_is_never_matched(tmp_path)`
 - `test_a_symlinked_directory_outside_root_is_never_followed(tmp_path)` — "`walk_for_git_repos` never follows a symlink -- this proves the"
 - `test_the_resolved_id_matches_what_discover_projects_would_suggest(tmp_path)` — "Consistency property this module's own docstring promises: an id a"
+
+### `tests/unit/test_agent_discovery.py`
+
+> `AgentService._scan_root`/`_discovery_loop` -- issue #73 Stage 3.
+
+- **`DummyWebSocket`** *(class)*
+  - `__init__(self)` *(method)*
+  - `send(self, payload)` *(async method)*
+- `test_discovery_roots_defaults_to_empty()` — "The shipped default: no discovery task work at all (`_discovery_loop`'s"
+- `test_discovery_roots_parses_a_comma_separated_env_var(monkeypatch)` — "Same convention every other list-shaped setting in this codebase uses"
+- `test_discovery_roots_accepts_a_real_list_when_constructed_directly()` — "Tests throughout this file build `AgentSettings(discovery_roots=[...])`"
+- `test_scan_root_finds_real_repos_with_remote_head_and_dirty(tmp_path)` *(async function)*
+- `test_scan_root_reports_no_remote_as_none_not_an_error(tmp_path)` *(async function)* — "`git remote get-url origin` exits non-zero with no `origin` configured"
+- `test_scan_root_marks_a_repo_with_uncommitted_changes_dirty(tmp_path)` *(async function)*
+- `test_scan_root_ignores_a_directory_with_no_git(tmp_path)` *(async function)*
+- `test_scan_root_never_follows_a_symlink_out_of_root(tmp_path)` *(async function)* — "Same guarantee `test_agent_auto_project.py` proves for"
+- `test_scan_root_finds_a_nested_submodule_as_its_own_candidate(tmp_path)` *(async function)* — "CLAUDE.md's own project-scope rule: monorepo submodules are separate"
+- `test_scan_root_returns_none_when_the_walk_itself_fails(tmp_path, monkeypatch)` *(async function)* — "A scan failure (e.g. a permission error surfacing as an exception"
+- `test_discovery_loop_is_a_noop_when_no_roots_are_configured()` *(async function)* — "The shipped default (`discovery_roots=[]`) preserves today's"
+- `test_discovery_loop_sends_one_envelope_per_root(tmp_path)` *(async function)* — "Protects against a single giant payload for every root: a slow or"
+- `test_discovery_loop_skips_a_root_that_fails_but_still_reports_the_others(tmp_path, monkeypatch)` *(async function)* — "A root whose scan raises must not stop the others from being reported."
 
 ### `tests/unit/test_agent_machine_token.py`
 
@@ -2304,6 +2349,23 @@ tests/
 - `test_cli_writes_json_to_the_requested_output_file(tmp_path)`
 - `test_cli_never_writes_anywhere_but_the_requested_output_file(tmp_path)` — "Read-only by contract: the script's own docstring promises this."
 - `test_cli_rejects_a_root_that_is_not_a_directory(tmp_path)`
+
+### `tests/unit/test_discovery_store.py`
+
+> `store.record_discovery_report` -- issue #73 Stage 3.
+
+- `db_session()` *(async function)*
+- `test_a_new_candidate_is_inserted_as_discovered(db_session)` *(async function)*
+- `test_existing_candidate_refreshes_evidence_without_regressing_state(db_session)` *(async function)*
+- `test_a_row_missing_from_the_report_becomes_stale(db_session)` *(async function)*
+- `test_reconciliation_is_scoped_to_the_reports_own_root_path(db_session)` *(async function)* — "A row for a DIFFERENT root on the same node must not go STALE just"
+- `test_denied_row_is_not_touched_even_when_reported_again(db_session)` *(async function)*
+- `test_denied_row_does_not_regress_to_stale_when_absent(db_session)` *(async function)* — "The exact bug named in `docs/control-plane.md`: a refused candidate"
+- `test_stale_row_reappearing_with_no_project_reverts_to_discovered(db_session)` *(async function)*
+- `test_stale_row_reappearing_with_active_authorization_reverts_to_authorized(db_session)` *(async function)*
+- `test_stale_row_reappearing_with_only_a_revoked_authorization_reverts_to_adopted(db_session)` *(async function)* — "The negative half of the pair above: a REVOKED authorization must not"
+- `test_record_discovery_report_never_writes_authorization_or_projects(db_session)` *(async function)* — "The property that makes "the node proposes, the panel adopts" true by"
+- `test_a_large_report_does_not_cost_one_round_trip_per_candidate(db_session)` *(async function)* — "247 candidates -- the real root that motivated this work, rounded up"
 
 ### `tests/unit/test_email_templates.py`
 

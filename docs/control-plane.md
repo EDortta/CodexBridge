@@ -194,3 +194,137 @@ O anúncio carrega `discovery_root_count`, um número, não as raízes. A pergun
 de frota é *"este nó está configurado para descobrir alguma coisa?"*, e um
 contador a responde sem publicar o layout de disco da máquina em todo cliente.
 Vale a mesma regra da seção "Caminho absoluto" acima.
+
+Desde a Stage 3 (abaixo), `discovery_root_count` é `len(AgentSettings.
+discovery_roots)` — a lista real de raízes do nó. A Stage 2 o calculava a
+partir de `auto_project_root` (0 ou 1) só porque nenhuma lista de verdade
+existia ainda para contar; o próprio docstring de `_build_announcement`
+previa essa substituição. `auto_project_root` nunca produziu um relatório de
+descoberta nem qualquer outra mensagem ao gateway — é a válvula da camada 7
+(`docs/project-onboarding.md`), que só amplia quais `project_id` um despacho
+resolve localmente. Contá-la aqui teria respondido "descobre algo?" com um
+número para o qual o gateway nunca vê evidência nenhuma.
+
+## Stage 3 — o nó propõe, o painel adota (issue #73)
+
+A Stage 1 criou `discovered_resources` vazia; a Stage 2 fez o nó se anunciar
+sem produzir nenhuma linha nela (`discovery_root_count` era só um número). A
+Stage 3 é o que faz as raízes de descoberta produzirem linhas de verdade —
+sem conceder nada sobre elas. Adotar e decidir candidatos (a rota REST que
+lista `discovered_resources` e move `state`) é a próxima PR; esta entrega
+apenas a proposta.
+
+### Duas listas de raízes, dois donos, nomes parecidos de propósito
+
+A #73 pede exatamente esta distinção, e um nome parecido é o que faz alguém
+tentado a fundir as duas perceber que não deveria:
+
+| lista | onde mora | quem decide | o que ela faz |
+|---|---|---|---|
+| `AgentSettings.discovery_roots` (nó) | no nó, `agent/codex_bridge_agent/config.py` | o operador **daquela máquina** | quais diretórios este nó varre no próprio disco. Vazia por padrão — sem opt-in, nenhum comportamento novo |
+| `ExecutorRegistration.discovery_roots` (operador, `list[DiscoveryRoot]`) | no gateway, `registry.json` | o operador do **registro** | o que cada raiz concede automaticamente (`auto_authorize`), casando por `root_path` — consumido pela próxima PR (adoção), não por esta |
+
+Só o nó pode decidir a primeira — é o filesystem dele. Só o operador do
+registro pode decidir a segunda — é ele quem concede. As duas precisam
+concordar na **string** `path`/`root_path`, porque o casamento na próxima PR é
+por igualdade de string, nunca por resolução: o gateway não enxerga o disco
+do nó (mesma razão pela qual `DiscoveryRoot.path` já não era resolvido desde
+a Stage 1). É por isso que `DiscoveryReport.root_path` (a mensagem, abaixo) é
+exatamente a string configurada no nó, nunca `Path.resolve()`'d.
+
+Uma terceira lista não deveria nunca nascer por acidente aqui — se um dia
+parecer necessária, é sinal de que uma das duas acima está sendo esticada
+para um papel que não é o dela.
+
+`auto_project_root` (a válvula da camada 7, `docs/project-onboarding.md`)
+continua exatamente como está — é uma preocupação diferente: resolve
+`project_id` desconhecido no momento do despacho, nunca produz uma mensagem
+ao gateway, e não tem relação estrutural com nenhuma das duas listas acima
+além da sobreposição de vocabulário ("descoberta").
+
+### `discovery.report`: uma mensagem, não um campo do `hello`
+
+`AgentMessageType.DISCOVERY_REPORT` (`shared/protocol.py`) é deliberadamente
+separada de `NodeAnnouncement`. A Stage 2 já documentava que o `hello` carrega
+só uma contagem (`discovery_root_count`); um relatório de descoberta pode
+carregar centenas de candidatos (247, na raiz real que motivou este
+trabalho), e o `hello` viaja a cada reconexão — misturar os dois faria toda
+reconexão arrastar esse inventário inteiro consigo. Ver `docs/protocol.md`
+para o payload completo.
+
+O nó varre cada raiz num laço próprio (`AgentService._discovery_loop`),
+desacoplado do heartbeat de 15s por desenho: `AgentSettings.
+discovery_scan_interval_seconds` (padrão 3600s) é a única cadência dessa
+varredura. Uma varredura roda logo após o `hello`, depois a cada intervalo. A
+varredura em si (`shared.project_discovery.build_project_id_index`, reusando
+`walk_for_git_repos`/`suggest_project_id` — o mesmo walk de
+`scripts/discover_projects.py` e `resolve_auto_project`, nunca um segundo
+scanner) roda em `run_in_executor`: é I/O de filesystem bloqueante, e não pode
+travar o heartbeat nem o laço de despacho. **Um envelope por raiz**, nunca um
+payload único para todas: uma raiz lenta ou incomumente grande não pode
+atrasar o relatório de nenhuma outra.
+
+### `resource_key` é dado sensível — mesma categoria de `local_path`
+
+Na prática, `resource_key` é o path absoluto do candidato no nó — a única
+forma de identificá-lo antes de existir um `projects.id` para apontar, e por
+isso não é chave estrangeira (mesmo raciocínio que já vale para
+`DiscoveredResourceModel.project_id`, nullable). Cai na mesma categoria de
+dado sensível que `workspace_bindings.local_path` já ocupa nesta página: um
+path absoluto do disco do nó, que só pode aparecer em superfícies de operador
+devidamente autorizadas, nunca em `ProjectStatus`, `Session`, `Mission` ou
+qualquer ferramenta MCP. Essa exceção para `resource_key` está registrada
+aqui e em `docs/api/README.md` ("Fields that must never ship") e
+`docs/threat-model.md` — sem isso, a próxima pessoa a expor
+`discovered_resources` numa rota reintroduz o vazamento que `local_path` já
+evitou uma vez.
+
+Deliberadamente **não** é `suggested_project_id`: `shared.project_discovery.
+suggest_project_id` só garante unicidade dentro da varredura de **uma** raiz
+(seu `taken` é reiniciado a cada chamada); duas raízes varridas de forma
+independente podem sugerir o mesmo id para dois diretórios diferentes. O que
+de fato identifica uma linha em `discovered_resources` — e o que uma nova
+varredura precisa reconhecer como "o mesmo candidato" — é o path, não a
+sugestão.
+
+### Reconciliação de estado: observação nunca é decisão
+
+`store.record_discovery_report` processa um `DiscoveryReport` inteiro (uma
+raiz) como um lote, escaneado por `(node_id, kind, resource_key)` contra o
+que já existe para `(node_id, root_path)`:
+
+- candidato novo → `INSERT`, `state=DISCOVERED`, `first_seen_at=last_seen_at=now`;
+- candidato já existente → atualiza `evidence_json` e `last_seen_at`, e
+  **nunca** muda `state` — uma observação repetida não é uma decisão nova do
+  operador, então um `ADOPTED` ou `AUTHORIZED` não pode regredir só porque o
+  nó reconectou e relatou de novo;
+- linha daquele `(node_id, root_path)` ausente do relatório atual, com
+  `state != DENIED` → `STALE` — visto antes, não visto agora;
+- `DENIED` nunca é tocado por observação, em nenhuma direção: nem regride
+  para a fila de adoção por reaparecer (a falha que esta seção nomeou na
+  Stage 1: "candidato recusado volta à fila de adoção a cada reconexão"), nem
+  tem sua evidência atualizada — uma linha negada simplesmente para de se
+  mover quando o operador decide;
+- uma linha `STALE` que reaparece **não** volta a `DISCOVERED` por padrão: se
+  já havia binding/autorização ativos antes de ficar `STALE`, ela volta para
+  `ADOPTED`/`AUTHORIZED`; só cai em `DISCOVERED` quando não havia decisão
+  nenhuma sobre ela. Hoje, como nada nesta PR ainda escreve
+  `discovered_resources.project_id` (isso é da PR de adoção), todo caso
+  prático cai em `DISCOVERED` — a lógica para os outros dois já existe porque
+  a linha sobre a qual ela vai operar já existe hoje.
+
+O upsert é em lote: um único `select` carrega tudo que já existe para aquele
+`(node_id, root_path)`, o laço só muda objetos ORM em memória, e há um único
+`commit` — um relatório de 247 candidatos custa uma consulta e um commit, não
+247 de cada.
+
+### O que esta PR deliberadamente não faz
+
+Nenhuma rota REST lê ou decide `discovered_resources` — listar candidatos e
+adotá-los é a PR seguinte. Por isso `API_CONTRACT_VERSION` não muda aqui. E o
+branch que recebe `discovery.report` no gateway chama **só**
+`store.record_discovery_report`, que escreve **só** em
+`discovered_resources` — nunca em `project_authorizations`, `projects` nem
+`workspace_bindings`. Isso é o que torna "o nó propõe, o painel adota"
+verdade por construção: o caminho que recebe uma descoberta não tem, no
+código, nenhum jeito de chegar a uma tabela de autorização.

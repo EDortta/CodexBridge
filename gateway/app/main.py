@@ -54,6 +54,15 @@ from gateway.app.services.agent_hub import AgentHub
 from gateway.app.services.notify import notify_task_finished
 from shared.protocol import EXECUTOR_TOKEN_HEADER, AgentEnvelope, AgentMessageType, NodeAnnouncement, TaskState
 from shared.security import hash_token, sanitize_log_line, secure_compare
+from shared.protocol import (
+    EXECUTOR_TOKEN_HEADER,
+    AgentEnvelope,
+    AgentMessageType,
+    DiscoveryReport,
+    NodeAnnouncement,
+    TaskState,
+)
+from shared.security import sanitize_log_line, secure_compare
 
 
 configure_logging()
@@ -937,6 +946,35 @@ async def agent_ws(
                         hello_executor = await session.get(store.ExecutorModel, executor_id)
                         if hello_executor is not None:
                             await store.record_node_announcement(session, hello_executor, announcement)
+                elif envelope.type == AgentMessageType.DISCOVERY_REPORT:
+                    # Issue #73 Stage 3. This branch calls exactly ONE store
+                    # function, and that function writes to exactly ONE
+                    # table (`discovered_resources`). That is not a style
+                    # choice -- it is what makes "the node proposes, the
+                    # panel adopts" true by construction rather than by
+                    # convention: there is no code path from a connected
+                    # node's own message to `project_authorizations`,
+                    # `projects`, or `workspace_bindings`. Adoption is a
+                    # separate, operator-scoped surface (a later PR), never
+                    # a side effect of a node reporting what it saw.
+                    #
+                    # Same tolerant-parse posture as HELLO above: a
+                    # malformed report is logged and dropped, never a reason
+                    # to close the socket -- a bug in one node's discovery
+                    # scan must not look like a dropped connection to the
+                    # operator, and must not stop that node's tasks, logs or
+                    # heartbeats, which all share this same loop.
+                    try:
+                        report = DiscoveryReport.model_validate(envelope.payload)
+                    except ValidationError:
+                        logging.getLogger(__name__).warning(
+                            "executor %s sent a DISCOVERY_REPORT payload that failed validation; ignoring it",
+                            sanitize_log_line(envelope.executor_id),
+                        )
+                    else:
+                        discovery_executor = await session.get(store.ExecutorModel, executor_id)
+                        if discovery_executor is not None:
+                            await store.record_discovery_report(session, discovery_executor, report)
                 elif envelope.type == AgentMessageType.HEARTBEAT:
                     await store.mark_executor_connected(session, envelope.executor_id, True)
                 elif envelope.type == AgentMessageType.TASK_ACK:

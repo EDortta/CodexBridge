@@ -226,6 +226,13 @@ class AgentMessageType(str, Enum):
     # TASK_RESULT is in `gateway/app/main.py`'s `/agent/ws` loop.
     ISSUE_MATERIALIZE = "issue.materialize"
     ISSUE_MATERIALIZE_RESULT = "issue.materialize_result"
+    # Issue #73 Stage 3. Deliberately its own message, never folded into
+    # `HELLO`'s `NodeAnnouncement`: the announcement is small and travels once
+    # per connection, while a discovery scan can carry hundreds of candidates
+    # from a real operator root (247, in the root that motivated this work) --
+    # mixing the two would make every reconnect drag that whole inventory
+    # along with it. See `DiscoveryReport`'s own docstring.
+    DISCOVERY_REPORT = "discovery.report"
 
 
 class ApprovalDecision(str, Enum):
@@ -406,6 +413,69 @@ class NodeAnnouncement(BaseModel):
         return value
 
 
+class DiscoveredCandidate(BaseModel):
+    """One directory a node's own scan found under one of its `discovery_roots`.
+
+    Issue #73 Stage 3. `resource_key` is the candidate's absolute path on the
+    node -- the same sensitive-data category `docs/control-plane.md` already
+    names for `WorkspaceBindingModel.local_path`
+    (`docs/api/README.md`, "Fields that must never ship"), and it is
+    deliberately NOT `suggested_project_id`: `shared.project_discovery.
+    suggest_project_id` only guarantees uniqueness *within one root's own
+    scan* (its `taken` set is seeded fresh per call), so two different roots,
+    scanned independently, can legitimately suggest the same id for two
+    different directories. What actually keys a row in `discovered_resources`
+    -- and what a re-scan must recognise as "the same candidate" -- is the
+    path, not the suggestion.
+
+    `remote_url` comes from `git remote get-url origin`
+    (`agent/codex_bridge_agent/git_tools.py:run_git`) and is `None` when the
+    repository simply has no `origin` configured -- not an error, and not
+    evidence of anything wrong with the candidate.
+    """
+
+    resource_key: str = Field(min_length=1, max_length=2048)
+    suggested_project_id: str = Field(min_length=1, max_length=128)
+    suggested_name: str = Field(min_length=1, max_length=255)
+    remote_url: str | None = Field(default=None, max_length=2048)
+    head: str | None = Field(default=None, max_length=255)
+    dirty: bool | None = None
+
+
+class DiscoveryReport(BaseModel):
+    """One node's scan of one `discovery_root`, sent as `AgentMessageType.DISCOVERY_REPORT`.
+
+    Issue #73 Stage 3. One report per root rather than one giant payload for
+    every root a node scans: a slow or unusually large root (hundreds of
+    candidates) must not delay the report for every other root, and the
+    gateway reconciles `discovered_resources` per `(node_id, root_path)`
+    anyway (`gateway/app/services/store.py:record_discovery_report`), so a
+    per-root envelope is also the natural unit of that reconciliation.
+
+    Kept out of `NodeAnnouncement`/`hello` on purpose -- see
+    `AgentMessageType.DISCOVERY_REPORT`'s own comment: the announcement is
+    small and travels on every reconnect, a discovery report is neither.
+
+    `root_path` is the exact string from the node's own
+    `AgentSettings.discovery_roots` entry -- never resolved or expanded here
+    -- because the gateway-side `DiscoveryRoot.path` it must eventually match
+    (for `auto_authorize`, in the adoption work that follows this one) is
+    itself compared as a string, never canonicalized (`DiscoveryRoot`'s own
+    docstring: the gateway cannot see the node's disk). A node and its
+    operator-configured `DiscoveryRoot` must agree on that string for the
+    match to work; this report does not, and cannot, correct a mismatch.
+
+    Receiving this NEVER grants anything: `store.record_discovery_report`
+    writes only to `discovered_resources`. See that function's own docstring
+    for why that is structural, not a convention some future change could
+    quietly break.
+    """
+
+    root_path: str = Field(min_length=1, max_length=2048)
+    candidates: list[DiscoveredCandidate] = Field(default_factory=list)
+    scanned_at: datetime
+
+
 def node_health(
     *,
     live: bool,
@@ -461,6 +531,19 @@ class ExecutorRegistration(BaseModel):
     # Deliberately on the executor's registration rather than a global
     # setting: #73 requires the model to support a fleet, and two nodes of the
     # same fleet legitimately hold different trees at different paths.
+    #
+    # NOT the same list as `agent.codex_bridge_agent.config.AgentSettings.
+    # discovery_roots` (Stage 3), even though the two share a name and a
+    # `path` string that must agree for either to be useful. This one is the
+    # OPERATOR'S registry entry: it lives on the gateway, and says what each
+    # tree grants automatically once a node reports something under it
+    # (`auto_authorize`) -- the node never gets to decide that for itself.
+    # `AgentSettings.discovery_roots` is the NODE'S own, unrelated setting:
+    # which directories it is willing to walk its own filesystem for at all.
+    # Only the node can decide that one -- it is the node's disk. Say it here
+    # so a third, in-between list never gets invented by accident: see
+    # `AgentSettings.discovery_roots`'s own docstring, and
+    # `docs/control-plane.md`.
     discovery_roots: list[DiscoveryRoot] = Field(default_factory=list)
 
 
