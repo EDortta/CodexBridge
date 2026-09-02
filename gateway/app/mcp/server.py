@@ -13,6 +13,7 @@ from gateway.app.models.entities import ExecutorModel, IssueModel
 from gateway.app.services import store
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
 from gateway.app.services.audit import record_event
+from gateway.app.services.issue_render import render_epic_markdown, epic_directory_slug
 from gateway.app.services.issue_types import IssuePlanningError
 from gateway.app.mcp.tools import tool_definitions
 from gateway.app.core.users import AuthenticatedPrincipal
@@ -25,6 +26,7 @@ from shared.protocol import (
     DeliveryRequest,
     IMPLEMENTED_ENGINES,
     ISSUE_REF_PATTERN,
+    MaterializeRequest,
     PUSHABLE_BRANCH_PATTERN,
     STOPPABLE_TASK_STATES,
     SubmitTaskRequest,
@@ -707,6 +709,11 @@ async def handle_mcp_call(
             # current revision to fill `expected_revision` with, the same way
             # `ETag` lets a REST caller fill `If-Match`.
             "revision": epic.revision,
+            # Additive, WK-20260902-issue-materialize (issue #78, Commit 1):
+            # null until `publish_epic_to_repo` succeeds -- lets the operator
+            # tell "drafted, not in git yet" apart from "published".
+            "materialized_path": epic.materialized_path,
+            "materialized_revision": epic.materialized_revision,
         }
         if claim is not None:
             await complete_idempotent(endpoint, idempotency_key, claim, 201, payload, request_fingerprint)
@@ -729,6 +736,8 @@ async def handle_mcp_call(
                     "description": epic.description,
                     "status": epic.status,
                     "revision": epic.revision,
+                    "materialized_path": epic.materialized_path,
+                    "materialized_revision": epic.materialized_revision,
                 }
                 for epic in rows
             ],
@@ -775,6 +784,8 @@ async def handle_mcp_call(
             "description": updated.description,
             "status": updated.status,
             "revision": updated.revision,
+            "materialized_path": updated.materialized_path,
+            "materialized_revision": updated.materialized_revision,
         }
         result = _text_result(f"Epic {updated.id} updated.", payload)
     elif tool_name == "create_issue":
@@ -850,6 +861,9 @@ async def handle_mcp_call(
             # Additive since A1, same reason as create_epic's: `update_issue`
             # and `move_issue_to_epic` need it for `expected_revision`.
             "revision": issue.revision,
+            # Additive, WK-20260902-issue-materialize (issue #78, Commit 1).
+            "materialized_path": issue.materialized_path,
+            "materialized_revision": issue.materialized_revision,
         }
         if claim is not None:
             await complete_idempotent(endpoint, idempotency_key, claim, 201, payload, request_fingerprint)
@@ -886,6 +900,8 @@ async def handle_mcp_call(
                     "dependencies": json.loads(issue.dependencies_json or "[]"),
                     "blocked_reason": issue.blocked_reason,
                     "revision": issue.revision,
+                    "materialized_path": issue.materialized_path,
+                    "materialized_revision": issue.materialized_revision,
                 }
                 for issue in rows
             ],
@@ -935,6 +951,8 @@ async def handle_mcp_call(
             "dependencies": json.loads(updated.dependencies_json or "[]"),
             "blocked_reason": updated.blocked_reason,
             "revision": updated.revision,
+            "materialized_path": updated.materialized_path,
+            "materialized_revision": updated.materialized_revision,
         }
         result = _text_result(f"Issue {updated.id} updated.", payload)
     elif tool_name == "move_issue_to_epic":
@@ -992,10 +1010,123 @@ async def handle_mcp_call(
             "project_id": updated.project_id,
             "epic_id": updated.epic_id,
             "revision": updated.revision,
+            "materialized_path": updated.materialized_path,
+            "materialized_revision": updated.materialized_revision,
         }
         if claim is not None:
             await complete_idempotent(endpoint, idempotency_key, claim, 200, payload, request_fingerprint)
         result = _text_result(f"Issue {updated.id} moved to epic {updated.epic_id}.", payload)
+    elif tool_name == "publish_epic_to_repo":
+        # Issue #78, WK-20260902-issue-materialize / Commit 2d. Bridges an
+        # `EpicModel`/`IssueModel` planned in ChatGPT (A1/A2's tools) into a
+        # versioned file in the PROJECT's own repository. `render_epic_
+        # markdown` is a pure function (`gateway/app/services/issue_render.py`)
+        # -- everything that decides bytes-on-disk happens here, synchronously,
+        # against exactly the row a human already approved in this
+        # conversation. What crosses the wire to the executor is that already-
+        # rendered content, never a second instruction telling an LLM to
+        # "write this file" -- see that module's docstring for why a
+        # `submit_codex_task` detour would be the wrong tool.
+        require_action(permissions.EPICS_PUBLISH)
+        epic_id = str(arguments["epic_id"])
+        epic = await store.get_epic(session, epic_id)
+        if epic is None or not principal.can_access_project(epic.project_id):
+            raise HTTPException(status_code=404, detail="unknown_epic")
+
+        issue_rows = await store.list_issues_page(
+            session, project_id=epic.project_id, epic_id=epic.id, limit=1000
+        )
+
+        executor_id = arguments.get("executor_id")
+        if executor_id:
+            executor = await session.get(ExecutorModel, executor_id)
+            if executor is None:
+                raise HTTPException(status_code=404, detail="unknown_executor")
+            allowed_projects = json.loads(executor.metadata_json).get("allowed_projects", [])
+            if epic.project_id not in allowed_projects:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"project_not_onboarded: executor {executor_id!r} does not allow project "
+                        f"{epic.project_id!r}. Register it in both /etc/codex-bridge/registry.json "
+                        "(on the gateway host) and the executor's allowed-projects.json, then "
+                        "restart both processes."
+                    ),
+                )
+            if not hub.is_connected(executor_id):
+                # Never a silently queued write: the operator asked for a file
+                # to land in git NOW, and a fire-and-forget dispatch to an
+                # offline executor would report success while nothing
+                # happened. See `AgentMessageType.ISSUE_MATERIALIZE`'s own
+                # docstring (shared/protocol.py).
+                raise HTTPException(
+                    status_code=409, detail=f"executor_not_connected: executor {executor_id!r} is not connected right now."
+                )
+        else:
+            onboarded = await store.executors_allowing_project(session, epic.project_id)
+            if not onboarded:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"project_not_onboarded: no executor allows project {epic.project_id!r}. "
+                        "Register it in both /etc/codex-bridge/registry.json (on the gateway host) "
+                        "and the executor's allowed-projects.json, then restart both processes."
+                    ),
+                )
+            connected = [item for item in onboarded if hub.is_connected(item.id)]
+            if not connected:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"executor_not_connected: no connected executor allows project {epic.project_id!r}.",
+                )
+            executor_id = connected[0].id
+
+        branch = arguments.get("branch")
+        allow_push = bool(arguments.get("allow_push", False))
+        if allow_push and not branch:
+            raise HTTPException(status_code=400, detail="branch_required_for_push")
+        delivery = None
+        if branch:
+            if allow_push:
+                require_scope("codexbridge.task.approve")
+                if principal is not None and not (principal.can_approve_sensitive or principal.is_admin()):
+                    raise HTTPException(status_code=403, detail="approval_not_allowed")
+                if not PUSHABLE_BRANCH_PATTERN.match(branch):
+                    raise HTTPException(status_code=400, detail="branch_not_pushable")
+            delivery = DeliveryRequest(
+                branch=branch,
+                allow_push=allow_push,
+                base_branch=arguments.get("base_branch", "development"),
+                commit_subject=arguments.get("commit_subject"),
+            )
+
+        files = render_epic_markdown(epic, issue_rows)
+        materialize_request = MaterializeRequest(
+            epic_id=epic.id,
+            project_id=epic.project_id,
+            slug=epic_directory_slug(epic),
+            files=files,
+            existing_path=epic.materialized_path,
+            epic_revision=epic.revision,
+            issue_revisions={issue.id: issue.revision for issue in issue_rows},
+            delivery=delivery,
+        )
+        await hub.send(
+            executor_id,
+            hub_envelope(executor_id, AgentMessageType.ISSUE_MATERIALIZE.value, materialize_request.model_dump(mode="json")),
+        )
+
+        payload = {
+            "epic_id": epic.id,
+            "executor_id": executor_id,
+            "status": "dispatched",
+            "existing_path": epic.materialized_path,
+            "file_count": len(files),
+        }
+        result = _text_result(
+            f"Materialization of epic {epic.id} ({len(files)} files) dispatched to executor {executor_id}.",
+            payload,
+        )
     elif tool_name == "create_reminder":
         # WK-20260830-chatgpt-entry-provider-and-delivery, issue #71. Runs on
         # the gateway, not the executor -- see google_calendar.py's module

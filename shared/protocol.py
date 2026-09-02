@@ -215,6 +215,17 @@ class AgentMessageType(str, Enum):
     TASK_RESTART = "task.restart"
     TASK_CANCELLED = "task.cancelled"
     ERROR = "error"
+    # WK-20260902-issue-materialize / issue #78, Commit 2b. Fire-and-forget,
+    # like TASK_DISPATCH -- sent directly by `hub.send` from
+    # `publish_epic_to_repo` (`gateway/app/mcp/server.py`), never queued
+    # through a `TaskModel` row: there is no task to await here, and "no
+    # connected executor" is refused synchronously at dispatch time rather
+    # than silently queued (see that tool's own docstring). The executor
+    # writes the files (`agent/codex_bridge_agent/issue_materialize.py`) and
+    # reports back with ISSUE_MATERIALIZE_RESULT, handled the same way
+    # TASK_RESULT is in `gateway/app/main.py`'s `/agent/ws` loop.
+    ISSUE_MATERIALIZE = "issue.materialize"
+    ISSUE_MATERIALIZE_RESULT = "issue.materialize_result"
 
 
 class ApprovalDecision(str, Enum):
@@ -500,6 +511,57 @@ class DeliveryRequest(BaseModel):
     base_branch: str = "development"
     remote: str = "origin"
     commit_subject: str | None = Field(default=None, max_length=200)
+
+
+class MaterializeRequest(BaseModel):
+    """What `ISSUE_MATERIALIZE` asks the executor to write to disk, for one
+
+    epic. WK-20260902-issue-materialize / issue #78, Commit 2b -- the bridge
+    between the `EpicModel`/`IssueModel` rows the MCP tools (A1/A2) let an
+    operator plan in ChatGPT and the versioned `docs/issues/` file a project
+    actually wants, even a project never pushed to any forge.
+
+    `project_id` is the SAME `project_id` every other dispatch payload
+    carries (`AgentHub.dispatch_next`'s own `payload["project_id"]`) -- the
+    executor resolves it through the identical `self.projects` allowlist
+    `_handle_dispatch` already uses, never a path the gateway invented.
+
+    `files` keys are relative to the epic's own directory, built by
+    `gateway.app.services.issue_render.render_epic_markdown` -- see that
+    module's docstring for the exact shape, including the `issues/<issue_id>/`
+    correlation-token convention.
+
+    `slug` is the epic directory's `<epic-slug>-[<status>]` component (see
+    `issue_render.epic_directory_slug`) -- the executor prefixes it with
+    whatever `NNN` it allocates; neither this model nor the gateway ever
+    choose that number (`docs/architecture.md`: the gateway never learns a
+    project's real path, and numbering requires listing what is already on
+    disk).
+
+    `existing_path` is set on a republish -- `EpicModel.materialized_path` as
+    it stood before this request -- so the executor updates that directory in
+    place instead of allocating a second one for the same epic.
+
+    `epic_revision`/`issue_revisions` are `EpicModel.revision`/`IssueModel.
+    revision` AS OF THIS REQUEST, opaque to the executor: it echoes them back
+    verbatim in `ISSUE_MATERIALIZE_RESULT` so `store.apply_epic_materialization`
+    can record what was actually published (a revision snapshot the gateway
+    cannot safely re-derive later -- the row may have been edited again by
+    the time the result arrives).
+
+    `delivery` reuses `DeliveryRequest`/`PUSHABLE_BRANCH_PATTERN` unchanged --
+    no new authorization concept for "commit and push the materialized
+    files", the same gate `SubmitTaskRequest.delivery` already enforces.
+    """
+
+    epic_id: str
+    project_id: str
+    slug: str
+    files: dict[str, str]
+    existing_path: str | None = None
+    epic_revision: int
+    issue_revisions: dict[str, int] = Field(default_factory=dict)
+    delivery: DeliveryRequest | None = None
 
 
 class SubmitTaskRequest(BaseModel):

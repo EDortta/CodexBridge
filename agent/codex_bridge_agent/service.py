@@ -14,6 +14,7 @@ import websockets
 from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects, resolve_auto_project
 from agent.codex_bridge_agent.git_delivery import deliver_changes
 from agent.codex_bridge_agent.instructions import IssueResolutionError, build_task_instruction, resolve_issue_text
+from agent.codex_bridge_agent.issue_materialize import MaterializeError, materialize_epic
 from agent.codex_bridge_agent.runners.base import EngineNotImplementedError
 from agent.codex_bridge_agent.runners.codex import SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE
 from agent.codex_bridge_agent.runners.pool import RunnerPool
@@ -25,6 +26,7 @@ from shared.protocol import (
     Capability,
     DeliveryRequest,
     NodeAnnouncement,
+    MaterializeRequest,
     PolicyLevel,
     SubmitTaskRequest,
     TaskMode,
@@ -124,6 +126,8 @@ class AgentService:
                     envelope = AgentEnvelope.model_validate_json(raw)
                     if envelope.type == AgentMessageType.TASK_DISPATCH:
                         asyncio.create_task(self._handle_dispatch(websocket, envelope))
+                    elif envelope.type == AgentMessageType.ISSUE_MATERIALIZE:
+                        asyncio.create_task(self._handle_materialize(websocket, envelope))
                     elif envelope.type == AgentMessageType.TASK_CANCEL:
                         task_id = envelope.payload["task_id"]
                         await self.runners.cancel(task_id)
@@ -408,6 +412,75 @@ class AgentService:
         except Exception:
             logger.warning("Failed to build full node announcement; sending minimal fallback", exc_info=True)
             return NodeAnnouncement(agent_version=AGENT_VERSION)
+    async def _handle_materialize(self, websocket, envelope: AgentEnvelope) -> None:
+        """Writes one epic's rendered markdown to disk -- issue #78, Commit 2c.
+
+        Mirrors `_handle_dispatch`'s own project-resolution shape (same
+        `self.projects`/`auto_project_root` fallback, same
+        `ensure_within_root` posture) but there is no `TaskModel` here: this
+        is a fire-and-forget `ISSUE_MATERIALIZE`/`ISSUE_MATERIALIZE_RESULT`
+        pair, not a queued task, so failures are reported the same way but
+        nothing here ever touches `self.runners`.
+        """
+        payload = envelope.payload
+        epic_id = payload.get("epic_id")
+
+        async def fail(error: str) -> None:
+            await websocket.send(
+                self._envelope(
+                    AgentMessageType.ISSUE_MATERIALIZE_RESULT,
+                    {"epic_id": epic_id, "ok": False, "error": error},
+                ).model_dump_json()
+            )
+
+        try:
+            request = MaterializeRequest.model_validate(payload)
+        except Exception:
+            await fail("invalid_materialize_request")
+            return
+
+        project = self.projects.get(request.project_id)
+        if project is None and self.settings.auto_project_root:
+            project = resolve_auto_project(request.project_id, self.settings.auto_project_root)
+        if project is None:
+            await fail("unknown_project")
+            return
+        root = Path(ensure_within_root(project.path, project.path))
+
+        try:
+            outcome = materialize_epic(root, request)
+        except MaterializeError as exc:
+            await fail(exc.code)
+            return
+
+        result_payload: dict = {
+            "epic_id": epic_id,
+            "ok": True,
+            "epic_path": outcome.epic_path,
+            "epic_revision": request.epic_revision,
+            "written_paths": outcome.written_paths,
+            "issue_revisions": request.issue_revisions,
+        }
+
+        if request.delivery is not None:
+
+            async def _noop_log(stream: str, line: str) -> None:
+                return None
+
+            delivery_outcome = await deliver_changes(
+                project_root=root,
+                delivery=request.delivery,
+                settings=self.settings,
+                task_id=f"materialize:{epic_id}",
+                issue_ref=None,
+                engine="materialize",
+                send_log=_noop_log,
+            )
+            result_payload["delivery"] = delivery_outcome.to_dict()
+
+        await websocket.send(
+            self._envelope(AgentMessageType.ISSUE_MATERIALIZE_RESULT, result_payload).model_dump_json()
+        )
 
     def _envelope(self, message_type: AgentMessageType, payload: dict) -> AgentEnvelope:
         return AgentEnvelope(

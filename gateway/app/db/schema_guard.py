@@ -111,6 +111,20 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     "executors": {
         "node_id": "0009_control_plane.sql",
     },
+    # Without these, a gateway upgraded past 0011 without running it starts
+    # fine (both columns are nullable, so `create_all` on a FRESH database
+    # already includes them) but every existing install fails the moment
+    # `publish_epic_to_repo`/`apply_epic_materialization` tries to write a
+    # column that is not there yet -- the same "fresh install fine, upgrade
+    # broken" shape this whole module exists to catch early.
+    "epics": {
+        "materialized_path": "0012_issue_materialization.sql",
+        "materialized_revision": "0012_issue_materialization.sql",
+    },
+    "issues": {
+        "materialized_path": "0012_issue_materialization.sql",
+        "materialized_revision": "0012_issue_materialization.sql",
+    },
 }
 
 

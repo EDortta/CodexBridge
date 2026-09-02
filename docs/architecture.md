@@ -68,6 +68,19 @@ apontada aqui até que alguém decida renomear.
 * Modos `analyze`, `review`, `edit`, `test`, `implement` são mapeados para níveis de política
 * Ações sensíveis exigem aprovação no gateway e no agente
 
+**A mesma fronteira vale um nível abaixo, para a materialização de épicas
+(issue #78, WK-20260902-issue-materialize).** "O ChatGPT nunca informa
+caminho" implica "o gateway nunca sabe o path" — e decidir o próximo `NNN`
+livre em `docs/issues/` exige listar o que já existe em disco, o que só o
+executor pode fazer. Por isso `publish_epic_to_repo` manda ao executor
+apenas conteúdo já renderizado (`gateway/app/services/issue_render.py`,
+função pura) com caminhos relativos à pasta da épica e SEM `NNN`; é o agente,
+em `agent/codex_bridge_agent/issue_materialize.py`, que varre o diretório
+(reaproveitando o mesmo scanner que `instructions.py` usa para resolver
+`docs:NNN`/`NNN` na leitura) e escolhe cada número, com criação atômica
+para sobreviver a uma corrida entre duas publicações. Ver `docs/protocol.md`,
+seção "Materialização de épicas", para o par de mensagens completo.
+
 ## Fluxo de comunicação
 
 1. O ChatGPT conecta o MCP remoto em um hostname dedicado no `frida`, por exemplo `https://codexbridge.inovacaosistemas.com.br:8443/mcp`.

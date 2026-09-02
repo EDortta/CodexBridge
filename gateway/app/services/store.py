@@ -2400,6 +2400,64 @@ async def link_issue_to_epic(
     return issue
 
 
+async def apply_epic_materialization(
+    session: AsyncSession,
+    *,
+    epic_id: str,
+    epic_path: str,
+    epic_revision: int,
+    written_paths: dict[str, str],
+    issue_revisions: dict[str, int],
+) -> EpicModel | None:
+    """Records a successful `ISSUE_MATERIALIZE_RESULT` -- issue #78, Commit 2.
+
+    Called from `gateway/app/main.py`'s `/agent/ws` loop, the same place
+    `store_result` records a `TASK_RESULT`. `epic_path`/`epic_revision` and
+    each entry of `written_paths`/`issue_revisions` come from the EXECUTOR's
+    own report, never invented here -- this function only writes what it was
+    told, the same posture `store_result` already has toward a task's
+    outcome.
+
+    `written_paths` covers EVERY file the executor wrote (`README.md` and
+    `epic.md` included, at their bare keys) -- only the entries shaped
+    `"issues/<issue_id>/<rest>"` (`gateway/app/services/issue_render.py`'s
+    correlation-token convention, stripped and rewritten by
+    `agent/codex_bridge_agent/issue_materialize.py` before the file was
+    actually written) name an `IssueModel`; every other key is skipped below.
+    The `<issue_id>` segment is parsed back out of the key rather than
+    re-derived from the current issue list, which would be wrong if an issue
+    was added, removed, or retitled between the original
+    `publish_epic_to_repo` call and this (possibly much later, possibly
+    post-restart) result.
+
+    Returns `None`, without raising, for an epic that no longer exists (e.g.
+    deleted between dispatch and result) -- there is nothing to record and no
+    caller waiting synchronously on this, so a typed failure has no audience;
+    logging that case is the caller's job, mirroring how `handle_task_ack`
+    logs rather than raises on an unresolvable reference.
+    """
+    epic = await session.get(EpicModel, epic_id)
+    if epic is None:
+        return None
+    epic.materialized_path = epic_path
+    epic.materialized_revision = epic_revision
+
+    for key, final_path in written_paths.items():
+        if not key.startswith("issues/"):
+            continue
+        issue_id = key[len("issues/"):].split("/", 1)[0]
+        issue = await session.get(IssueModel, issue_id)
+        if issue is None:
+            continue
+        issue.materialized_path = final_path
+        if issue_id in issue_revisions:
+            issue.materialized_revision = issue_revisions[issue_id]
+
+    await session.commit()
+    await session.refresh(epic)
+    return epic
+
+
 # --------------------------------------------------------------------------
 # Conversations (issue #10) — contextual threads linked to product entities.
 # See gateway/app/services/conversation_types.py for the closed vocabulary of
