@@ -22,7 +22,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.app.db.base import Base
@@ -139,6 +139,38 @@ async def test_enroll_node_refuses_a_consumed_invite_the_second_time(db_session)
         db_session, invite_token="single-use", display_name="devel3-again", machine_token="t2"
     )
     assert second is None
+
+
+async def test_claiming_an_invite_is_conditional_so_only_one_racer_wins(db_session) -> None:
+    """The `WHERE consumed_at IS NULL` `enroll_node` relies on.
+
+    The sequential case above is covered by the test before this one. What
+    this pins is the mechanism underneath it: two requests holding the same
+    live token can both READ the invite as unconsumed before either writes,
+    and an assignment to `invite.consumed_at` would let both commit -- one
+    single-use invite minting two nodes with two valid machine tokens.
+
+    The true interleaving is not reproducible here without a seam inside
+    `enroll_node` that exists only for the test, so this asserts the property
+    the fix rests on directly: the second conditional update matches nothing.
+    If someone later replaces that update with a field assignment, this fails.
+    """
+    invite = await _issued_invite(db_session, token="raced")
+
+    first = await db_session.execute(
+        update(NodeInviteModel)
+        .where(NodeInviteModel.id == invite.id, NodeInviteModel.consumed_at.is_(None))
+        .values(consumed_at=datetime.now(timezone.utc), consumed_by_node_id="node-a")
+    )
+    second = await db_session.execute(
+        update(NodeInviteModel)
+        .where(NodeInviteModel.id == invite.id, NodeInviteModel.consumed_at.is_(None))
+        .values(consumed_at=datetime.now(timezone.utc), consumed_by_node_id="node-b")
+    )
+
+    assert first.rowcount == 1, "the positive control: the first claim must win"
+    assert second.rowcount == 0
+    await db_session.rollback()
 
 
 async def test_enroll_node_refuses_an_expired_invite(db_session) -> None:

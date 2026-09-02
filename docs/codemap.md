@@ -5,7 +5,7 @@
 
 ## Summary
 
-- 139 file(s) · 1318 symbol(s) indexed
+- 139 file(s) · 1315 symbol(s) indexed
 - Languages: config (2), python (135), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -1364,14 +1364,10 @@ tests/
   - `close(self, code)` *(async method)*
   - `send_json(self, payload)` *(async method)*
   - `receive_json(self)` *(async method)*
-- **`BlockingFakeSocket`** *(class)* — "A `FakeSocket` whose `receive_json` blocks until `release()` is called."
-  - `__init__(self)` *(method)*
-  - `receive_json(self)` *(async method)*
-  - `release(self)` *(method)*
 - `wired(monkeypatch)` *(async function)*
 - `test_a_freshly_enrolled_node_connects_with_the_token_enroll_returned(wired)` *(async function)*
 - `test_a_freshly_enrolled_node_is_refused_with_the_wrong_token(wired)` *(async function)*
-- `test_revoke_closes_the_live_socket(wired)` *(async function)*
+- `test_revoke_closes_the_live_socket(wired)` *(async function)* — "`force_close` against a connection that is genuinely still registered."
 - `test_force_close_on_a_node_with_no_live_connection_reports_nothing_closed(wired)` *(async function)*
 - `test_a_revoked_node_is_refused_on_its_next_handshake(wired)` *(async function)*
 
@@ -1928,6 +1924,7 @@ tests/
 - `test_enroll_node_creates_executor_and_node_and_consumes_the_invite(db_session)` *(async function)*
 - `test_enroll_node_refuses_an_unknown_token(db_session)` *(async function)*
 - `test_enroll_node_refuses_a_consumed_invite_the_second_time(db_session)` *(async function)*
+- `test_claiming_an_invite_is_conditional_so_only_one_racer_wins(db_session)` *(async function)* — "The `WHERE consumed_at IS NULL` `enroll_node` relies on."
 - `test_enroll_node_refuses_an_expired_invite(db_session)` *(async function)*
 - `test_enroll_node_generates_an_id_rather_than_trusting_the_caller(db_session)` *(async function)* — "No `executor_id`/`node_id` field on the request at all -- this is what"
 - `test_revoke_node_disables_both_the_node_and_its_executor(db_session)` *(async function)*

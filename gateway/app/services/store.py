@@ -758,10 +758,24 @@ async def enroll_node(
         admission_state="enrolled",
         created_at=now,
     )
+    # Claiming the invite is a conditional UPDATE, not a field assignment on
+    # the row read above. Between that read and this write, a second request
+    # holding the same token can read the same unconsumed invite; assigning
+    # `consumed_at` would let both commit, and one single-use invite would
+    # mint two nodes with two valid machine tokens. `WHERE consumed_at IS
+    # NULL` makes exactly one of them win, and the loser sees the same
+    # undifferentiated refusal an expired or unknown token gets.
+    claim = await session.execute(
+        update(NodeInviteModel)
+        .where(NodeInviteModel.id == invite.id, NodeInviteModel.consumed_at.is_(None))
+        .values(consumed_at=now, consumed_by_node_id=node_id)
+    )
+    if claim.rowcount != 1:
+        await session.rollback()
+        return None
+
     session.add(executor)
     session.add(node)
-    invite.consumed_at = now
-    invite.consumed_by_node_id = node_id
     await record_event(
         session,
         "node",
