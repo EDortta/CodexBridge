@@ -122,6 +122,23 @@ version_router = APIRouter()
 # 1.14.0 rather than 1.13.0 for the same reason the paragraph above jumped
 # over 1.10.0/1.11.0: 1.13.0 is claimed by another not-yet-merged branch of
 # this same orchestration.
+# 1.6.0 -> 1.13.0: 1.7.0-1.12.0 are reserved for other PRs/tracks open at the
+# same time as this one (WK-20260902-forge-binding, issue #79/#80, PR B4) --
+# this bump is instructed to land directly on 1.13.0 rather than the next
+# free number, so two branches bumping this same line do not collide on
+# merge. The actual change: `GET/POST /api/v1/decisions/**` now projects
+# `ForgeOperationModel` rows alongside `TaskModel` ones (the "one inbox, not
+# two" decision made explicitly this session — see `routes/decisions.py`'s
+# own module docstring). `Decision` gains `decisionType` (new, required --
+# but additive: a client that never learns about it keeps parsing every
+# field it already used to) plus three forge-only fields
+# (`forgeKind`/`repoIdentity`/`issueNumber`, always `null` for a task); `mode`
+# and `deadline` widen from non-nullable to nullable (`null` for a forge
+# decision, which has neither) -- every field a task decision already
+# returned keeps its name, its meaning, and its value. Additive/widening
+# only, so this would ordinarily be a minor bump; landing on 1.13.0 instead
+# of 1.7.0 is purely the reservation above, not a signal of a breaking
+# change.
 API_CONTRACT_VERSION = "1.14.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the

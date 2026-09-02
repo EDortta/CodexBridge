@@ -14,6 +14,7 @@ from gateway.app.services import store
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
 from gateway.app.services.audit import record_event
 from gateway.app.services.issue_render import render_epic_markdown, epic_directory_slug
+from gateway.app.services.forge_routing import project_forge_binding
 from gateway.app.services.issue_types import IssuePlanningError
 from gateway.app.mcp.tools import tool_definitions
 from gateway.app.core.users import AuthenticatedPrincipal
@@ -24,6 +25,8 @@ from shared.protocol import (
     AgentMessageType,
     ApprovalDecision,
     DeliveryRequest,
+    ForgeOperationKind,
+    ForgeOperationRequest,
     IMPLEMENTED_ENGINES,
     ISSUE_REF_PATTERN,
     MaterializeRequest,
@@ -54,6 +57,56 @@ def _strip_issue_ref(raw: object) -> str:
     if text.startswith("local:"):
         return text.split(":", 1)[1]
     return text
+async def _resolve_executor_for_project(
+    session: AsyncSession, hub: AgentHub, project, executor_id: str | None
+) -> str:
+    """The executor a forge-routed tool call should target -- the exact same
+
+    resolution `start_development_task` already does below (an explicit
+    `executor_id`, checked against the project's own allowlist, or the
+    first connected -- else first known -- executor that allows this
+    project), factored out because WK-20260902-forge-binding, issue #79/#80
+    (PR B4) adds four more callers of it. Raises the same typed
+    `HTTPException`s `start_development_task` would for the same failures,
+    so a caller cannot tell which tool resolved the executor from the error
+    shape alone.
+    """
+    if executor_id:
+        executor = await session.get(ExecutorModel, executor_id)
+        if executor is None:
+            raise HTTPException(status_code=404, detail="unknown_executor")
+        allowed_projects = json.loads(executor.metadata_json).get("allowed_projects", [])
+        if project.id not in allowed_projects:
+            raise HTTPException(
+                status_code=409,
+                detail=f"project_not_onboarded: executor {executor_id!r} does not allow project {project.id!r}.",
+            )
+        return executor_id
+    onboarded = await store.executors_allowing_project(session, project.id)
+    if not onboarded:
+        raise HTTPException(
+            status_code=409, detail=f"project_not_onboarded: no executor allows project {project.id!r}."
+        )
+    connected = [item for item in onboarded if hub.is_connected(item.id)]
+    return (connected[0] if connected else onboarded[0]).id
+
+
+async def _resolve_project_for_forge_tool(session: AsyncSession, principal, project_text: str):
+    """Shared `project` resolution + access check for every forge-routed
+
+    tool below -- one place so the five tools cannot drift on what
+    "project not found" or "project access denied" means.
+    """
+    try:
+        project = await store.resolve_project_reference(session, project_text)
+    except store.AmbiguousProjectReference as exc:
+        candidates = ", ".join(f"{c.id} ({c.name})" for c in exc.candidates)
+        raise HTTPException(status_code=409, detail=f"ambiguous_project: {candidates}")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="unknown_project")
+    if principal is not None and not principal.can_access_project(project.id):
+        raise HTTPException(status_code=403, detail="project_access_denied")
+    return project
 
 
 async def handle_mcp_call(
@@ -636,6 +689,216 @@ async def handle_mcp_call(
         result = _text_result(
             f"Task {task.id} created with state {task.state}, running on engine {task.engine}.", payload
         )
+    elif tool_name == "bind_project_forge":
+        # WK-20260902-forge-binding, issue #79/#80 (PR B4). Registers the
+        # DECLARED half of a project's forge binding -- see
+        # `gateway/app/services/forge_routing.py`'s own module docstring for
+        # why the executor still confirms the REAL remote independently,
+        # live, before every operation. Gated on the admin scope: this call
+        # is what turns on forge routing for every OTHER tool below, for
+        # every project it names -- a capability grant, not a read or an
+        # ordinary write, so it gets the same scope
+        # `gateway/app/api/permissions.py` reserves for reaching beyond an
+        # actor's own project (`ADMIN_SCOPE`).
+        require_scope("codexbridge.admin")
+        project = await _resolve_project_for_forge_tool(session, principal, str(arguments["project"]))
+        repo_identity = str(arguments["repo_identity"])
+        confirm = bool(arguments.get("confirm", False))
+        try:
+            association = await store.upsert_scm_association(
+                session, project_id=project.id, repo_identity=repo_identity, confirm=confirm
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        payload = {
+            "project_id": project.id,
+            "repo_identity": association.repo_identity,
+            "confidence": association.confidence,
+        }
+        result = _text_result(
+            f"Project {project.id!r} bound to {association.repo_identity!r} ({association.confidence}).", payload
+        )
+    elif tool_name == "create_project_issue":
+        # WK-20260902-forge-binding, issue #79/#80 (PR B4). The routing every
+        # forge tool below shares: `project_forge_binding` is the ONE place
+        # that decides "forge or local tables" (`forge_routing.py`'s own
+        # docstring) -- bound routes to a GitHub write behind the same human
+        # approval gate every forge write gets
+        # (`shared.policy.forge_operation_policy_level`); unbound routes to
+        # this gateway's own local issue tracker (issue #8), created
+        # immediately, no approval required, exactly as `POST /api/v1/issues`
+        # already behaves. The operator asks for the SAME tool, with the
+        # SAME arguments, either way.
+        require_scope("codexbridge.issues.write")
+        project = await _resolve_project_for_forge_tool(session, principal, str(arguments["project"]))
+        title = str(arguments["title"])
+        body = arguments.get("body")
+        binding = await project_forge_binding(session, project.id)
+        if binding is not None:
+            executor_id = await _resolve_executor_for_project(session, hub, project, arguments.get("executor_id"))
+            operation = await store.create_forge_operation(
+                session,
+                executor_id=executor_id,
+                project_id=project.id,
+                operation=ForgeOperationRequest(
+                    kind=ForgeOperationKind.ISSUE_OPEN, repo_identity=binding.repo_identity, title=title, body=body
+                ),
+                requested_by_user_id=principal.user_id if principal else None,
+                requested_by_email=principal.email if principal else None,
+            )
+            payload = {
+                "route": "forge",
+                "operation_id": operation.id,
+                "state": operation.state,
+                "repo_identity": binding.repo_identity,
+            }
+            result = _text_result(
+                f"Forge issue open on {binding.repo_identity!r} recorded as {operation.id}, state {operation.state}"
+                " -- a human decision is required before it reaches GitHub (Decision Center).",
+                payload,
+            )
+        else:
+            try:
+                issue = await store.create_issue(
+                    session,
+                    project_id=project.id,
+                    epic_id=None,  # not exposed on this tool's schema -- use POST /api/v1/issues for epic linkage
+                    title=title,
+                    description=body,
+                    status=None,
+                    priority=None,
+                    labels=None,
+                    assignee_user_id=None,
+                    assignee_email=None,
+                    dependencies=None,
+                    blocked_reason=None,
+                    actor_user_id=principal.user_id if principal else "unknown",
+                    actor_email=principal.email if principal else None,
+                )
+            except IssuePlanningError as exc:
+                raise HTTPException(status_code=400, detail=exc.code)
+            payload = {"route": "local", "issue_id": issue.id, "state": issue.status}
+            result = _text_result(f"Local issue {issue.id} created in project {project.id!r}.", payload)
+    elif tool_name == "list_project_issues":
+        require_scope("codexbridge.read")
+        project = await _resolve_project_for_forge_tool(session, principal, str(arguments["project"]))
+        binding = await project_forge_binding(session, project.id)
+        if binding is not None:
+            executor_id = await _resolve_executor_for_project(session, hub, project, arguments.get("executor_id"))
+            operation = await store.create_forge_operation(
+                session,
+                executor_id=executor_id,
+                project_id=project.id,
+                operation=ForgeOperationRequest(
+                    kind=ForgeOperationKind.ISSUE_LIST,
+                    repo_identity=binding.repo_identity,
+                    state=arguments.get("state"),
+                ),
+            )
+            # A read is born `approved` (`shared.policy.forge_operation_policy_level`)
+            # -- dispatch it in the same call rather than making the caller
+            # separately decide it. `dispatch_forge_operation` no-ops (returns
+            # `False`) for a disconnected executor, the same posture
+            # `dispatch_available` already has for a task dispatch.
+            dispatched = await hub.dispatch_forge_operation(operation.id)
+            payload = {
+                "route": "forge",
+                "operation_id": operation.id,
+                "state": operation.state if not dispatched else "dispatched",
+                "repo_identity": binding.repo_identity,
+                "issues": [],
+            }
+            result = _text_result(
+                f"Forge issue list on {binding.repo_identity!r} dispatched as {operation.id}; "
+                "poll get_task_status-style via a future result tool once the executor replies.",
+                payload,
+            )
+        else:
+            status_filter = [arguments["state"]] if arguments.get("state") in {"open", "in_progress", "blocked", "in_review", "done", "cancelled"} else None
+            rows = await store.list_issues_page(session, project_id=project.id, status=status_filter, limit=30)
+            payload = {
+                "route": "local",
+                "issues": [
+                    {"id": item.id, "title": item.title, "status": item.status, "priority": item.priority}
+                    for item in rows[:30]
+                ],
+            }
+            result = _text_result(f"Returned {len(payload['issues'])} local issues for {project.id!r}.", payload)
+    elif tool_name == "comment_project_issue":
+        require_scope("codexbridge.issues.write")
+        project = await _resolve_project_for_forge_tool(session, principal, str(arguments["project"]))
+        binding = await project_forge_binding(session, project.id)
+        if binding is None:
+            # No local equivalent: this gateway's own issue tracker has no
+            # comment concept (issue #8's `IssueModel` has no such column or
+            # table) -- an honest typed refusal, not a silent no-op or a
+            # forced mapping onto something that means something else.
+            raise HTTPException(status_code=409, detail="forge_binding_required")
+        executor_id = await _resolve_executor_for_project(session, hub, project, arguments.get("executor_id"))
+        operation = await store.create_forge_operation(
+            session,
+            executor_id=executor_id,
+            project_id=project.id,
+            operation=ForgeOperationRequest(
+                kind=ForgeOperationKind.ISSUE_COMMENT,
+                repo_identity=binding.repo_identity,
+                issue_number=int(arguments["issue"]),
+                body=str(arguments["body"]),
+            ),
+            requested_by_user_id=principal.user_id if principal else None,
+            requested_by_email=principal.email if principal else None,
+        )
+        payload = {"route": "forge", "operation_id": operation.id, "state": operation.state}
+        result = _text_result(
+            f"Forge comment on {binding.repo_identity!r}#{arguments['issue']} recorded as {operation.id}, "
+            f"state {operation.state} -- a human decision is required (Decision Center).",
+            payload,
+        )
+    elif tool_name == "close_project_issue":
+        require_scope("codexbridge.issues.write")
+        project = await _resolve_project_for_forge_tool(session, principal, str(arguments["project"]))
+        binding = await project_forge_binding(session, project.id)
+        if binding is not None:
+            executor_id = await _resolve_executor_for_project(session, hub, project, arguments.get("executor_id"))
+            operation = await store.create_forge_operation(
+                session,
+                executor_id=executor_id,
+                project_id=project.id,
+                operation=ForgeOperationRequest(
+                    kind=ForgeOperationKind.ISSUE_CLOSE,
+                    repo_identity=binding.repo_identity,
+                    issue_number=int(arguments["issue"]),
+                ),
+                requested_by_user_id=principal.user_id if principal else None,
+                requested_by_email=principal.email if principal else None,
+            )
+            payload = {"route": "forge", "operation_id": operation.id, "state": operation.state}
+            result = _text_result(
+                f"Forge close on {binding.repo_identity!r}#{arguments['issue']} recorded as {operation.id}, "
+                f"state {operation.state} -- a human decision is required (Decision Center).",
+                payload,
+            )
+        else:
+            # Same ownership check `routes/issues.py`'s own PATCH handler
+            # makes before calling `store.update_issue` -- that function has
+            # no project argument of its own to check against, so the
+            # caller is responsible for confirming the issue named actually
+            # belongs to THIS project before touching it.
+            existing = await store.get_issue_for_projects(session, str(arguments["issue"]), [project.id])
+            if existing is None:
+                raise HTTPException(status_code=404, detail="unknown_issue")
+            try:
+                issue = await store.update_issue(
+                    session,
+                    existing.id,
+                    status="done",
+                    actor_user_id=principal.user_id if principal else "unknown",
+                    actor_email=principal.email if principal else None,
+                )
+            except IssuePlanningError as exc:
+                raise HTTPException(status_code=400, detail=exc.code)
+            payload = {"route": "local", "issue_id": issue.id, "state": issue.status}
+            result = _text_result(f"Local issue {issue.id} closed in project {project.id!r}.", payload)
     elif tool_name == "list_recent_tasks":
         require_scope("codexbridge.read")
         tasks = await store.list_recent_tasks(

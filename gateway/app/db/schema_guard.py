@@ -151,6 +151,14 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     "discovered_resources": {
         "resource_path": "0014_discovery_resource_key_hash.sql",
     },
+    # Without this, a gateway upgraded past 0013 without running it would
+    # read `forge_operations` fine (the table itself predates 0013) and only
+    # fail the moment `/api/v1/decisions` tried to read `.revision` off a
+    # forge row -- the same "fresh install fine, existing install broken on
+    # first read" shape this module exists to catch early.
+    "forge_operations": {
+        "revision": "0014_forge_binding.sql",
+    },
 }
 
 

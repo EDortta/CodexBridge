@@ -281,7 +281,17 @@ async def test_full_pipeline_write_completes_after_a_human_approves(db, tmp_path
     async def fake_run_gh(*a, **k):
         return GhResult(returncode=0, stdout="https://github.com/acme/widgets/issues/7\n", stderr="")
 
+    async def fake_run_git(*a, **k):
+        # `_confirm_repo_identity_live`'s live remote check, WK-20260902-
+        # forge-binding (PR B4): `tmp_path` has no real git remote, so the
+        # workspace's "real" remote is faked to match `_write_request`'s
+        # `repo_identity` -- the exact positive control this pipeline test
+        # needs to still exercise the real `run_forge_operation` body rather
+        # than stopping one gate earlier at `repo_identity_mismatch`.
+        return 0, "https://github.com/acme/widgets.git\n", ""
+
     monkeypatch.setattr(forge_github, "run_gh", fake_run_gh)
+    monkeypatch.setattr(forge_github, "run_git", fake_run_git)
     service = AgentService(AgentSettings(allow_forge_operations=True))
     service.projects = {
         "p1": ProjectRegistration(project_id="p1", name="Projeto 1", path=str(tmp_path))

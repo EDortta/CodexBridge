@@ -120,9 +120,22 @@ class ScmAssociationModel(Base):
     would make impossible.
 
     `confidence` is the direct consequence of #73's "Do not silently infer a
-    trusted association only because directory and repository names happen to
-    match": an unconfirmed guess is recorded as `observed`, never as
-    `confirmed`, and only an operator moves it.
+    trusted association only because directory and repository names happen
+    to match": nothing in this codebase infers an association automatically
+    yet (this table was empty and unwritten until WK-20260902-forge-binding,
+    issue #79/#80 PR B4), so the value in use today is `declared` -- an
+    operator named this repository through `gateway/app/mcp/server.py`'s
+    `bind_project_forge` tool, which is a real decision, but not the same
+    claim as "I confirmed this workspace's remote actually points there".
+    `confirmed` is that stronger claim, and `gateway/app/services/
+    forge_routing.py`'s own docstring is explicit that nothing moves a row
+    from `declared` to `confirmed` automatically, ever -- not a matching
+    directory name, not a `repo_identity_mismatch` check that happened to
+    pass once (`agent/codex_bridge_agent/forge/github.py`'s live remote
+    confirmation is a per-operation gate, not a promotion). Only an
+    operator's own explicit `confirm=true` on that same tool call does.
+    `observed` is reserved for a future automatic-discovery writer this PR
+    does not add.
     """
 
     __tablename__ = "scm_associations"
@@ -627,6 +640,15 @@ class ForgeOperationModel(Base):
     approval_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # WK-20260902-forge-binding, issue #79/#80 (PR B4), migrations/
+    # 0014_forge_binding.sql. Same role `TaskModel.revision` plays: bumped
+    # by every mutator in `store.py` that touches this row (create, decide,
+    # dispatch, resolve), and what `/api/v1/decisions`'s ETag/If-Match
+    # optimistic concurrency compares against once that endpoint started
+    # projecting this table alongside `TaskModel`. Added a migration after
+    # 0012 rather than in it, because nothing needed it until the Decision
+    # Center did.
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
 
 
 class AuditEventModel(Base):

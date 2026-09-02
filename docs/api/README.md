@@ -662,6 +662,54 @@ resolved since before this API existed. `GET /api/v1/sessions/{id}` and
 same relationship `docs/api/README.md`'s "Sessions" section already draws
 between a session and `TaskModel`.
 
+### Two sources, one inbox (issue #79/#80, WK-20260902-forge-binding, PR B4)
+
+Since PR B4, a decision can also be a **forge write** — a sensitive GitHub
+operation (open/comment/close an issue via `gh`) held for the same human gate
+a sensitive task already gets, on its own table (`ForgeOperationModel`, never
+folded into `TaskModel` — see that model's own docstring for why). The
+operator's decision, made explicitly this session: **one inbox**, not two. A
+GitHub write and a coding-agent session are not the same kind of thing, so
+`decisionType` (`"task"` | `"forge_operation"`) is an honest discriminator on
+the `Decision` DTO — but they compete for the same human attention, so they
+share the one endpoint rather than splitting into a second decisions surface.
+
+What this did **not** change for a task decision: every field the DTO already
+returned keeps its name, its meaning, and its value — nothing removed,
+nothing renamed, nothing narrowed. What it added is strictly additive: a new,
+always-present `decisionType` plus three forge-only fields
+(`forgeKind`/`repoIdentity`/`issueNumber`, `null` for a task), and a widening
+of `mode`/`deadline` from non-nullable to nullable (`null` for a forge
+decision, which has neither a coding-agent mode nor an expiry — real values
+for a task decision as always). A client that never learns about forge
+decisions keeps working unmodified; it will start seeing forge rows in its
+list unless it filters `decisionType` out, since this endpoint never offered
+a "tasks only" mode.
+
+**Id collision is ruled out by construction, not by the odds of a random
+`uuid4()` collision.** A forge decision's `id` always carries an explicit
+`forge:` prefix (e.g. `forge:3fa85f64-...`); a task decision's `id` is never
+touched. A bare `uuid4()` string can never contain a `:`, so the two id
+spaces this endpoint serves are provably disjoint. Approving, rejecting or
+requesting revision on a forge decision uses the exact same three endpoints,
+addressed by that prefixed id — there is no separate set of routes for the
+forge source.
+
+**A forge read never appears here.** `issue_list`/`issue_view` are never
+gated (`shared.policy.forge_operation_policy_level`: `READ`), so — exactly
+like a `READ`-mode task, which also never shows up on this endpoint — they
+never reach `awaiting_approval` and are never a decision in the first place.
+
+**Approving a forge decision dispatches, in the same request, for the same
+reason issue #20 was a bug for tasks.** `store.decide_forge_operation` +
+`AgentHub.dispatch_forge_operation` run exactly where `store.
+decide_task_approval` + `AgentHub.dispatch_available` already ran for a task
+— an approved forge write this endpoint never told to dispatch would be
+issue #20 again, on a different table (`docs/napkin-lessons.md`, 2026-08-21
+and 2026-09-02). Same same-request-dispatch revision hazard, same fix: the
+row is refreshed after dispatch so the response's `ETag` reflects the
+post-dispatch `revision`, not the pre-dispatch one.
+
 ### `approve` dispatches in the same request, not on a later event
 
 An `approved` outcome that leaves the task in `waiting_executor` is offered to

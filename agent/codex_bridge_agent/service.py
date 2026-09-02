@@ -41,6 +41,7 @@ from shared.protocol import (
     DiscoveryReport,
     NodeAnnouncement,
     MaterializeRequest,
+    ForgeOperationKind,
     ForgeOperationRequest,
     PolicyLevel,
     SubmitTaskRequest,
@@ -428,13 +429,104 @@ class AgentService:
                 )
                 return
             root = ensure_within_root(project.path, project.path)
+
+            offset = 0
+
+            async def send_log(stream: str, line: str) -> None:
+                nonlocal offset
+                offset += 1
+                await websocket.send(
+                    self._envelope(
+                        AgentMessageType.TASK_LOG,
+                        {"task_id": task_id, "offset": offset, "stream": stream, "line": line},
+                    ).model_dump_json()
+                )
+
             # WK-20260830-chatgpt-entry-provider-and-delivery, issue #65: the
             # gateway never learns a project's real path
             # (`docs/architecture.md`), so `issue_ref` is resolved HERE, not
             # on the gateway. Failure is a typed error, never a traceback.
+            #
+            # WK-20260902-forge-binding, issue #79/#80 (PR B4): `gh:N` is the
+            # one shape `resolve_issue_text` still refuses unconditionally
+            # (it is file resolution only -- see its own docstring). A bound
+            # project resolves it here instead, through the same READ forge
+            # path (`ForgeOperationKind.ISSUE_VIEW`) every other forge
+            # operation uses, including the live `repo_identity` confirmation
+            # against this workspace's real remote
+            # (`forge.github._confirm_repo_identity_live`) -- never cached,
+            # never skipped for a read. `forge_repo_identity` is present on
+            # the envelope only when the gateway found this project bound at
+            # dispatch time (`AgentHub.dispatch_next`); its absence here
+            # means "not bound" and gets the exact same typed refusal `gh:N`
+            # has always gotten, byte for byte.
+            #
+            # INVARIANT: the issue text resolved below -- from a file OR from
+            # the forge -- reaches ONLY `build_task_instruction`'s
+            # `issue_text` parameter, inside `--- BEGIN UNTRUSTED ISSUE
+            # CONTENT ---`, a few lines down. It never reaches `request`
+            # (built right after this block) or `evaluate_task_policy`, which
+            # only ever sees `envelope.payload["instruction"]` -- the
+            # operator's own words, assembled by the gateway BEFORE this
+            # method runs. A public repository's issue is writable by anyone
+            # with a GitHub account; letting its text influence policy
+            # classification would let a stranger force (or dodge) a
+            # sensitive-approval gate on this operator's task by choosing
+            # what to write in an issue they do not control access to.
+            # `tests/unit/test_agent_service.py` proves this directly for the
+            # forge path, the same way it already did for `docs:NNN`.
             issue_ref = envelope.payload.get("issue_ref")
             issue_text: str | None = None
-            if issue_ref:
+            if issue_ref and issue_ref.startswith("gh:"):
+                forge_repo_identity = envelope.payload.get("forge_repo_identity")
+                if forge_repo_identity is None:
+                    await websocket.send(
+                        self._envelope(
+                            AgentMessageType.TASK_RESULT,
+                            {
+                                "task_id": task_id,
+                                "final_state": TaskState.FAILED.value,
+                                "error": "issue_source_unsupported",
+                            },
+                        ).model_dump_json()
+                    )
+                    return
+                try:
+                    issue_number = int(issue_ref.split(":", 1)[1])
+                except ValueError:
+                    await websocket.send(
+                        self._envelope(
+                            AgentMessageType.TASK_RESULT,
+                            {"task_id": task_id, "final_state": TaskState.FAILED.value, "error": "issue_ref_invalid"},
+                        ).model_dump_json()
+                    )
+                    return
+                view_operation = ForgeOperationRequest(
+                    kind=ForgeOperationKind.ISSUE_VIEW,
+                    repo_identity=forge_repo_identity,
+                    issue_number=issue_number,
+                )
+                outcome = await run_forge_operation(
+                    project_root=Path(root),
+                    operation=view_operation,
+                    settings=self.settings,
+                    task_id=task_id,
+                    send_log=send_log,
+                )
+                if outcome.outcome != "succeeded":
+                    await websocket.send(
+                        self._envelope(
+                            AgentMessageType.TASK_RESULT,
+                            {
+                                "task_id": task_id,
+                                "final_state": TaskState.FAILED.value,
+                                "error": outcome.reason or "forge_issue_view_failed",
+                            },
+                        ).model_dump_json()
+                    )
+                    return
+                issue_text = f"Title: {outcome.issue_title or ''}\n\n{outcome.issue_body or ''}"
+            elif issue_ref:
                 try:
                     issue_text = resolve_issue_text(Path(root), issue_ref)
                 except IssueResolutionError as exc:
@@ -494,18 +586,12 @@ class AgentService:
                     ).model_dump_json()
                 )
                 return
-            offset = 0
-
-            async def send_log(stream: str, line: str) -> None:
-                nonlocal offset
-                offset += 1
-                await websocket.send(
-                    self._envelope(
-                        AgentMessageType.TASK_LOG,
-                        {"task_id": task_id, "offset": offset, "stream": stream, "line": line},
-                    ).model_dump_json()
-                )
-
+            # `send_log` (and its `offset` counter) was defined earlier in
+            # this method, before `issue_ref` resolution -- WK-20260902-
+            # forge-binding, PR B4 -- so a `gh:N` resolution's own forge-argv
+            # diagnostic line and this task's real log stream share ONE
+            # counter, never two independently-numbered ones colliding on
+            # the same `offset` values.
             sandbox = _sandbox_for(decision.level, allow_workspace_write=self.settings.allow_workspace_write)
             try:
                 result = await runner.run_task(

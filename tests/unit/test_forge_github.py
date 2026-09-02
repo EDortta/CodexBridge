@@ -32,6 +32,29 @@ def _settings(**overrides) -> AgentSettings:
     return AgentSettings(allow_forge_operations=True, **overrides)
 
 
+@pytest.fixture(autouse=True)
+def _live_remote_matches_owner_repo(monkeypatch):
+    """WK-20260902-forge-binding (PR B4): `run_forge_operation` now confirms
+
+    `operation.repo_identity` against this workspace's REAL git remote
+    (`_confirm_repo_identity_live`) before running anything else. Every test
+    in this file uses `repo_identity="owner/repo"` and `tmp_path` as the
+    project root -- a bare temp directory with no real git remote at all --
+    so without this fixture every single test here would fail the new check
+    before ever reaching the behavior it actually means to exercise.
+    `tests/unit/test_forge_repo_identity_confirmation.py` is where the check
+    itself, including its mismatch/refusal path, is tested directly; this
+    fixture exists so it does not have to be re-proven, or worked around, in
+    every other test in this module.
+    """
+
+    async def fake_run_git(_project_root, *args, timeout_seconds=None):
+        assert args[:2] == ("remote", "get-url")
+        return 0, "https://github.com/owner/repo.git\n", ""
+
+    monkeypatch.setattr(github, "run_git", fake_run_git)
+
+
 def _make_fake_run_gh(result_factory):
     """`result_factory` is either a fixed `GhResult` or a callable taking the
     recorded call dict and returning one -- the latter lets a test answer

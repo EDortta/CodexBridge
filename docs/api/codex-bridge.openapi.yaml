@@ -4837,14 +4837,51 @@ components:
         holding other levels for approval needs no contract change to be
         filtered or reported.
 
+    DecisionType:
+      type: string
+      enum: [task, forge_operation]
+      description: |
+        What is actually being decided — issue #79/#80, WK-20260902-forge-
+        binding (PR B4). `task` is this schema's original, and only, member:
+        a sensitive coding-agent session (`TaskModel`), unchanged in shape by
+        this addition. `forge_operation` is new: a sensitive write to an
+        external forge (GitHub today, via `gh`) — opening/commenting/closing
+        an issue — that never touches this operator's own infrastructure and
+        publishes something under this operator's name on a system this API
+        does not control. The two are not interchangeable, and this field
+        exists so a client never has to guess which one `id` names before
+        deciding how to render it or what it is approving.
+
     Decision:
       type: object
       description: |
-        A sensitive session held for a human to approve, reject, or send back
-        for revision. Not a new domain object: it is the same `Session`
-        (`TaskModel`) in or past `awaiting_approval`, reshaped for the mobile
-        Decision Center. `id` is a session id and `GET /api/v1/sessions/{id}`
-        returns the same underlying row.
+        A sensitive action held for a human to approve, reject, or send back
+        for revision — a coding-agent session (`decisionType: "task"`, the
+        original and only kind before issue #79/#80) or a forge write
+        (`decisionType: "forge_operation"`, WK-20260902-forge-binding, PR
+        B4). One inbox for both, by explicit operator decision: a GitHub
+        write and a coding session are not the same kind of thing, but they
+        compete for the same human attention, so this endpoint does not make
+        an operator check two places.
+
+        For `decisionType: "task"`, `id` is a session id and
+        `GET /api/v1/sessions/{id}` returns the same underlying row, exactly
+        as before this addition — every field this schema had before PR B4
+        keeps its meaning, its name, and (for a task) its value unchanged.
+        For `decisionType: "forge_operation"`, `id` carries an explicit
+        `forge:` prefix (e.g. `forge:3fa85f64-...`) and names no `Session` —
+        there is no coding-agent session behind a forge write at all, so
+        there is no `GET /api/v1/sessions/{id}` equivalent for one. The
+        prefix is not a convention a client needs to parse to use this API
+        correctly; it exists so the two id spaces this endpoint serves can
+        never collide, by construction (a session id is never colon-bearing).
+
+        Fields that only apply to one `decisionType` are always present and
+        `null` on the other, never omitted — `mode`/`urgency`/`deadline` are
+        `null` for a forge decision (it has no coding-agent mode, no
+        priority, no expiry); `forgeKind`/`repoIdentity`/`issueNumber` are
+        `null` for a task. A client branching on `decisionType` never has to
+        additionally guard whether an unrelated field is present at all.
 
         Omits `impact`, `evidence` and `recommendation` on purpose: no
         submission path in this build populates them, and a field that is
@@ -4852,7 +4889,7 @@ components:
         against — the same reasoning `x-pending-components` applies to unused
         components. `rationale` is different: it is genuinely absent before a
         decision is made and populated by whoever resolves it.
-      required: [id, projectId, executorId, request, state, revision, createdAt, deadline]
+      required: [id, projectId, executorId, request, decisionType, state, revision, createdAt, deadline]
       properties:
         id:
           $ref: '#/components/schemas/Id'
@@ -4862,9 +4899,32 @@ components:
           $ref: '#/components/schemas/ExecutorId'
         request:
           type: string
-          description: What the operator asked for. Redacted like every other operator-authored field on this API.
+          description: |
+            What is being asked for, in one line: the operator's own request
+            text for a task decision, or a short redacted summary (kind,
+            repository, title/issue number) for a forge decision. Redacted
+            like every other operator- or third-party-authored free text on
+            this API. A client that has not learned `decisionType` yet still
+            renders something legible from this field alone.
         mode:
-          type: string
+          type: [string, 'null']
+          description: The coding-agent mode (task decisions only). `null` for a forge decision.
+        decisionType:
+          $ref: '#/components/schemas/DecisionType'
+        forgeKind:
+          type: [string, 'null']
+          enum: [issue_open, issue_comment, issue_close, null]
+          description: |
+            The forge operation kind (forge decisions only; `null` for a
+            task). Never `issue_list`/`issue_view` — a READ is never gated
+            and so never becomes a decision at all (`shared.policy.
+            forge_operation_policy_level`).
+        repoIdentity:
+          type: [string, 'null']
+          description: '`owner/repo` on GitHub (forge decisions only; `null` for a task).'
+        issueNumber:
+          type: [integer, 'null']
+          description: The GitHub issue number, for `issue_comment`/`issue_close` (forge decisions only; `null` otherwise).
         state:
           $ref: '#/components/schemas/DecisionState'
         risk:
@@ -4872,16 +4932,19 @@ components:
             `DecisionRiskLevel`, or `null` — cannot be null in practice today
             (see that schema's description) but is nullable in the contract
             rather than assumed, since nothing here computes it for a session
-            this endpoint would refuse to serve anyway.
+            this endpoint would refuse to serve anyway. A forge decision is
+            always `sensitive`, unconditionally
+            (`shared.policy.forge_operation_policy_level` has no bypass
+            field, by design).
           oneOf:
             - $ref: '#/components/schemas/DecisionRiskLevel'
             - type: 'null'
         urgency:
-          type: string
-          description: The session's priority, reused as the decision's urgency.
+          type: [string, 'null']
+          description: The session's priority, reused as the decision's urgency (task decisions only; `null` for a forge decision, which has none).
         revision:
           type: integer
-          description: Monotonic; the `ETag` is derived from it. Same column and same meaning as `Session.revision`.
+          description: Monotonic; the `ETag` is derived from it. Same column and same meaning as `Session.revision` (or, for a forge decision, `ForgeOperationModel.revision`).
         requestedBy:
           type: [string, 'null']
         rationale:
@@ -4893,8 +4956,14 @@ components:
         createdAt:
           $ref: '#/components/schemas/Timestamp'
         deadline:
-          $ref: '#/components/schemas/Timestamp'
-          description: The underlying session's `expiresAt`, renamed for this view.
+          description: |
+            The underlying session's `expiresAt`, renamed for this view
+            (task decisions only). `null` for a forge decision — a forge
+            operation has no expiry; it waits for a human indefinitely, the
+            same way it always has (`ForgeOperationModel`'s own docstring).
+          oneOf:
+            - $ref: '#/components/schemas/Timestamp'
+            - type: 'null'
         decidedAt:
           type: [string, 'null']
           format: date-time

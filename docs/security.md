@@ -9,6 +9,16 @@
 * `codex exec` e `git` chamados sem shell.
 * logs sanitizados.
 * tarefas sensíveis desviadas para `awaiting_approval`.
+* operação de forge (issue #79/#80, WK-20260902-forge-binding): trava de
+  máquina `allow_forge_operations` desligada por padrão; superfície fechada a
+  quatro operações enumeradas à mão (`ForgeOperationKind`) sem "rodar `gh`
+  com argv arbitrário"; credencial (`GH_TOKEN`) nunca entra no ambiente do
+  processo do executor — fica fora da árvore, atrás de um symlink que
+  `resolve_gh_token` recusa se apontar para dentro do repositório, e é
+  injetada só no `env=` do subprocesso `gh`, uma vez por chamada; toda
+  escrita nasce `awaiting_approval` sem nenhum campo de pré-autorização
+  (`shared.policy.forge_operation_policy_level` — ver a subseção abaixo para
+  os caminhos que este desenho recusou).
 * fila persistente com auditoria append-only.
 * WebSocket reverso iniciado pelo executor.
 * `systemd` com endurecimento e usuário sem privilégio.
@@ -133,6 +143,52 @@
     durável de que um refresh token roubado foi reapresentado — junto com
     `task.approved`, que o filtro por `entity_type` já poupava. Prova de violação
     e registro de aprovação não envelhecem por herança de um controle de spam.
+
+### Caminhos rejeitados para uma operação de forge alcançar a rede
+
+Issue #79/#80, decisão registrada nesta sessão (WK-20260902-forge-binding).
+Uma operação de forge precisa de rede — `gh` fala com a API do GitHub — e o
+sandbox do agente de codificação (`workspace-write`) não tem rede nenhuma,
+verificado empiricamente na `devel3` em 2026-09-01
+(`tests/integration/test_codex_sandbox_has_no_network.py`). Havia três
+formas de dar rede a essa operação; duas foram descartadas.
+
+1. **Rede aberta em `workspace-write`.** Ligar rede para toda tarefa que
+   roda nesse sandbox — não só forge. Rejeitado: qualquer instrução chegando
+   ao agente, incluindo conteúdo não confiável de uma issue lida de um
+   repositório público (a própria separação de proveniência que
+   `agent/codex_bridge_agent/instructions.py` existe para manter), ganharia
+   rede sem nunca passar pela classificação de política. Isso não é "forge
+   com um risco a mais" — é apagar a fronteira que today existe entre "este
+   texto é do operador" e "este texto é de terceiros" para toda tarefa,
+   permanentemente, para servir um caso que é uma fração pequena do
+   trabalho.
+2. **Rede só na tarefa aprovada, via `sandbox_workspace_write.
+   network_access=true` por invocação.** Testado de verdade na `devel3` em
+   2026-09-01 (`docs/napkin-lessons.md`, mesma data): a flag liga a rede
+   dentro do sandbox de uma chamada específica sem tocar em nenhuma outra.
+   Rejeitado mesmo assim — e a facilidade de ligar é o argumento *contra*,
+   não a favor: uma flag por invocação não é uma superfície fechada e
+   enumerável, é uma decisão que cada chamada pode tomar de novo. Nada
+   impede uma futura instrução (ou um prompt de sistema editado sem cuidado)
+   de simplesmente passar `network_access=true` para uma tarefa que não
+   precisava de forge nenhum — o controle vira "confiar que ninguém liga a
+   flag à toa", não "a rede está estruturalmente fechada exceto por um
+   caminho revisado". A superfície deixa de ser enumerável, que é
+   exatamente a propriedade que `ForgeOperationKind` (fechado, quatro
+   membros, nenhum "rodar `gh` com argv arbitrário") existe para preservar.
+3. **Adotado: a operação de forge roda FORA do sandbox, no processo do
+   executor, como uma chamada de subprocesso limitada
+   (`agent/codex_bridge_agent/forge/github.py`/`gh_tool.py`), nunca dentro de
+   uma sessão do agente de codificação.** O sandbox do agente continua sem
+   rede, sempre, sem exceção por invocação — a rede que uma operação de
+   forge precisa nunca está disponível para nenhuma instrução que o agente
+   de codificação processa, confiável ou não. O que substitui a flag por
+   invocação é a superfície fechada e enumerada à mão
+   (`ForgeOperationKind`), o portão humano sem pré-autorização
+   (`shared.policy.forge_operation_policy_level`), e a credencial fora do
+   ambiente do runner. Ver `docs/architecture.md`, "Isolamento e políticas",
+   para o desenho completo.
 
 ### Risco aceito: refresh token gasto ainda encerra a própria concessão
 

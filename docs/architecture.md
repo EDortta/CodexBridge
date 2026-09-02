@@ -80,6 +80,49 @@ em `agent/codex_bridge_agent/issue_materialize.py`, que varre o diretório
 `docs:NNN`/`NNN` na leitura) e escolhe cada número, com criação atômica
 para sobreviver a uma corrida entre duas publicações. Ver `docs/protocol.md`,
 seção "Materialização de épicas", para o par de mensagens completo.
+#### Binding de forge: o gateway guarda o declarado, o executor confirma o real
+
+Issue #79/#80, WK-20260902-forge-binding (PR B4). Um projeto pode estar
+"ligado" a um repositório GitHub (`scm_associations`, migration `0009`,
+lida/escrita a partir desta PR) — e essa ligação é deliberadamente **dois
+fatos separados, guardados em dois lugares diferentes**, não um só:
+
+* **O gateway guarda o DECLARADO.** `gateway/app/services/forge_routing.py`'s
+  `project_forge_binding` é o único ponto que lê `scm_associations` e decide
+  "ligado" ou "não ligado" — todo chamador (as ferramentas MCP de forge,
+  `AgentHub.dispatch_next` para resolver `gh:N`) pergunta a essa função, nunca
+  refaz a consulta por conta própria. `confidence` começa `declared` (um
+  operador nomeou o repositório) e só vira `confirmed` por ação explícita do
+  mesmo operador, na mesma chamada — nunca automaticamente, nem por um
+  `repo_identity_mismatch` que passou uma vez.
+* **O executor confirma o REAL, sempre ao vivo, nunca cacheado.**
+  `agent/codex_bridge_agent/forge/github.py`'s `_confirm_repo_identity_live`
+  roda `git remote get-url origin` (o `run_git` que `git_delivery.py` já usa)
+  antes de CADA operação de forge — leitura ou escrita — e recusa
+  `repo_identity_mismatch` se o remote real divergir do que o gateway
+  declarou. Uma chamada `git` local, sem rede, custa o suficiente barato para
+  rodar em toda operação e elimina a necessidade de um job de reconciliação:
+  não existe janela em que uma pasta que perdeu ou trocou de remote continue
+  sendo tratada como o binding antigo, porque nada é lembrado entre uma
+  operação e a próxima.
+
+**Por que a operação de forge não é uma extensão do runner.** Um `Runner`
+(`agent/codex_bridge_agent/runners/`) roda DENTRO do sandbox do agente de
+codificação — é exatamente esse sandbox que não tem rede (verificado contra
+a `devel3` em 2026-09-01; `docs/security.md` documenta os dois caminhos
+alternativos que foram rejeitados por isso). Uma operação de forge roda FORA
+de qualquer sandbox, como uma chamada de subprocesso `gh` limitada no
+próprio processo do executor (`agent/codex_bridge_agent/forge/gh_tool.py`),
+carregando uma credencial (`GH_TOKEN`) que nunca pode entrar no ambiente de
+um `Runner` — a mesma fronteira `agent/codex_bridge_agent/git_delivery.py`
+já estabelece para `git push`, aplicada de novo aqui pela mesma razão: o
+agente de codificação processa instruções e conteúdo que podem ser não
+confiáveis (uma issue de repositório público, por exemplo), e uma
+credencial de rede real não pode estar alcançável por esse processo. Tratar
+uma operação de forge como "mais um modo do runner" teria significado
+ensinar `_sandbox_for`/`RunnerPool` a abrir uma exceção de rede para um caso
+— exatamente a superfície não enumerável que `docs/security.md`'s caminho 2
+rejeitado descreve.
 
 ## Fluxo de comunicação
 

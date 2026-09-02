@@ -670,14 +670,24 @@ class ForgeOperationKind(str, Enum):
     request by naming a string this enum does not already have.
 
     `shared.policy.forge_operation_policy_level` is the other half of this
-    decision: every member here except `ISSUE_LIST` is `SENSITIVE`, and there
-    is no field anywhere that lets a caller change that.
+    decision: every member here except `ISSUE_LIST` and `ISSUE_VIEW` is
+    `SENSITIVE`, and there is no field anywhere that lets a caller change
+    that.
+
+    `ISSUE_VIEW` (WK-20260902-forge-binding, issue #79/#80 PR B4) is the
+    fifth member, added for exactly one caller:
+    `agent.codex_bridge_agent.instructions`'s `gh:N` resolution. It reads one
+    issue's `title`/`body` by number -- never a search, never a list -- so a
+    bound project's `gh:N` reference can be resolved to real content the same
+    way `docs:NNN` already resolves to a file's content, through the same
+    human-approval-free READ path `ISSUE_LIST` already established.
     """
 
     ISSUE_OPEN = "issue_open"
     ISSUE_COMMENT = "issue_comment"
     ISSUE_LIST = "issue_list"
     ISSUE_CLOSE = "issue_close"
+    ISSUE_VIEW = "issue_view"
 
 
 # `owner/repo`, and nothing else -- no leading `-` or `.` on either side (a
@@ -748,7 +758,7 @@ class ForgeOperationRequest(BaseModel):
         comment` requires one, and an empty comment is an approved SENSITIVE
         write that publishes nothing -- a human decision spent on a no-op.
         """
-        if self.kind in (ForgeOperationKind.ISSUE_COMMENT, ForgeOperationKind.ISSUE_CLOSE):
+        if self.kind in (ForgeOperationKind.ISSUE_COMMENT, ForgeOperationKind.ISSUE_CLOSE, ForgeOperationKind.ISSUE_VIEW):
             if self.issue_number is None:
                 raise ValueError(f"{self.kind.value} requires issue_number")
         if self.kind is ForgeOperationKind.ISSUE_COMMENT and not self.body:

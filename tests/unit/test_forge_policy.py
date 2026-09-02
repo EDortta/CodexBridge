@@ -35,8 +35,9 @@ def test_issue_list_is_read_and_every_other_kind_is_sensitive() -> None:
     would still be caught, because the loop checks every member, not just
     the four that exist today.
     """
+    read_kinds = (ForgeOperationKind.ISSUE_LIST, ForgeOperationKind.ISSUE_VIEW)
     for kind in ForgeOperationKind:
-        expected = PolicyLevel.READ if kind is ForgeOperationKind.ISSUE_LIST else PolicyLevel.SENSITIVE
+        expected = PolicyLevel.READ if kind in read_kinds else PolicyLevel.SENSITIVE
         assert forge_operation_policy_level(kind) == expected, kind
 
 
@@ -76,7 +77,8 @@ def test_every_write_kind_is_sensitive_across_every_plausible_field_combination(
     branch of this test that only looks at the default value of a new
     field.
     """
-    write_kinds = [kind for kind in ForgeOperationKind if kind is not ForgeOperationKind.ISSUE_LIST]
+    read_kinds = (ForgeOperationKind.ISSUE_LIST, ForgeOperationKind.ISSUE_VIEW)
+    write_kinds = [kind for kind in ForgeOperationKind if kind not in read_kinds]
     assert write_kinds, "the write-kind fixture must not silently become empty"
 
     checked = 0
@@ -190,6 +192,21 @@ def test_issue_list_requires_neither_title_nor_issue_number() -> None:
     request = ForgeOperationRequest(kind=ForgeOperationKind.ISSUE_LIST, repo_identity="owner/repo", state="open")
     assert request.title is None
     assert request.issue_number is None
+
+
+def test_issue_view_without_issue_number_is_refused_at_parse() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        ForgeOperationRequest(kind=ForgeOperationKind.ISSUE_VIEW, repo_identity="owner/repo")
+    assert "issue_number" in str(excinfo.value)
+
+
+def test_issue_view_is_read_like_issue_list() -> None:
+    """The one property #79's `gh:N` resolution depends on: a lookup by
+
+    number never needs a human decision, the same way `issue_list` never
+    does -- both are READ, unconditionally.
+    """
+    assert forge_operation_policy_level(ForgeOperationKind.ISSUE_VIEW) == PolicyLevel.READ
 
 
 def test_state_outside_the_closed_set_is_refused_at_parse() -> None:
