@@ -36,6 +36,7 @@ from typing import Any, Callable
 from agent.codex_bridge_agent.config import AgentSettings
 from agent.codex_bridge_agent.forge.base import ForgeOutcome, LogSender
 from agent.codex_bridge_agent.forge.gh_tool import GhResult, run_gh
+from agent.codex_bridge_agent.git_tools import run_git
 from shared.protocol import ForgeOperationKind, ForgeOperationRequest, REPO_IDENTITY_PATTERN
 
 
@@ -58,6 +59,68 @@ _ISSUE_LIST_JSON_FIELDS = "number,title,state,url"
 # unset -- `gh issue list --state` defaults to "open" too, but this module
 # passes it explicitly for the same reason as the `--limit` above.
 _DEFAULT_ISSUE_STATE = "open"
+
+# `gh issue view N --json title,body` -- exactly the two fields `issue_view`
+# exists for (see `ForgeOperationKind.ISSUE_VIEW`'s own docstring). Not
+# `--json title,body,number,url,state`: the extra fields would be unused
+# bytes on every call, and `ForgeOutcome.issue_number` is already the
+# request's own `operation.issue_number`, echoed back the same way
+# `issue_comment`/`issue_close` already echo it without asking `gh` to
+# confirm it.
+_ISSUE_VIEW_JSON_FIELDS = "title,body"
+
+# `git remote get-url <remote>` -> `owner/repo`, for every URL shape this
+# codebase's own git remotes actually take: `https://github.com/owner/repo`,
+# the same with a trailing `.git`, and the SSH form
+# `git@github.com:owner/repo.git`. Anchored on `github.com` specifically --
+# this module is GitHub-only (`forge/github.py`'s own module docstring) --
+# and matched case-insensitively on the host only; the captured
+# `owner/repo` is compared to `operation.repo_identity` case-insensitively
+# too, in `_confirm_repo_identity_live` below, since GitHub repository
+# identities are not case-sensitive.
+_REMOTE_URL_IDENTITY_PATTERN = re.compile(
+    r"github\.com[:/](?P<identity>[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*?)(?:\.git)?/?$",
+    re.IGNORECASE,
+)
+
+
+async def _confirm_repo_identity_live(
+    project_root: Path,
+    expected_repo_identity: str,
+    *,
+    settings: AgentSettings,
+    remote: str = "origin",
+) -> str | None:
+    """Confirms `expected_repo_identity` against this workspace's REAL remote,
+
+    right now -- never cached. WK-20260902-forge-binding, issue #79/#80 (PR
+    B4): the gateway only ever stores what an operator DECLARED
+    (`scm_associations`, `gateway.app.services.forge_routing`); this is the
+    other half of that split, on the executor, against ground truth. A local
+    folder can gain or lose a remote, or point it somewhere else entirely,
+    without the gateway ever finding out -- and a stale declared binding
+    granting forge writes against the wrong repository is a worse failure
+    than one extra `git` call per operation. `git remote get-url` is local
+    and reads no network (`docs/control-plane.md`), so this costs one bounded
+    subprocess, not a round trip -- there is no reconciliation job to build
+    or to have drift out of date, because nothing here is ever cached.
+
+    Returns `"repo_identity_mismatch"` when the remote is missing, unparsable
+    as a GitHub URL, or names a different repository; `None` when it
+    confirms `expected_repo_identity` exactly (case-insensitively).
+    """
+    code, stdout, _stderr = await run_git(
+        project_root, "remote", "get-url", remote, timeout_seconds=settings.forge_remote_check_timeout_seconds
+    )
+    if code != 0:
+        return "repo_identity_mismatch"
+    match = _REMOTE_URL_IDENTITY_PATTERN.search(stdout.strip())
+    if match is None:
+        return "repo_identity_mismatch"
+    actual_identity = match.group("identity")
+    if actual_identity.lower() != expected_repo_identity.lower():
+        return "repo_identity_mismatch"
+    return None
 
 
 def _refused(
@@ -96,7 +159,7 @@ def _revalidate_locally(operation: ForgeOperationRequest) -> str | None:
     # actually went through that validator.
     if not REPO_IDENTITY_PATTERN.match(operation.repo_identity):
         return "invalid_repo_identity"
-    if operation.kind in (ForgeOperationKind.ISSUE_COMMENT, ForgeOperationKind.ISSUE_CLOSE):
+    if operation.kind in (ForgeOperationKind.ISSUE_COMMENT, ForgeOperationKind.ISSUE_CLOSE, ForgeOperationKind.ISSUE_VIEW):
         if operation.issue_number is None or operation.issue_number <= 0:
             return "invalid_issue_number"
     if operation.kind is ForgeOperationKind.ISSUE_COMMENT and not operation.body:
@@ -136,6 +199,18 @@ async def run_forge_operation(
     if invalid_reason is not None:
         return _refused(invalid_reason, kind=operation.kind, repo_identity=operation.repo_identity)
 
+    # WK-20260902-forge-binding, issue #79/#80 (PR B4). Live, never cached
+    # (`_confirm_repo_identity_live`'s own docstring), and runs before EVERY
+    # operation -- read or write -- so `issue_list`/`issue_view` get the same
+    # protection a write already gets, not a narrower one. Placed after
+    # `_revalidate_locally` (shape first, then ground truth) and before any
+    # kind-specific dispatch below, so no `gh` call for any kind ever runs
+    # against a workspace whose real remote disagrees with what the gateway
+    # declared.
+    mismatch_reason = await _confirm_repo_identity_live(project_root, operation.repo_identity, settings=settings)
+    if mismatch_reason is not None:
+        return _refused(mismatch_reason, kind=operation.kind, repo_identity=operation.repo_identity)
+
     if operation.kind is ForgeOperationKind.ISSUE_OPEN:
         return await _run_issue_open(project_root, operation, settings, send_log)
     if operation.kind is ForgeOperationKind.ISSUE_COMMENT:
@@ -144,6 +219,8 @@ async def run_forge_operation(
         return await _run_issue_list(project_root, operation, settings, send_log)
     if operation.kind is ForgeOperationKind.ISSUE_CLOSE:
         return await _run_issue_close(project_root, operation, settings, send_log)
+    if operation.kind is ForgeOperationKind.ISSUE_VIEW:
+        return await _run_issue_view(project_root, operation, settings, send_log)
     # Unreachable given `_revalidate_locally`'s `isinstance` check above and
     # `ForgeOperationKind` being a closed enum -- kept as an explicit refusal
     # rather than falling off the end of the function silently.
@@ -394,6 +471,84 @@ async def _run_issue_list(
         kind=operation.kind.value,
         repo_identity=operation.repo_identity,
         issues=issues,
+        return_code=result.returncode,
+        stdout=result.stdout,
+        stderr=result.stderr,
+    )
+
+
+async def _run_issue_view(
+    project_root: Path,
+    operation: ForgeOperationRequest,
+    settings: AgentSettings,
+    send_log: LogSender,
+) -> ForgeOutcome:
+    """`gh issue view` -- READ, `ForgeOperationKind.ISSUE_VIEW`'s only job.
+
+    WK-20260902-forge-binding, issue #79/#80 (PR B4). Built for exactly one
+    caller -- `agent.codex_bridge_agent.instructions`'s `gh:N` resolution --
+    and its result never touches `shared.policy.evaluate_task_policy`
+    (`instructions.py`'s own invariant, tested there): the title/body this
+    returns is third-party, untrusted text the same way a `docs:NNN` file's
+    contents already are, placed inside `--- BEGIN UNTRUSTED ISSUE CONTENT
+    ---` by `instructions.build_task_instruction`, never mixed into the
+    operator's own request text.
+    """
+    issue_number = operation.issue_number
+    assert issue_number is not None  # guaranteed by `_revalidate_locally`
+
+    args = [
+        "issue",
+        "view",
+        str(issue_number),
+        "--repo",
+        operation.repo_identity,
+        "--json",
+        _ISSUE_VIEW_JSON_FIELDS,
+    ]
+    await send_log("stderr", f"forge.gh_argv:{' '.join(args)}")
+    result = await run_gh(
+        project_root,
+        *args,
+        gh_bin=settings.forge_gh_bin,
+        credential_relative_path=settings.forge_credential_relative_path,
+        timeout_seconds=settings.forge_operation_timeout_seconds,
+    )
+
+    if result.refused_reason is not None:
+        return _refused(result.refused_reason, kind=operation.kind, repo_identity=operation.repo_identity)
+    if not result.ok:
+        return _refused(
+            "gh_command_failed",
+            kind=operation.kind,
+            repo_identity=operation.repo_identity,
+            issue_number=issue_number,
+            return_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+    try:
+        parsed = json.loads(result.stdout)
+        if not isinstance(parsed, dict) or "title" not in parsed or "body" not in parsed:
+            raise ValueError("gh issue view --json did not return the expected object")
+    except (json.JSONDecodeError, ValueError):
+        return _refused(
+            "forge_postcondition_failed:not_json_object",
+            kind=operation.kind,
+            repo_identity=operation.repo_identity,
+            issue_number=issue_number,
+            return_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+    return ForgeOutcome(
+        attempted=True,
+        outcome="succeeded",
+        kind=operation.kind.value,
+        repo_identity=operation.repo_identity,
+        issue_number=issue_number,
+        issue_title=parsed.get("title"),
+        issue_body=parsed.get("body"),
         return_code=result.returncode,
         stdout=result.stdout,
         stderr=result.stderr,

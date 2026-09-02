@@ -72,9 +72,10 @@ def push_is_preauthorized(request: SubmitTaskRequest) -> bool:
 def forge_operation_policy_level(kind: ForgeOperationKind) -> PolicyLevel:
     """The policy tier a forge operation is classified at -- issue #80/#79.
 
-    `ISSUE_LIST` is `READ`: it costs the forge nothing and changes nothing.
-    Every write kind -- `ISSUE_OPEN`, `ISSUE_COMMENT`, `ISSUE_CLOSE` -- is
-    `SENSITIVE`, unconditionally, for every value of every field on
+    `ISSUE_LIST` and `ISSUE_VIEW` are `READ`: neither writes anything to the
+    forge or costs it more than one bounded `gh` read. Every write kind --
+    `ISSUE_OPEN`, `ISSUE_COMMENT`, `ISSUE_CLOSE` -- is `SENSITIVE`,
+    unconditionally, for every value of every field on
     `ForgeOperationRequest`.
 
     This is the single most important thing in this module, so read it
@@ -114,7 +115,7 @@ def forge_operation_policy_level(kind: ForgeOperationKind) -> PolicyLevel:
     so it fails the moment a new kind or a new field quietly earns an
     exception.
     """
-    if kind is ForgeOperationKind.ISSUE_LIST:
+    if kind in (ForgeOperationKind.ISSUE_LIST, ForgeOperationKind.ISSUE_VIEW):
         return PolicyLevel.READ
     return PolicyLevel.SENSITIVE
 

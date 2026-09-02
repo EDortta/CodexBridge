@@ -91,6 +91,17 @@ class AgentSettings(BaseSettings):
     # `gh`, not a coding-agent session -- `git_push_timeout_seconds` above
     # sets the analogous bound for git delivery.
     forge_operation_timeout_seconds: float = 60
+    # WK-20260902-forge-binding, issue #79/#80 (PR B4). Upper bound on
+    # `git remote get-url <remote>` -- the live check `run_forge_operation`
+    # runs before EVERY operation (write or read) to confirm the gateway's
+    # declared `repo_identity` still matches this workspace's real remote
+    # (`docs/control-plane.md`'s "the gateway guards the declared, the
+    # executor confirms the real"). Short and separate from
+    # `forge_operation_timeout_seconds`: this is a local, no-network `git`
+    # read, not a `gh` call to a real API, so it should never take anywhere
+    # near as long, and a caller reading logs should be able to tell which
+    # of the two stalled.
+    forge_remote_check_timeout_seconds: float = 10
     # WK-20260902-forge-github-module, issue #80/#79. Where `gh_tool.run_gh`
     # looks, under `project_root`, for the GitHub token to inject as
     # `GH_TOKEN`. The house convention this repo already practices

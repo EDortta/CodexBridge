@@ -35,12 +35,35 @@ LogSender = Callable[[str, str], Awaitable[None]]
 # bounded instead of dropped, at the one place every outcome is built.
 MAX_CAPTURED_OUTPUT = 2000
 
+# `issue_view`'s (WK-20260902-forge-binding, issue #79/#80 PR B4) own bound,
+# separate from `MAX_CAPTURED_OUTPUT` above on purpose: `stdout`/`stderr` are
+# DIAGNOSTIC -- `gh`'s own process output, useful for debugging a refusal,
+# never the primary payload a caller reads. `issue_title`/`issue_body` below
+# ARE the primary payload for `issue_view` -- the text
+# `instructions.build_task_instruction` places inside
+# `--- BEGIN UNTRUSTED ISSUE CONTENT ---`, the same role a `docs:NNN` file's
+# contents already play. Truncating it at 2000 characters the way diagnostic
+# output is truncated would silently hand the provider a clipped issue body
+# with no signal that anything was cut. Matches
+# `shared.protocol.ForgeOperationRequest.body`'s own `max_length=65536` --
+# the size GitHub already lets an operator write into an issue via this same
+# codebase's `issue_open`/`issue_comment`, so a `gh issue view` reading one
+# back needs at least as much room.
+MAX_CAPTURED_ISSUE_BODY = 65536
+
 
 def _truncate_captured(text: str | None) -> str | None:
     if text is None or len(text) <= MAX_CAPTURED_OUTPUT:
         return text
     dropped = len(text) - MAX_CAPTURED_OUTPUT
     return f"{text[:MAX_CAPTURED_OUTPUT]}\n[... {dropped} more characters dropped]"
+
+
+def _truncate_issue_body(text: str | None) -> str | None:
+    if text is None or len(text) <= MAX_CAPTURED_ISSUE_BODY:
+        return text
+    dropped = len(text) - MAX_CAPTURED_ISSUE_BODY
+    return f"{text[:MAX_CAPTURED_ISSUE_BODY]}\n[... {dropped} more characters dropped]"
 
 
 @dataclass(frozen=True)
@@ -72,6 +95,13 @@ class ForgeOutcome:
     issue_number: int | None = None
     issue_url: str | None = None
     issues: list[dict[str, Any]] = field(default_factory=list)
+    # `issue_view` only (WK-20260902-forge-binding, PR B4) -- the fields
+    # `gh:N` resolution actually reads. Left at their default (`None`) by
+    # every other kind, the same "a field a given kind does not produce is
+    # simply left at its default" posture this dataclass's own docstring
+    # already states for `issue_number`/`issue_url`/`issues`.
+    issue_title: str | None = None
+    issue_body: str | None = None
     return_code: int | None = None
     stdout: str | None = None
     stderr: str | None = None
@@ -83,6 +113,7 @@ class ForgeOutcome:
         # someone forgets it once.
         object.__setattr__(self, "stdout", _truncate_captured(self.stdout))
         object.__setattr__(self, "stderr", _truncate_captured(self.stderr))
+        object.__setattr__(self, "issue_body", _truncate_issue_body(self.issue_body))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +125,8 @@ class ForgeOutcome:
             "issue_number": self.issue_number,
             "issue_url": self.issue_url,
             "issues": self.issues,
+            "issue_title": self.issue_title,
+            "issue_body": self.issue_body,
             "return_code": self.return_code,
             "stdout": self.stdout,
             "stderr": self.stderr,
