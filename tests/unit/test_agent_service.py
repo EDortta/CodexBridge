@@ -771,7 +771,18 @@ async def test_handle_dispatch_allows_a_write_mode_when_workspace_write_is_on(tm
     await service._handle_dispatch(DummyWebSocket(), _dispatch_envelope(task_id="t-unlocked", mode="implement"))
 
     assert runner.sandboxes == ["workspace-write"]
-    assert runner.sandboxes == ["read-only"]
+
+
+# `test_handle_dispatch_honours_the_machine_level_read_only_override` used to
+# live here (WK-20260902-forge-wiring-and-gate). It asserted that an
+# `implement` dispatch on a node with `allow_workspace_write=False` reaches
+# the runner downgraded to `read-only`. Issue #73 Stage 4 changed that: such a
+# dispatch is now REFUSED before the runner is touched
+# (`capability_not_configured:implement`, pinned by the negative test above),
+# because a node must not silently run a weaker version of what it was asked
+# to do. The old test encoded the pre-Stage-4 behaviour and was dropped at
+# integration rather than "fixed" into asserting something neither branch
+# meant.
 
 
 # --------------------------------------------------------------------------

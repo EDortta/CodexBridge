@@ -1335,12 +1335,26 @@ async def adopt_discovered_resource(
         binding.updated_at = now
 
     if remote_url:
+        # Deduplicated by `(project_id, provider)`, not by `(project_id,
+        # remote_url)`. Two reasons, and the first is a hard one: issue #79's
+        # `0016_forge_binding.sql` added a UNIQUE index on exactly that pair,
+        # so a second `github` row for the same project is now an
+        # IntegrityError rather than a duplicate. The second is semantic --
+        # the same repository is reachable by several URL spellings
+        # (`https://…/x.git`, `git@github.com:…`), so matching on the string
+        # would have created "duplicates" that were never distinct anyway.
+        #
+        # An existing row is left ALONE. `bind_project_forge` writes
+        # `confidence` `declared`/`confirmed` -- a human said which repository
+        # this project belongs to -- and an observation must never quietly
+        # downgrade that to `observed`, nor rewrite a `remote_url` a person
+        # chose. Discovery only fills the gap where nobody has spoken yet.
         association = (
             (
                 await session.execute(
                     select(ScmAssociationModel).where(
                         ScmAssociationModel.project_id == project.id,
-                        ScmAssociationModel.remote_url == remote_url,
+                        ScmAssociationModel.provider == "github",
                     )
                 )
             )
@@ -2007,7 +2021,7 @@ async def upsert_scm_association(
     """Declares (or re-declares, or confirms) a project's forge binding.
 
     One row per `(project_id, provider)` (`scm_associations_project_provider_idx`,
-    `migrations/0014_forge_binding.sql`) -- a second call for a project
+    `migrations/0016_forge_binding.sql`) -- a second call for a project
     already bound UPDATES that row rather than creating a second one, so
     `forge_routing.project_forge_binding` never has to pick among several.
 

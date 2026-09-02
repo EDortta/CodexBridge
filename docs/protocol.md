@@ -383,7 +383,7 @@ sobre uma operação de forge, e forçar um valor sentinela neles ensinaria
 esses módulos a tratar um caso que não é deles.
 
 Persistência é uma tabela própria no gateway, `forge_operations`
-(`migrations/0012_forge_operations.sql`), **não** uma linha em `tasks`: as
+(`migrations/0015_forge_operations.sql`), **não** uma linha em `tasks`: as
 colunas de `tasks` (`mode`, `instruction`, `engine`, `timeout_seconds`,
 `session_id`, `delivery_json`) descrevem uma sessão de agente de código, e
 `shared.policy.forge_operation_policy_level` é explícita que a classificação

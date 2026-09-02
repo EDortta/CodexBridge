@@ -683,6 +683,41 @@ paths:
         while leaving an already-open connection running would not actually
         revoke anything. Does not touch the node's local checkouts; that is
         an operator concern on the machine itself, not this API's.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/NodeId'
+      responses:
+        '200':
+          description: The node's post-revoke state.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, admissionState, enabled, connectionClosed]
+                properties:
+                  id:
+                    $ref: '#/components/schemas/NodeId'
+                  admissionState:
+                    type: string
+                    enum: [enrolled, revoked]
+                  enabled:
+                    type: boolean
+                  connectionClosed:
+                    type: boolean
+                    description: Whether a live socket was actually closed by this call, as opposed to none being open.
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/nodes/{nodeId}/discovered-resources:
     get:
       operationId: listDiscoveredResources
@@ -714,9 +749,6 @@ paths:
           required: true
           schema:
             $ref: '#/components/schemas/NodeId'
-      responses:
-        '200':
-          description: The node's post-revoke state.
         - name: state
           in: query
           required: false
@@ -735,18 +767,6 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [id, admissionState, enabled, connectionClosed]
-                properties:
-                  id:
-                    $ref: '#/components/schemas/NodeId'
-                  admissionState:
-                    type: string
-                    enum: [enrolled, revoked]
-                  enabled:
-                    type: boolean
-                  connectionClosed:
-                    type: boolean
-                    description: Whether a live socket was actually closed by this call, as opposed to none being open.
                 required: [items, page]
                 properties:
                   items:
@@ -761,8 +781,6 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
-
-
   /api/v1/discovered-resources/{resourceId}/adopt:
     post:
       operationId: adoptDiscoveredResource
@@ -4889,7 +4907,16 @@ components:
         against — the same reasoning `x-pending-components` applies to unused
         components. `rationale` is different: it is genuinely absent before a
         decision is made and populated by whoever resolves it.
-      required: [id, projectId, executorId, request, decisionType, state, revision, createdAt, deadline]
+      # `decisionType` is deliberately NOT in this list, and the server always
+      # sends it. The compatibility gate treats a field that becomes required
+      # as breaking without distinguishing a response schema from a request
+      # one -- and `Decision` is response-only (it appears in no requestBody).
+      # A reader pinned to 1.6.0 is not harmed by a field arriving; a writer
+      # would be, which is the case the rule is really about. Rather than edit
+      # the published 1.6.0 baseline a client pinned to, the promise is left
+      # soft here: clients may rely on the field in practice, and it moves into
+      # `required` at the next namespace change.
+      required: [id, projectId, executorId, request, state, revision, createdAt, deadline]
       properties:
         id:
           $ref: '#/components/schemas/Id'

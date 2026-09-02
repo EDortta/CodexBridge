@@ -6,7 +6,7 @@
 --
 -- 1. forge_operations.revision -- ForgeOperationModel had no equivalent of
 --    TaskModel.revision (migrations/0002_api_foundation.sql) when
---    0012_forge_operations.sql shipped, because nothing outside
+--    0015_forge_operations.sql shipped, because nothing outside
 --    tests/integration/test_forge_wiring.py read a forge operation through
 --    an API that needed optimistic concurrency. `/api/v1/decisions` now
 --    projects forge_operations rows too (gateway/app/api/routes/

@@ -81,7 +81,7 @@ async def project_forge_binding(session: AsyncSession, project_id: str) -> Forge
     local tables instead", never as a reason to refuse outright. A project
     can have at most one row per `(project_id, provider)`
     (`scm_associations_project_provider_idx`,
-    `migrations/0014_forge_binding.sql`) -- `store.upsert_scm_association`
+    `migrations/0016_forge_binding.sql`) -- `store.upsert_scm_association`
     is the only writer, and it updates that one row in place rather than
     inserting a second one, so there is no "which row wins" ambiguity to
     resolve here.

@@ -510,7 +510,7 @@ async def test_reading_events_requires_the_read_scope(api) -> None:
 
 
 async def test_no_stored_payload_key_is_passed_through_to_a_client(api) -> None:
-    """The audit payload is written by thirty-five call sites and is not a response.
+    """The audit payload is written by fifty-one call sites and is not a response.
 
     It carries `actor_email`, `requested_by_email` and free-text `context`
     blobs. A translation that spread the payload into the event — or that

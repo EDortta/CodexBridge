@@ -9,7 +9,7 @@ Three rules shape everything below.
 
 ## 1. The row is internal; the event is public
 
-`AuditEventModel.payload_json` is written by thirty-five call sites that were never
+`AuditEventModel.payload_json` is written by fifty-one call sites that were never
 audited for what they may contain. It carries `actor_email`, `requested_by_email`,
 free-text `reason` and `error` strings from an executor, and `context` blobs.
 `docs/api/README.md`'s "Fields that must never ship" applies to every byte of it,

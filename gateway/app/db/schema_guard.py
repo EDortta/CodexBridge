@@ -66,7 +66,7 @@ REQUIRED_TABLES: dict[str, str] = {
     # their first query with a driver error instead of at startup.
     "node_invites": "0013_node_enrollment.sql",
     # Issue #80/#79's human approval gate for a forge write.
-    "forge_operations": "0012_forge_operations.sql",
+    "forge_operations": "0015_forge_operations.sql",
 }
 
 # READ THIS BEFORE TRUSTING THE TABLE ABOVE.
@@ -157,7 +157,7 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     # forge row -- the same "fresh install fine, existing install broken on
     # first read" shape this module exists to catch early.
     "forge_operations": {
-        "revision": "0014_forge_binding.sql",
+        "revision": "0016_forge_binding.sql",
     },
 }
 

@@ -1735,7 +1735,7 @@ um `RunnerPool` que não sabe nada sobre forge. Forçar os dois no mesmo
 caminho exigiria um discriminador `kind` em `tasks`, colunas nulas para todo
 campo que só um lado usa, e um branch em quase toda função de `store.py` que
 toca `TaskModel` — mais acoplamento do que a tabela paralela que ficou
-escolhida (`forge_operations`, `migrations/0012_forge_operations.sql`).
+escolhida (`forge_operations`, `migrations/0015_forge_operations.sql`).
 
 O que valeu a pena reusar não foi o mecanismo, foi o vocabulário:
 `ApprovalDecision` (`approved`/`rejected`/`revision_requested`) e a forma

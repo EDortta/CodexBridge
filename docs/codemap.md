@@ -1894,7 +1894,7 @@ tests/
 - `test_a_preference_change_is_not_a_project_event(api)` *(async function)* — "`notification` rows are excluded the same way `auth` rows are."
 - `test_an_event_whose_project_cannot_be_derived_reaches_nobody(api)` *(async function)* — "Fail closed, administrators included."
 - `test_reading_events_requires_the_read_scope(api)` *(async function)*
-- `test_no_stored_payload_key_is_passed_through_to_a_client(api)` *(async function)* — "The audit payload is written by thirty-five call sites and is not a response."
+- `test_no_stored_payload_key_is_passed_through_to_a_client(api)` *(async function)* — "The audit payload is written by fifty-one call sites and is not a response."
 - `test_free_text_in_a_summary_is_redacted_and_bounded(api)` *(async function)* — "`redact` is applied to executor free text, and the line has a ceiling."
 - `test_an_executors_control_and_state_strings_cannot_reach_a_notification_line(api)` *(async function)* — "Council round 1, the adversarial user — the whitelist's premise was false."
 - `test_every_echoed_payload_value_comes_from_a_closed_vocabulary()` — "The guard behind the test above, asserted directly."

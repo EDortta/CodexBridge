@@ -641,7 +641,7 @@ class ForgeOperationModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # WK-20260902-forge-binding, issue #79/#80 (PR B4), migrations/
-    # 0014_forge_binding.sql. Same role `TaskModel.revision` plays: bumped
+    # 0016_forge_binding.sql. Same role `TaskModel.revision` plays: bumped
     # by every mutator in `store.py` that touches this row (create, decide,
     # dispatch, resolve), and what `/api/v1/decisions`'s ETag/If-Match
     # optimistic concurrency compares against once that endpoint started

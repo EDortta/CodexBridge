@@ -1466,7 +1466,7 @@ are excluded the same way.
 
 ### The summary is a whitelist; the stored payload never ships
 
-The internal audit payload is written by thirty-five call sites that were never
+The internal audit payload is written by fifty-one call sites that were never
 audited for what they may contain: `actor_email`, `requested_by_email`,
 free-text `reason` and `error` strings from an executor, `context` blobs.
 §"Fields that must never ship" applies to every byte of it and no existing

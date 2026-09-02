@@ -458,7 +458,7 @@ def test_the_audit_payload_writer_count_is_the_real_one() -> None:
     """
     import ast
 
-    spelled = {11: "eleven", 31: "thirty-one", 35: "thirty-five"}
+    spelled = {11: "eleven", 31: "thirty-one", 35: "thirty-five", 51: "fifty-one"}
     count = 0
     for path in (REPO_ROOT / "gateway").rglob("*.py"):
         if path.name == "audit.py":

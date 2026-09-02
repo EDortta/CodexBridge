@@ -347,7 +347,7 @@ def _to_event(row, project_id: str) -> event_types.MobileEvent | None:
 def _payload(raw: str | None) -> dict:
     """The stored payload as a dict, or an empty one.
 
-    Never raises. `payload_json` is years of rows written by thirty-five call sites,
+    Never raises. `payload_json` is years of rows written by fifty-one call sites,
     and one unparseable row must not take down a stream that is otherwise
     correct — the summary degrades to its default sentence instead.
     """

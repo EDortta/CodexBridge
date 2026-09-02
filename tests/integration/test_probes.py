@@ -697,6 +697,16 @@ UNGUARDED_API_ROUTES: dict[tuple[str, str], str] = {
         "load-bearing — under the first cut of the detector below it was not, "
         "because bare authentication counted as a guard."
     ),
+    ("POST", "/api/v1/nodes/enroll"): (
+        "Issue #76. Mints the node's machine token, so guarding it with a "
+        "permission would require the credential it exists to issue — the same "
+        "shape as `POST /api/v1/auth/sign-in` above. What authenticates it is "
+        "the single-use invite in its own body, claimed by a conditional "
+        "UPDATE, and it carries the same rate limiter as `POST "
+        "/oauth/authorize`, the only other endpoint here that mints a "
+        "credential for an unauthenticated caller. See "
+        "gateway/app/api/routes/enrollment.py."
+    ),
     ("GET", "/api/v1/artifacts/{artifact_id}/download"): (
         "Issue #11. Authenticates the artifact download token and nothing else: "
         "that credential names the one artifact it authorizes, satisfies no "
