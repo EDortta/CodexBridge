@@ -1362,3 +1362,42 @@ mesmo alvo. A saída foi separar "chave de busca" (hash de largura fixa) de
 "dado real" (path, em coluna nova, sem índice) — quando um valor precisa
 simultaneamente indexar barato E carregar um dado de tamanho não controlado,
 essas são duas responsabilidades, não uma.
+
+## 2026-09-02 — um segundo portão de privilégio que reusa `is_admin()` pode ser tautológico
+
+Stage 4 do #73 (WK-20260902-gh73-authorization-plane) pediu, por escrito, o
+mesmo formato do segundo portão que `DECISIONS_DECIDE` já tinha:
+`principal.can_approve_sensitive or principal.is_admin()`, aplicado depois de
+o escopo administrativo base já ter sido exigido. Copiado ao pé da letra para
+`NODES_AUTHORIZATIONS_MANAGE`, o portão não fazia nada: `is_admin()` é
+`"admin" in principal.roles or "codexbridge.admin" in principal.scopes`, e o
+escopo BASE da própria ação já É `codexbridge.admin`. Para qualquer ação cujo
+escopo seja exatamente esse, `principal.has_scope(action.scope)` e
+`principal.is_admin()` são o mesmo predicado — todo principal que passa pelo
+portão de entrada já teria passado pelo segundo, tornando `can_approve_
+sensitive` irrelevante e a condição inteira tautológica. Em `DECISIONS_DECIDE`
+o mesmo código funciona porque o escopo dessa ação (`codexbridge.task.
+approve`) é disjunto de `codexbridge.admin` — os dois predicados genuinamente
+diferem ali.
+
+A confirmação foi de duas linhas, antes de escrever qualquer teste:
+`AuthenticatedPrincipal(roles=[], scopes=['codexbridge.admin'],
+can_approve_sensitive=False).is_admin()` devolve `True`. Se a suíte tivesse
+só testado "com escopo admin, sem `can_approve_sensitive`, permitido" (o
+caminho que qualquer teste ingênuo escreveria primeiro), teria passado sem
+provar nada sobre o portão — de novo o padrão do achado de 2026-08-24 e do
+`test_agent_ws_discovery.py`: teste verde provando só que o caminho executou,
+não que ele decide certo.
+
+Lição: antes de reusar um predicado de "é admin" como segunda camada de um
+gate cujo PRIMEIRO portão já é o próprio escopo administrativo, verificar por
+código — não por analogia com outro gate — se as duas checagens realmente
+divergem para algum principal alcançável. Quando a segunda checagem é
+logicamente implicada pela primeira, ela não é defesa em profundidade: é
+decoração. O ajuste aqui foi checar o papel diretamente
+(`"admin" in principal.roles`), não `is_admin()`, e documentar POR QUE no
+próprio docstring de `permissions.is_allowed` — quem copiar o padrão
+`DECISIONS_DECIDE` de novo, para uma ação cujo escopo base não seja
+administrativo, deve voltar a usar `is_admin()`; quem copiar para uma ação
+cujo escopo base JÁ seja `codexbridge.admin` deve repetir esta checagem
+antes de confiar no copy-paste.

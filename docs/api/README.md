@@ -1111,6 +1111,81 @@ protects a retry instead, the same shape `POST /api/v1/issues` established.
 
 ---
 
+## Authorizations (issue #73 Stage 4, WK-20260902-gh73-authorization-plane)
+
+`POST /api/v1/nodes/{nodeId}/projects/{projectId}/authorize` and
+`.../revoke`. The explicit-operator half of writing `project_authorizations`
+— separate from discovery adoption (previous section), which is the other
+place that table gets written. This is also the FIRST build whose
+enforcement actually reads that table: `store.effective_task_modes`, called
+from `store.create_task` at the exact spot its old inline `allowed_modes`
+check lived, and the executor's own independent mirror in
+`agent/codex_bridge_agent/service.py:_handle_dispatch`. A grant made through
+either surface takes effect the next time a task is submitted for that
+`(node, project)` pair — there is no cache and no side channel.
+
+### Enforcement narrows `allowed_modes`; it never replaces it
+
+A `(node, project)` pair with no `workspace_bindings` row — i.e. one that
+never went through discovery adoption — is governed by `allowed_modes` alone,
+exactly as before this stage existed, permanently (not a grace period). Once
+a binding exists, the effective mode set is `allowed_modes` intersected with
+`capabilities_to_modes(...)` of the pair's active `project_authorizations`
+row; no row at all intersects with the empty set. The intersection can only
+shrink what `allowed_modes` already permitted, per node — see
+`docs/control-plane.md`, "Stage 4", for the full walk-through.
+
+### The privilege ladder, and why it does not call `is_admin()`
+
+`nodes.authorizations.manage` is administrative (`codexbridge.admin`), same
+class as `nodes.read`/`nodes.discoveries.decide`. Granting `modify` or
+`deliver` crosses one more condition, evaluated inside
+`permissions.is_allowed` (never a second `if` inside the route):
+`principal.can_approve_sensitive or "admin" in principal.roles`.
+
+That condition deliberately does NOT read `principal.is_admin()`, unlike
+`decisions.decide`'s own second gate. `is_admin()` is `"admin" in
+principal.roles or "codexbridge.admin" in principal.scopes`. `decisions.
+decide`'s own scope (`codexbridge.task.approve`) is disjoint from
+`codexbridge.admin`, so `is_admin()` genuinely adds a condition there. But
+`nodes.authorizations.manage`'s own BASE scope already IS
+`codexbridge.admin` — so for this one action, `principal.has_scope(action.
+scope)` and `principal.is_admin()` collapse into the same predicate, and
+gating on `is_admin()` a second time after the base scope already required
+it would be tautological: `can_approve_sensitive` would never once be the
+deciding factor, and every `codexbridge.admin`-scoped principal could grant
+`modify`/`deliver` regardless of it — the exact escalation this gate exists
+to close. Checking the ROLE directly instead keeps the distinction real: a
+token can carry `codexbridge.admin` for fleet-visibility reasons
+(`nodes.read`) without its holder being trusted for `modify`/`deliver`.
+`tests/integration/test_authorization_routes.py::
+test_granting_modify_without_can_approve_sensitive_or_admin_role_is_refused`
+is the test that would have passed silently if this gate had been written
+the naive way.
+
+### `authorize` overwrites; `revoke` never deletes
+
+`POST .../authorize` OVERWRITES the pair's capability set and provenance
+rather than merging with whatever it held before — an operator calling this
+states the authorization they want NOW. A previously revoked row is
+reactivated in place (`revokedAt` cleared), never duplicated:
+`project_authorizations_node_project_idx` allows exactly one non-revoked row
+per pair. `POST .../revoke` marks the row revoked and never deletes it, so a
+later `authorize` call can reactivate the same row and its provenance
+survives the gap. Both endpoints record their own `audit_events` entry
+(`project_authorization.granted`/`.revoked`); the row itself holds only
+current state.
+
+### `revoke` carries no second gate
+
+Taking capability away is never the escalation `authorize`'s
+`can_approve_sensitive`/admin-role condition guards against, so `revoke`
+needs only the base `nodes.authorizations.manage` scope — a principal who
+could never have granted `modify` may still revoke a pair that already
+carries it.
+
+---
+
 ## Cross-cutting rules every endpoint inherits
 
 Implemented in `gateway/app/api/` (issue #12). An endpoint does not re-invent

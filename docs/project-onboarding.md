@@ -95,6 +95,18 @@ somente-leitura/só-diff, sem allowlist automática:
 `["analyze", "review", "test"]` nunca recebe tarefa que modifique arquivo, porque
 `edit` e `implement` são recusados na submissão. **Cadastre o mínimo necessário.**
 
+**Desde issue #73 Stage 4 (WK-20260902-gh73-authorization-plane),
+`allowed_modes` deixou de ser a última palavra quando o PAR (nó, projeto) foi
+adotado via descoberta.** Se esse par tem linha em `workspace_bindings` — ou
+seja, se alguém rodou `POST /api/v1/discovered-resources/{id}/adopt` para
+ele — a lista de modos efetivamente permitida passa a ser `allowed_modes`
+interseccionado com o que `project_authorizations` concede àquele nó
+especificamente (`docs/control-plane.md`, seção "Stage 4"). **Um projeto
+cadastrado só pelo fluxo manual desta página, sem nunca passar por adoção,
+continua sendo controlado só por `allowed_modes` — sem mudança nenhuma, para
+sempre.** A intersecção só pode estreitar o que `allowed_modes` já permitia,
+nunca alargar.
+
 ## Schema de executor
 
 Apenas em `registry.json`, no `frida`.
@@ -147,6 +159,23 @@ Três campos existem no schema e **não têm nenhum efeito** no código atual:
 
 As camadas 1 a 6 rodam no `frida`. As 7 a 9 rodam no `devel3` e continuam valendo
 mesmo que o gateway esteja comprometido.
+
+**A camada 5 ganhou uma sub-camada em issue #73 Stage 4** (não numerada à
+parte para não deslocar a lista acima): quando o par (nó, projeto) tem linha
+em `workspace_bindings`, `allowed_modes` é interseccionado com
+`project_authorizations` daquele nó antes de decidir o modo — ver "Camadas de
+autorização" acima e `docs/control-plane.md`. Um projeto cadastrado só pelo
+fluxo manual desta página (sem nunca ter passado por adoção via descoberta)
+não tem linha em `workspace_bindings` e portanto não é afetado: continua
+valendo só `allowed_modes`, como sempre valeu. **A camada 8 também ganhou um
+espelho independente** (`agent/codex_bridge_agent/service.py:
+_handle_dispatch`): o agente recusa um modo que a sua própria configuração
+(`allow_workspace_write`/`allow_git_delivery`) não oferece, mesmo que o
+gateway já tenha aprovado o dispatch — defesa em profundidade contra um
+gateway comprometido, não uma segunda cópia da mesma regra. **Nada disto
+remove a allowlist local do agente** (camada 7, `allowed_projects_file`) — ela
+continua existindo, continua sendo consultada, e um `project_id` fora dela
+segue sendo recusado com `unknown_project` exatamente como antes desta PR.
 
 **A camada 7 tem uma válvula opt-in** (`CODEX_BRIDGE_AGENT_AUTO_PROJECT_ROOT`,
 WK-20260830-chatgpt-entry-provider-and-delivery): quando configurada, um

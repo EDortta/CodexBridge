@@ -35,6 +35,9 @@ visible mistake rather than an invisible one.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Iterable
+
+from shared.protocol import Capability
 
 
 READ_SCOPE = "codexbridge.read"
@@ -231,6 +234,35 @@ NODES_DISCOVERIES_DECIDE = Action(
     summary="Adopt or deny a discovered candidate.",
 )
 
+# Issue #73 Stage 4 (WK-20260902-gh73-authorization-plane): the explicit
+# operator grant/revoke of `project_authorizations`, behind `POST
+# .../authorize` and `.../revoke`. Administrative and fleet-wide, same
+# posture as `NODES_READ`/`NODES_DISCOVERIES_DECIDE`: a `(node, project)`
+# authorization pair is not scoped to any project the caller already sees by
+# `visible_projects` -- it is a fleet-level decision about what a NODE may do,
+# not a project-level one about what a session may do.
+#
+# `is_allowed` below carries this action's own second gate, the same shape
+# `DECISIONS_DECIDE` already has: granting `modify` or `deliver` additionally
+# requires `can_approve_sensitive` or `is_admin()`. Unlike `DECISIONS_DECIDE`'s
+# gate, this one depends on the REQUEST body (which capabilities are being
+# granted), which `require_action`'s dependency cannot see before the body is
+# parsed -- so the route calls `is_allowed` a second time, with `capabilities=
+# payload.capabilities`, after parsing it. Both calls still funnel through
+# this one function; nothing about the rule lives in the route.
+NODES_AUTHORIZATIONS_MANAGE = Action(
+    name="nodes.authorizations.manage",
+    category=ADMINISTRATIVE,
+    scope=ADMIN_SCOPE,
+    summary="Grant or revoke a Bridge Node's capabilities on a project.",
+)
+
+# `Capability` values whose grant requires the same second gate
+# `DECISIONS_DECIDE` already applies before a sensitive task can be approved
+# -- granting a node the power to write (`modify`) or push (`deliver`) is the
+# same class of decision, just aimed at a node instead of a task.
+_SENSITIVE_CAPABILITIES = frozenset({Capability.MODIFY, Capability.DELIVER})
+
 EPICS_READ = Action(
     name="epics.read",
     category=READ,
@@ -325,10 +357,16 @@ CATALOGUE: tuple[Action, ...] = (
     NODES_READ,
     NODES_DISCOVERIES_READ,
     NODES_DISCOVERIES_DECIDE,
+    NODES_AUTHORIZATIONS_MANAGE,
 )
 
 
-def is_allowed(principal, action: Action) -> bool:
+def is_allowed(
+    principal,
+    action: Action,
+    *,
+    capabilities: Iterable[Capability | str] | None = None,
+) -> bool:
     """Whether `principal` may perform `action`.
 
     Delegates to `AuthenticatedPrincipal.has_scope`, which is also what the
@@ -345,10 +383,57 @@ def is_allowed(principal, action: Action) -> bool:
     check inside the route: `GET /api/v1/auth/me` reports this same function, so
     a route that checked it separately would tell the client "you may" while the
     endpoint answered 403.
+
+    `nodes.authorizations.manage` carries the same-SHAPED second gate, but
+    only when `capabilities` names `modify` or `deliver` — granting a node
+    `read`/`test` needs only the base administrative scope, the same as
+    adoption's own `autoAuthorize` ceiling (`shared.protocol.
+    AUTO_AUTHORIZABLE_CAPABILITIES`). `capabilities=None` (the default, and
+    what `GET /api/v1/auth/me`'s `report_for` below always passes) skips this
+    half of the check: whether a given request's capability list crosses
+    into sensitive territory is a fact about that request, not about the
+    actor in the abstract, so the catalogue reports only the baseline "may
+    this actor ever manage authorizations at all" — the route re-calls this
+    function with the real `capabilities` once the request body is parsed,
+    for the answer that actually gates the write.
+
+    That second gate reads `"admin" in principal.roles` here, NOT
+    `principal.is_admin()` the way `decisions.decide` above reads it — a
+    deliberate, load-bearing difference, not a typo. `is_admin()` is
+    `"admin" in principal.roles or "codexbridge.admin" in principal.scopes`.
+    `decisions.decide`'s own scope is `codexbridge.task.approve`, disjoint
+    from `codexbridge.admin`, so for THAT action `is_admin()` genuinely adds
+    something `has_scope` did not already establish. `nodes.authorizations.
+    manage`'s own base scope IS `codexbridge.admin` (`ADMIN_SCOPE` — the
+    same administrative class `nodes.read`/`nodes.discoveries.decide` use,
+    per this PR's own brief). For an action whose scope already equals
+    `codexbridge.admin`, `principal.has_scope(action.scope)` and
+    `principal.is_admin()` are THE SAME PREDICATE (`has_scope` computes
+    `is_admin() or scope in scopes`, and here `scope IS "codexbridge.admin"`
+    — the `or` clause folds into the first). Gating on `is_admin()` a second
+    time after `allowed` already required it would make the whole condition
+    tautological: every principal who clears the base scope check would
+    automatically clear this one too, and `can_approve_sensitive` would
+    never once be the deciding factor — the exact escalation this gate
+    exists to close. Checking the ROLE directly keeps the two properties
+    `docs/control-plane.md`'s Stage 4 section names distinct: a principal's
+    token may carry `codexbridge.admin` for fleet-visibility reasons
+    (`nodes.read`, `nodes.discoveries.read`) without that principal being
+    trusted for `modify`/`deliver` — the same distinction `can_approve_
+    sensitive` already draws for `decisions.decide`.
     """
     allowed = principal.has_scope(action.scope)
     if action is DECISIONS_DECIDE:
         allowed = allowed and (principal.can_approve_sensitive or principal.is_admin())
+    if action is NODES_AUTHORIZATIONS_MANAGE and capabilities is not None:
+        requested = set()
+        for capability in capabilities:
+            try:
+                requested.add(capability if isinstance(capability, Capability) else Capability(capability))
+            except ValueError:
+                continue
+        if requested & _SENSITIVE_CAPABILITIES:
+            allowed = allowed and (principal.can_approve_sensitive or "admin" in principal.roles)
     return allowed
 
 

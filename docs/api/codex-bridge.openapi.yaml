@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.12.0
+  version: 1.14.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -725,6 +725,116 @@ paths:
         '403': {$ref: '#/components/responses/PermissionDenied'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/nodes/{nodeId}/projects/{projectId}/authorize:
+    post:
+      operationId: authorizeNodeProject
+      tags: [authorizations]
+      summary: Grant capabilities to a Bridge Node on a project
+      description: |
+        Issue #73 Stage 4. The explicit operator half of `project_
+        authorizations` -- separate from discovery adoption
+        (`POST /api/v1/discovered-resources/{resourceId}/adopt`), which is the
+        other place this table gets written. Neither reads the other; a pair
+        that never went through adoption may still be authorized directly
+        here, and vice versa.
+
+        Overwrites the pair's standing authorization rather than merging with
+        whatever it held before: an operator calling this states the
+        authorization they want NOW. A previously revoked row is reactivated
+        in place (not duplicated) -- at most one non-revoked row exists per
+        `(nodeId, projectId)`.
+
+        Requesting `modify` or `deliver` crosses a second gate on top of the
+        base `nodes.authorizations.manage` scope: the caller must also carry
+        `can_approve_sensitive` or be an admin, the same second gate
+        `POST /api/v1/decisions/{id}/approve` already applies. A caller with
+        only the base scope gets `403` for those two capabilities, even
+        though the same request granting only `read`/`test` would succeed.
+
+        This grant takes effect the next time a task is submitted for this
+        `(nodeId, projectId)` pair or the executor dispatches one -- there is
+        no cache and no other side channel; both the gateway's `create_task`
+        and the executor's own dispatch handler read `project_authorizations`
+        fresh.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/NodeId'
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthorizeNodeProjectRequest'
+      responses:
+        '200':
+          description: The pair's authorization after the grant.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectAuthorization'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/nodes/{nodeId}/projects/{projectId}/revoke:
+    post:
+      operationId: revokeNodeProject
+      tags: [authorizations]
+      summary: Revoke a Bridge Node's capabilities on a project
+      description: |
+        Issue #73 Stage 4. Marks the pair's active authorization row revoked
+        (`revokedAt` set) -- never deleted, so `POST .../authorize` can
+        reactivate the same row later and its provenance survives in between.
+
+        No second gate here: taking capability away is never the escalation
+        the `authorize` endpoint's extra `can_approve_sensitive`/admin check
+        guards against. `404` when there is no active authorization for this
+        pair to revoke.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/NodeId'
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/ProjectId'
+      responses:
+        '200':
+          description: The pair's authorization after the revoke.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectAuthorization'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
 
@@ -3435,6 +3545,53 @@ components:
             `deliver` — unlike a discovery root's `autoAuthorize`, which never
             can. May coexist with a matching root's own grant in the same
             call; both merge into one authorization row.
+
+    AuthorizeNodeProjectRequest:
+      type: object
+      description: |
+        Issue #73 Stage 4. The capabilities to grant `nodeId` on `projectId`,
+        replacing whatever the pair's authorization held before — see
+        `POST /api/v1/nodes/{nodeId}/projects/{projectId}/authorize`'s own
+        description for why this overwrites rather than merges.
+      properties:
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/Capability'
+          description: |
+            May include `modify`/`deliver`, unlike a discovery root's
+            `autoAuthorize` — but doing so requires the caller to also carry
+            `can_approve_sensitive` or be an admin (`403` otherwise), the
+            second gate this endpoint's own description names.
+
+    ProjectAuthorization:
+      type: object
+      description: |
+        The standing `(node, project)` authorization row issue #73's
+        authorization plane enforces against — what `nodeId` may actually do
+        to `projectId`, as opposed to `NodeStatus.capabilities` (what the
+        node's own configuration would merely permit) or `DiscoveredResource`
+        (what the node has merely seen). Returned by both `authorize` and
+        `revoke`, always reflecting the row's current state.
+      required: [nodeId, projectId, capabilities, grantedBy, grantedAt]
+      properties:
+        nodeId:
+          $ref: '#/components/schemas/NodeId'
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/Capability'
+        grantedBy:
+          type: string
+          description: '`operator:<userId>` for a direct grant through this endpoint, or `root-config:<path>`/`operator:<userId>` (`;`-joined) when adoption also contributed.'
+        grantedAt:
+          $ref: '#/components/schemas/Timestamp'
+        revokedAt:
+          type: [string, 'null']
+          format: date-time
+          description: 'Set by `revoke`; `null` while the authorization is active.'
 
     Session:
       type: object

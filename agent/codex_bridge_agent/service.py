@@ -34,6 +34,7 @@ from shared.protocol import (
     TaskMode,
     TaskPriority,
     TaskState,
+    capabilities_to_modes,
 )
 from shared.security import ensure_within_root
 
@@ -76,6 +77,26 @@ BASE_PROMPT = (
     "Do not access parent directories, secrets, deployment targets, or other hosts. "
     "Do not push, deploy, migrate production, or modify infrastructure unless explicitly approved."
 )
+
+
+def _configured_capabilities(settings: AgentSettings) -> list[Capability]:
+    """The `Capability` values THIS machine's own configuration permits.
+
+    Issue #73 Stage 4. Factored out of `_build_announcement` so its `hello`
+    payload and `_handle_dispatch`'s own gate (below) compute the exact same
+    thing -- the docstring of `Capability` in `shared/protocol.py` names this
+    as one of the two places Stage 4 would touch. `READ`/`TEST` are always
+    offered (a node that connects at all can at least be inspected and
+    tested); `MODIFY` only when `allow_workspace_write` is on; `DELIVER` only
+    when `allow_git_delivery` is on -- the same two machine-level kill
+    switches `_sandbox_for` and `git_delivery.py` already gate on.
+    """
+    capabilities = [Capability.READ, Capability.TEST]
+    if settings.allow_workspace_write:
+        capabilities.append(Capability.MODIFY)
+    if settings.allow_git_delivery:
+        capabilities.append(Capability.DELIVER)
+    return capabilities
 
 
 def _sandbox_for(policy_level: PolicyLevel, *, allow_workspace_write: bool) -> str:
@@ -415,6 +436,32 @@ class AgentService:
                 run_when_available=True,
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
             )
+            # Issue #73 Stage 4: this node's OWN mirror of the gateway's
+            # `effective_task_modes` gate (`gateway/app/services/store.py`),
+            # not a duplicate of it. The gateway already decided the dispatch
+            # was allowed against `project_authorizations`; this re-derives
+            # what THIS machine's own configuration (`_configured_capabilities`
+            # above -- the exact same computation `_build_announcement`
+            # reported in `hello`) would permit and refuses independently when
+            # the two disagree. The point is defense in depth against a
+            # compromised or buggy gateway dispatching a mode this node never
+            # offered to run -- the same reasoning `git_delivery.py` already
+            # applies when it reconfirms the branch pattern the gateway
+            # already checked, per `Capability`'s own docstring anticipating
+            # Stage 4 touching two places.
+            configured_modes = capabilities_to_modes(_configured_capabilities(self.settings))
+            if request.mode not in configured_modes:
+                await websocket.send(
+                    self._envelope(
+                        AgentMessageType.TASK_RESULT,
+                        {
+                            "task_id": task_id,
+                            "final_state": TaskState.FAILED.value,
+                            "error": f"capability_not_configured:{request.mode.value}",
+                        },
+                    ).model_dump_json()
+                )
+                return
             decision = evaluate_task_policy(request)
             if not decision.approved and decision.level.value == "sensitive":
                 await websocket.send(
@@ -530,17 +577,12 @@ class AgentService:
         it can send.
         """
         try:
-            capabilities = [Capability.READ, Capability.TEST]
-            if self.settings.allow_workspace_write:
-                capabilities.append(Capability.MODIFY)
-            if self.settings.allow_git_delivery:
-                capabilities.append(Capability.DELIVER)
             return NodeAnnouncement(
                 agent_version=AGENT_VERSION,
                 os=platform.system(),
                 arch=platform.machine(),
                 engines=await self.runners.probe_all(),
-                capabilities=capabilities,
+                capabilities=_configured_capabilities(self.settings),
                 max_concurrent_tasks=self.settings.max_concurrent_tasks,
                 # See this method's own docstring: the node's own scan-root
                 # count, not `auto_project_root` (a different valve entirely).

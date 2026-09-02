@@ -67,6 +67,7 @@ from shared.protocol import (
     SubmitTaskRequest,
     TaskMode,
     TaskState,
+    capabilities_to_modes,
 )
 from shared.security import hash_resource_key, hash_token
 
@@ -344,6 +345,83 @@ async def list_recent_tasks(session: AsyncSession, limit: int = 20, states: list
     return list(result.scalars())
 
 
+async def effective_task_modes(
+    session: AsyncSession, executor: ExecutorModel, project: ProjectModel
+) -> frozenset[TaskMode]:
+    """The task modes `executor` may actually run on `project`, right now.
+
+    Issue #73 Stage 4 (the authorization plane's enforcement half). This is
+    the ONLY place that decides the answer -- `create_task` calls it at
+    exactly the spot its own inline check used to live, and nothing else
+    replicates this rule. Three steps, in order:
+
+    1. `base` = `project.config_json["allowed_modes"]`, the pre-#73 project
+       setting, parsed exactly as `create_task` always parsed it (an unknown
+       string is ignored rather than raised on, the same forward-compatible
+       posture `capabilities_to_modes` takes on an unknown capability).
+    2. No row in `workspace_bindings` for `(executor.node_id, project.id)` --
+       this pair has never gone through discovery adoption -- returns `base`
+       unchanged. Not a grace period: a pair that never adopts stays exactly
+       as permissive as it always was, FOREVER. This is the same guarantee
+       `migrations/0009_control_plane.sql` wrote down in prose ("access
+       continues flowing through the pre-existing `allowed_projects`") and
+       Stage 3 relied on without ever having to enforce it -- Stage 4 is the
+       first code that actually reads `project_authorizations`, so this is
+       the first place that guarantee has to be code rather than a comment.
+    3. A binding exists: the answer narrows to `base & capabilities_to_modes(
+       ...)` of the pair's ACTIVE (`revoked_at is null`) `project_
+       authorizations` row. No row at all -- adopted but never authorized --
+       intersects with the empty set: adoption alone grants nothing (#73:
+       "adoption does not automatically grant every operational capability").
+
+    Never widens what `allowed_modes` already permits -- the intersection can
+    only shrink `base`, never grow past it. A project's own `allowed_modes`
+    stays the outer bound it always was; `project_authorizations` can only
+    take away from it, per node.
+    """
+    project_config = json.loads(project.config_json)
+    base: set[TaskMode] = set()
+    for value in project_config.get("allowed_modes", []):
+        try:
+            base.add(TaskMode(value))
+        except ValueError:
+            continue
+
+    binding = (
+        (
+            await session.execute(
+                select(WorkspaceBindingModel).where(
+                    WorkspaceBindingModel.node_id == executor.node_id,
+                    WorkspaceBindingModel.project_id == project.id,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if binding is None:
+        return frozenset(base)
+
+    authorization = (
+        (
+            await session.execute(
+                select(ProjectAuthorizationModel).where(
+                    ProjectAuthorizationModel.node_id == executor.node_id,
+                    ProjectAuthorizationModel.project_id == project.id,
+                    ProjectAuthorizationModel.revoked_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if authorization is None:
+        return frozenset()
+
+    granted = capabilities_to_modes(json.loads(authorization.capabilities_json or "[]"))
+    return frozenset(base) & granted
+
+
 async def create_task(
     session: AsyncSession,
     request: SubmitTaskRequest,
@@ -363,7 +441,7 @@ async def create_task(
     if request.project_id not in executor_metadata.get("allowed_projects", []):
         raise ValueError("project_not_allowed_for_executor")
     project_config = json.loads(project.config_json)
-    if request.mode.value not in project_config.get("allowed_modes", []):
+    if request.mode not in await effective_task_modes(session, executor, project):
         raise ValueError("mode_not_allowed_for_project")
     if request.timeout_seconds > int(project_config.get("max_timeout_seconds", request.timeout_seconds)):
         raise ValueError("timeout_exceeds_project_limit")
@@ -914,6 +992,143 @@ async def _grant_project_authorization(
     origins = set(existing.granted_by.split(";")) if existing.granted_by else set()
     origins.add(origin)
     existing.granted_by = ";".join(sorted(origins))
+
+
+# --------------------------------------------------------------------------
+# The explicit operator surface: `POST .../authorize` and `.../revoke`
+# (issue #73 Stage 4, WK-20260902-gh73-authorization-plane). Unlike
+# `_grant_project_authorization` above -- adoption's own MERGE-only helper,
+# called with an `origin` that is itself provenance -- these two are the
+# route-level primitives behind a direct, explicit grant/revoke: an operator
+# stating the authorization they want *now*, not adding to whatever
+# accumulated from a discovery root or an earlier adoption. That is why
+# `grant_project_authorization` OVERWRITES `capabilities_json`/`granted_by`/
+# `granted_at` rather than merging them.
+# --------------------------------------------------------------------------
+
+
+async def grant_project_authorization(
+    session: AsyncSession,
+    *,
+    node_id: str,
+    project_id: str,
+    capabilities: list[Capability],
+    granted_by: str,
+    now: datetime | None = None,
+) -> ProjectAuthorizationModel:
+    """Get-or-create the standing authorization row for `(node_id, project_id)`.
+
+    `project_authorizations_node_project_idx` still allows exactly one
+    non-revoked row per pair, so a row that exists but is revoked is
+    REACTIVATED in place (`revoked_at` cleared, `capabilities_json`/
+    `granted_by`/`granted_at` overwritten) rather than a second row being
+    inserted -- the table holds the pair's CURRENT authorization, never a
+    history of grants. The full history of every grant and revoke lives in
+    `audit_events` via `record_event` (this function's own call below), the
+    same place every other lifecycle in this codebase keeps its history
+    instead of the row it acts on.
+
+    Does not validate that `node_id`/`project_id` exist -- the route layer
+    does that (404 before this is ever called), the same division of labor
+    `adopt_discovered_resource`'s own callers already follow.
+    """
+    now = now or datetime.now(timezone.utc)
+    existing = (
+        (
+            await session.execute(
+                select(ProjectAuthorizationModel).where(
+                    ProjectAuthorizationModel.node_id == node_id,
+                    ProjectAuthorizationModel.project_id == project_id,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    capability_values = sorted({capability.value for capability in capabilities})
+    if existing is None:
+        row = ProjectAuthorizationModel(
+            id=str(uuid4()),
+            node_id=node_id,
+            project_id=project_id,
+            capabilities_json=json.dumps(capability_values),
+            granted_by=granted_by,
+            granted_at=now,
+        )
+        session.add(row)
+    else:
+        row = existing
+        row.capabilities_json = json.dumps(capability_values)
+        row.granted_by = granted_by
+        row.granted_at = now
+        row.revoked_at = None
+    await record_event(
+        session,
+        "project_authorization",
+        row.id,
+        "project_authorization.granted",
+        {
+            "node_id": node_id,
+            "project_id": project_id,
+            "capabilities": capability_values,
+            "granted_by": granted_by,
+        },
+    )
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def revoke_project_authorization(
+    session: AsyncSession,
+    *,
+    node_id: str,
+    project_id: str,
+    revoked_by: str,
+    now: datetime | None = None,
+) -> ProjectAuthorizationModel | None:
+    """Revoke the ACTIVE authorization row for `(node_id, project_id)`, if any.
+
+    Returns `None` when there is no active row to revoke -- the route layer
+    turns that into `404`, the same "do not confirm what the caller cannot
+    see" posture `routes/nodes.py` and `routes/discovery.py` already
+    document, extended here to "there is nothing to revoke" rather than "the
+    node/project themselves are unknown" (those are checked separately,
+    before this is ever called).
+
+    The row is marked revoked, never deleted -- `effective_task_modes`
+    (`gateway/app/services/store.py`) already treats `revoked_at is not
+    null` as "no capability", and `grant_project_authorization` above already
+    knows how to reactivate this exact row, so deleting it would only lose
+    the `granted_by`/`granted_at` provenance for no enforcement benefit.
+    """
+    now = now or datetime.now(timezone.utc)
+    existing = (
+        (
+            await session.execute(
+                select(ProjectAuthorizationModel).where(
+                    ProjectAuthorizationModel.node_id == node_id,
+                    ProjectAuthorizationModel.project_id == project_id,
+                    ProjectAuthorizationModel.revoked_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if existing is None:
+        return None
+    existing.revoked_at = now
+    await record_event(
+        session,
+        "project_authorization",
+        existing.id,
+        "project_authorization.revoked",
+        {"node_id": node_id, "project_id": project_id, "revoked_by": revoked_by},
+    )
+    await session.commit()
+    await session.refresh(existing)
+    return existing
 
 
 async def adopt_discovered_resource(

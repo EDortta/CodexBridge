@@ -716,17 +716,58 @@ async def test_handle_dispatch_sends_workspace_write_for_a_write_mode_task(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_handle_dispatch_honours_the_machine_level_read_only_override(tmp_path: Path) -> None:
-    """A write-mode task still only gets `read-only` when this executor's own
-    `allow_workspace_write` is off — the override must reach `run_task`, not
-    just exist on `AgentSettings`."""
+async def test_handle_dispatch_refuses_a_write_mode_when_workspace_write_is_off(tmp_path: Path) -> None:
+    """WK-20260902-gh73-authorization-plane, issue #73 Stage 4.
+
+    Before the executor's own capability gate existed, this scenario reached
+    `run_task` and was merely sandboxed `read-only` (this test used to assert
+    exactly that, under the name `test_handle_dispatch_honours_the_machine_
+    level_read_only_override`). Stage 4 makes it an explicit, typed refusal
+    instead — `_handle_dispatch`'s own check, independent of anything the
+    gateway approved, since a compromised or buggy gateway must not be able
+    to make this node write when its own configuration never offered `modify`
+    (`allow_workspace_write=False` -> `_configured_capabilities` omits
+    `Capability.MODIFY` -> `implement` is not in `capabilities_to_modes(...)`).
+    The pure `_sandbox_for` override this test used to exercise indirectly is
+    still covered directly by `test_sandbox_for_machine_override_forces_
+    read_only_even_for_write_levels` below; that behaviour did not go away,
+    it simply becomes unreachable through `_handle_dispatch` once the gate
+    refuses the dispatch before sandbox selection ever runs.
+    """
     service = AgentService(AgentSettings(allow_workspace_write=False))
     runner = _SandboxRecordingRunner()
     service.runners._runners["codex"] = runner
     service.projects = {
         "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
     }
+    websocket = DummyWebSocket()
 
-    await service._handle_dispatch(DummyWebSocket(), _dispatch_envelope(task_id="t-locked", mode="implement"))
+    await service._handle_dispatch(websocket, _dispatch_envelope(task_id="t-locked", mode="implement"))
 
-    assert runner.sandboxes == ["read-only"]
+    assert runner.sandboxes == []
+    result = AgentEnvelope.model_validate_json(websocket.messages[-1])
+    assert result.payload["final_state"] == "failed"
+    assert result.payload["error"] == "capability_not_configured:implement"
+
+
+@pytest.mark.asyncio
+async def test_handle_dispatch_allows_a_write_mode_when_workspace_write_is_on(tmp_path: Path) -> None:
+    """Positive control for the refusal above, in the same file (napkin-lessons
+
+    2026-09-01: a purely negative assertion cannot tell "correctly refused"
+    apart from "never ran"). With the default `allow_workspace_write=True`,
+    the identical `implement` dispatch reaches the runner exactly as
+    `test_handle_dispatch_sends_workspace_write_for_a_write_mode_task` above
+    already proves for `edit` — this one pins `implement` specifically, since
+    that is the mode the negative test above refuses.
+    """
+    service = AgentService(AgentSettings(allow_workspace_write=True))
+    runner = _SandboxRecordingRunner()
+    service.runners._runners["codex"] = runner
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+
+    await service._handle_dispatch(DummyWebSocket(), _dispatch_envelope(task_id="t-unlocked", mode="implement"))
+
+    assert runner.sandboxes == ["workspace-write"]

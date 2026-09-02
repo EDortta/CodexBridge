@@ -1,103 +1,122 @@
-# RESUME — WK-20260902-gh73-discovery-adoption (epic #73)
+# RESUME — WK-20260902-gh73-authorization-plane (epic #73)
 
-- work_id: WK-20260902-gh73-discovery-adoption
+- work_id: WK-20260902-gh73-authorization-plane
 - data: 2026-09-02
 - Stage 1 (domain/contracts): **PR #74 merged** into `development` as `80e5d2f`.
 - Stage 2 (fleet visibility): merged onto this lineage (`2ed550f`).
-- Stage 3, report half (node proposes): merged onto this lineage (`a57a8d9`,
-  branch `feature/gh-73/discovery-report`).
-- Stage 3, adoption half (panel decides): **this session**, branch
-  `feature/gh-73/discovery-adoption`, worktree
-  `../CodexBridge--WK-20260902-gh73-discovery-adoption`. Committed locally,
+- Stage 3, report half (node proposes): merged onto this lineage (`a57a8d9`).
+- Stage 3, adoption half (panel decides): merged onto this lineage (`a1cf4d7`,
+  PRs #91/#92 — first real writes to `project_authorizations`).
+- Stage 4 (authorization plane enforcement): **this session**, branch
+  `feature/gh-73/authorization-plane`, worktree
+  `../CodexBridge--WK-20260902-gh73-authorization-plane`. Committed locally,
   **not pushed, no PR opened** (out of this session's scope — commit and stop).
 
 ## Next Step (DO THIS FIRST)
 
-Open the PR for `feature/gh-73/discovery-adoption` against
-`feature/gh-73/discovery-report` (or wherever the operator wants it based),
-get it reviewed, then start Stage 4 of the epic (whatever "fleet enable/disable
-and node lifecycle actions" or the next unstarted stage is — check the epic's
-own issue body, not this file, for the authoritative stage list).
+Open the PR for `feature/gh-73/authorization-plane` against
+`feature/gh-73/discovery-adoption`, get it reviewed — flag the `is_admin()`
+finding below explicitly in the PR description, it is a judgment call a
+reviewer should confirm, not rubber-stamp — then check the epic's own issue
+body for whatever Stage 5 (or the next unstarted stage) is.
 
 ## Current state
 
-- `GET /api/v1/nodes/{nodeId}/discovered-resources` (cursor-paginated,
-  `?state=` filter), `POST /api/v1/discovered-resources/{id}/adopt`,
-  `POST .../{id}/deny` — `gateway/app/api/routes/discovery.py`.
-- `store.adopt_discovered_resource`/`deny_discovered_resource` are the ONLY
-  functions with write access to `projects`/`workspace_bindings`/
-  `scm_associations`/`project_authorizations` starting from a
-  `discovered_resources` row. Both require `permissions.
-  NODES_DISCOVERIES_DECIDE` (`codexbridge.admin`), reachable only by an
-  OAuth-authenticated principal — never by a node's `machine_token`.
-- Auto-grant: a candidate whose `root_path` matches a `DiscoveryRoot` with
-  `auto_authorize` on the node's own `ExecutorRegistration` grants
-  automatically (`granted_by="root-config:<path>"`), capped to `read`/`test`
-  at parse time. An explicit `grantCapabilities` in the adopt body grants
-  with `granted_by="operator:<user_id>"` and may include `modify`/`deliver`.
-  Both can apply in the same call — merged into one `project_authorizations`
-  row (`;`-joined `granted_by`), since the table allows only one non-revoked
-  row per `(node_id, project_id)`.
-- **Defect fixed, found by the previous PR and left for this one**:
-  `discovered_resources.resource_key` was `varchar(255)` but held a path up
-  to 2048 chars — silent on SQLite, a hard failure on MySQL (`aiomysql` is a
-  declared dependency). `migrations/0013_discovery_resource_key_hash.sql`:
-  `resource_key` becomes `hash_resource_key(path)` (sha256 hex, 64 chars);
-  the real path moves to a new, unindexed `resource_path` column. A
-  pre-migration row self-heals its `resource_key` the next time its node
-  reports the same path (matched by `resource_path`, not `resource_key`).
-- Contract bumped **1.9.0 → 1.12.0** (`probes.API_CONTRACT_VERSION` and
-  `docs/api/codex-bridge.openapi.yaml`'s `info.version`) — skipping
-  1.10.0/1.11.0/1.13.0, claimed by other branches of this same orchestration
-  not yet merged onto this one.
-- `resourcePath`/`rootPath` are returned ONLY by the three routes above — the
-  one pre-registered exception to "no response exposes a server filesystem
-  path" (`docs/control-plane.md`, `docs/api/README.md`, `docs/threat-model.md`
-  all updated to say so explicitly).
+- `store.effective_task_modes(session, executor, project)` is now the ONLY
+  place that decides which `TaskMode`s an executor may run against a
+  project — `store.create_task` calls it at the exact spot its old inline
+  `allowed_modes` check lived. A pair with no `workspace_bindings` row is
+  governed by `allowed_modes` alone, forever (not a grace period); a bound
+  pair is `allowed_modes` intersected with `capabilities_to_modes(...)` of
+  its active `project_authorizations` row.
+- `agent/codex_bridge_agent/service.py:_handle_dispatch` gained its own,
+  independent mirror: refuses a dispatch whose mode this node's own
+  configuration (`allow_workspace_write`/`allow_git_delivery`, via the new
+  `_configured_capabilities` helper shared with `_build_announcement`)
+  never offered, with a typed `capability_not_configured:<mode>` error —
+  defense in depth, not duplication (same reasoning `git_delivery.py`
+  already applies to the branch pattern).
+- `POST /api/v1/nodes/{nodeId}/projects/{projectId}/authorize` and
+  `.../revoke` — new `gateway/app/api/routes/authorizations.py`.
+  `store.grant_project_authorization` (get-or-create-or-reactivate,
+  OVERWRITES capabilities rather than merging — different from adoption's
+  own merge-only `_grant_project_authorization`) and `store.
+  revoke_project_authorization` (marks `revoked_at`, never deletes).
+- New administrative action `permissions.NODES_AUTHORIZATIONS_MANAGE`
+  (`codexbridge.admin`). Granting `modify`/`deliver` crosses a second gate
+  inside `permissions.is_allowed`: `principal.can_approve_sensitive or
+  "admin" in principal.roles`.
+- **Finding, not silently patched**: the plan asked for the same shape
+  `DECISIONS_DECIDE`'s second gate has —
+  `principal.can_approve_sensitive or principal.is_admin()`. Implemented
+  literally, that gate is TAUTOLOGICAL here: `NODES_AUTHORIZATIONS_MANAGE`'s
+  own base scope already IS `codexbridge.admin`, and `is_admin()` returns
+  `True` for ANY principal whose token merely carries that scope (`"admin"
+  in principal.roles or "codexbridge.admin" in principal.scopes`) — so
+  `has_scope(action.scope)` and `is_admin()` are the same predicate for
+  this one action, and `can_approve_sensitive` would never be the deciding
+  factor. `DECISIONS_DECIDE`'s own scope (`codexbridge.task.approve`) is
+  disjoint from `codexbridge.admin`, which is why the identical code is
+  meaningful THERE and not here. Fixed by checking `"admin" in
+  principal.roles` directly instead of calling `is_admin()` — documented at
+  length in `permissions.is_allowed`'s own docstring and in
+  `docs/napkin-lessons.md`'s 2026-09-02 entry. Proven by
+  `tests/integration/test_authorization_routes.py::
+  test_granting_modify_without_can_approve_sensitive_or_admin_role_is_refused`,
+  which fails against the naive `is_admin()` version.
+- **Pre-existing gap, NOT fixed by this PR (out of scope, flagged for the
+  operator)**: `POST /api/v1/discovered-resources/{id}/adopt`'s own
+  `grantCapabilities` (Stage 3, C3) can already grant `modify`/`deliver`
+  under `NODES_DISCOVERIES_DECIDE` with NO second gate at all — any
+  principal with the bare `codexbridge.admin` scope can grant sensitive
+  capability through the adoption route today, unrelated to whether this
+  PR's own `authorize` route enforces `can_approve_sensitive`. Worth a
+  follow-up if the operator wants the same ladder applied there.
+- Contract bumped **1.12.0 → 1.14.0** (`probes.API_CONTRACT_VERSION` and
+  `docs/api/codex-bridge.openapi.yaml`'s `info.version`) — skipping 1.13.0,
+  claimed by another not-yet-merged branch of this same orchestration.
 
 ## Changed files
 
-`migrations/0013_discovery_resource_key_hash.sql` (new),
-`gateway/app/api/routes/discovery.py` (new),
-`gateway/app/services/discovery_types.py` (new),
-`tests/integration/test_discovery_routes.py` (new),
-`gateway/app/models/entities.py`, `gateway/app/services/store.py`,
-`gateway/app/api/permissions.py`, `gateway/app/api/routes/probes.py`,
-`gateway/app/db/schema_guard.py`, `gateway/app/main.py`, `shared/security.py`,
+`gateway/app/api/routes/authorizations.py` (new),
+`tests/unit/test_effective_task_modes.py` (new),
+`tests/integration/test_authorization_routes.py` (new),
+`gateway/app/services/store.py`, `gateway/app/api/permissions.py`,
+`gateway/app/api/routes/probes.py`, `gateway/app/main.py`,
+`agent/codex_bridge_agent/service.py` (`shared/protocol.py` untouched — its
+`Capability`/`CAPABILITY_MODES`/`capabilities_to_modes` from Stage 1 already
+had everything this PR needed),
+`tests/unit/test_agent_service.py`, `tests/integration/test_auth.py`,
 `docs/api/README.md`, `docs/api/codex-bridge.openapi.yaml`,
-`docs/control-plane.md`, `docs/threat-model.md`, `docs/codemap.md`,
-`tests/unit/test_discovery_store.py`, `tests/integration/test_agent_ws_discovery.py`,
-`tests/integration/test_auth.py`.
+`docs/control-plane.md`, `docs/project-onboarding.md`, `docs/codemap.md`,
+`docs/napkin-lessons.md`.
 
 ## Checks
 
-- `.venv/bin/python -m pytest -q` → **858 passed, 7 skipped, 0 failed**
-  (branch baseline before this PR: 829/7).
-- `tests/contract/` → all green (26 passed), including the OpenAPI route/
-  version-parity gates and the codemap freshness gate (regenerated with
-  `governancekit --root . map`).
-- `tests/unit/test_apply_migrations.py` → all green; `0013` applies cleanly
-  to a `0009`-shaped legacy SQLite database and self-heals a pre-0013 row on
-  next report (dedicated tests in `tests/unit/test_discovery_store.py`).
-- The local dev `codex_bridge.db` (gitignored) needed `scripts/
-  apply_migrations.py --mark-applied` for 0001–0009 (it was bootstrapped by
-  `create_all`, never tracked in the ledger) and a real run of `0013` before
-  `test_probes.py`'s real-app tests (which hit that file directly) went
-  green — noted here in case another agent's session hits the same
-  `SchemaOutOfDate` against the same file.
+- `.venv/bin/python -m pytest -q` → **884 passed, 7 skipped, 0 failed**
+  (branch baseline before this PR: 858/7).
+- `tests/contract/` → all green (26 passed), including the OpenAPI
+  route/version-parity gates and the codemap freshness gate (regenerated
+  with `governancekit --root . map`).
+- Pytest collection needed the sibling `awt` `.env` moved aside first
+  (`Settings` uses `extra="forbid"`, per this session's own instructions —
+  restored immediately after the run, never committed, `.env` is
+  gitignored).
 
 ## NOT validated
 
-No deploy, no real MySQL run of `0013` (only SQLite — same caveat `0009`'s own
-RESUME already carried; a throwaway Postgres/MySQL verification is worth doing
-before this ships to a MySQL-backed environment). No real node has adopted a
-real discovered resource end-to-end through a live gateway. `POST .../adopt`
-and `.../deny` carry no `revision`/`ETag` — reconsider if a future stage needs
-optimistic concurrency on `discovered_resources` beyond the decidable-state
-check already enforced.
+No deploy, no real gateway/executor pair exercised end-to-end over a live
+WebSocket with a real `project_authorizations` grant in effect (all coverage
+is against an in-memory SQLite `AsyncSession` or a `DummyWebSocket`/fake
+runner). No MySQL run of this PR's own migrations — there are none; this PR
+adds no schema, only reads/writes the Stage 1 `project_authorizations` table
+that already exists.
 
 ## Watch for
 
-Two subagents sharing one worktree caused a `git stash` incident on 2026-09-01
-(`docs/napkin-lessons.md`). This session ran in its own dedicated worktree
-with no sibling agent inside it — no repeat.
+The `is_admin()` finding above is a judgment call this session made
+unilaterally (deviating from the plan's literal `principal.is_admin()`
+instruction) because implementing it literally would have shipped a gate
+that looks like a control but never binds. Flag it in the PR description
+explicitly rather than letting a reviewer discover the deviation from a
+diff alone.
