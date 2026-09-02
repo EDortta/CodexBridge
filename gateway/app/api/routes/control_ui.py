@@ -796,20 +796,21 @@ async def control_invite(
     body = """
     <h1>Invite a node</h1>
     <div class="notice">
-      <p><strong>Not available yet.</strong> This build has no
-      <code>POST /api/v1/nodes/invite</code> endpoint and no
-      <code>scripts/enroll_node.py</code> — this screen cannot mint a
-      one-time enrollment token because nothing in the gateway generates one.</p>
-      <p>Registering a Bridge Node today is a manual, two-machine procedure:
-      add the node's <code>machine_token</code> and <code>allowed_projects</code>
-      to <code>registry.json</code> on the gateway host, add the matching
-      project entries to the executor's own allowlist, and restart both
-      processes. The full walkthrough is
+      <p><strong>Not available yet on this build.</strong> This screen would
+      call <code>POST /api/v1/nodes/invite</code> and hand you a one-time
+      token plus a ready <code>scripts/enroll_node.py</code> command. Both
+      exist — they are issue #76's minimal cut — but they are not in this
+      build: they live on a branch this one was not cut from, so the endpoint
+      this page needs is genuinely absent from the process serving it.</p>
+      <p>This screen lights up once that work merges. Nothing here needs to be
+      designed or built again; the gap is which commits this build contains,
+      not a missing capability.</p>
+      <p>Until then, registering a Bridge Node is the manual, two-machine
+      procedure it has always been: add the node's <code>machine_token</code>
+      and <code>allowed_projects</code> to <code>registry.json</code> on the
+      gateway host, add the matching project entries to the executor's own
+      allowlist, and restart both processes —
       <code>docs/project-onboarding.md</code>, "Schema de executor".</p>
-      <p>Building the flow this screen implies — a token-issuing endpoint with
-      its own security posture (hashing at rest, an audit trail, revocation)
-      and an <code>enroll_node.py</code> to consume it — is real backend work
-      belonging to its own PR, not something this screen can fabricate.</p>
     </div>
     """
     return _page("CodexBridge Control · Invite a node", body)

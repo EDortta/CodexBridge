@@ -400,12 +400,18 @@ async def test_control_invite_without_the_admin_scope_is_forbidden(api) -> None:
 async def test_control_invite_explains_the_gap_honestly(api) -> None:
     """Positive control for the previous two, and the point of this screen today:
 
-    it must say plainly that it cannot do what its name promises, never
-    present a form that posts to an endpoint this build does not serve.
+    it must say plainly that it cannot do what its name promises on THIS
+    build, and never present a form that posts to an endpoint this process
+    does not serve. It must also not claim the capability is unbuilt: the
+    endpoint and the script exist on the branch carrying issue #76's minimal
+    cut, and this page says so, because "missing from this build" and
+    "missing from this codebase" are different statements and only the first
+    one is true.
     """
     response = api.get("/control/invite", headers=basic("admin"))
     assert response.status_code == 200
-    assert "Not available yet" in response.text
+    assert "Not available yet on this build" in response.text
     assert "/api/v1/nodes/invite" in response.text
     assert "enroll_node.py" in response.text
+    assert "#76" in response.text
     assert "<form" not in response.text

@@ -642,25 +642,23 @@ segunda exceção. O path pode aparecer na tabela escapada da página; não pode
 aparecer em `<title>`, em query string, nem em log nenhum (o módulo não
 loga).
 
-### `/control/invite`: o que esta tela não faz, e por quê
+### `/control/invite`: o que esta tela não faz nesta build, e por quê
 
-O plano original desta PR descrevia `GET /control/invite` chamando `POST
-/api/v1/nodes/invite` e montando um comando `scripts/enroll_node.py` pronto
-para copiar. **Nenhum dos dois existe neste código.**
-`gateway/app/api/routes/nodes.py` só serve `GET /nodes` e `GET
-/nodes/{nodeId}`; `scripts/` não tem `enroll_node.py`; e
-`docs/project-onboarding.md` já documentava, antes desta PR, que registrar um
-nó é um procedimento manual em dois arquivos (`registry.json` no gateway,
-`projects.json`/allowlist local no executor) com reinício dos dois
-processos.
+`GET /control/invite` chamaria `POST /api/v1/nodes/invite` e montaria um
+comando `scripts/enroll_node.py` pronto para copiar. **Os dois existem — são
+a PR #87, o corte mínimo da issue #76 — mas não estão nesta build**: vivem
+numa branch da qual esta não foi cortada, então o endpoint que a página
+precisa está genuinamente ausente do processo que a serve.
 
-Construir a tela descrita teria significado inventar, dentro de uma PR de
-UI, exatamente o que o próprio plano proíbe inventar aqui: lógica de negócio
-real (um endpoint que minta token, com postura de segurança própria — hash
-em repouso, trilha de auditoria, revogação — e um script novo) sem API
-nenhuma por trás. `/control/invite`, portanto, renderiza uma explicação
-honesta em vez de um formulário que posta para lugar nenhum: nomeia o
-endpoint e o script que faltam pelos nomes exatos que o plano previu, e
-aponta para o procedimento manual real em `docs/project-onboarding.md`. Um
-endpoint de convite de nó fica registrado aqui como trabalho pendente para
-uma PR própria, não como parte desta.
+A distinção importa e é a razão desta seção existir: a lacuna é de
+*linhagem*, não de capacidade. Nada aqui precisa ser desenhado de novo, e a
+tela acende sozinha quando aquele trabalho mergear. Construir um endpoint de
+convite dentro de uma PR de UI teria sido inventar lógica de negócio real
+(emissão de token, hash em repouso, trilha de auditoria, revogação) num lugar
+onde ela não pertence — e, pior, uma segunda vez, já existindo uma
+implementação revisada noutra branch.
+
+Por isso a tela renderiza uma explicação honesta em vez de um formulário que
+posta para lugar nenhum, nomeia o endpoint e o script pelos nomes exatos, e
+aponta para o procedimento manual de `docs/project-onboarding.md` enquanto o
+merge não acontece.
