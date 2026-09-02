@@ -16,6 +16,7 @@ from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import decisions, missions, nodes as nodes_routes, probes, projects, sessions
 from gateway.app.api.routes import artifacts as artifacts_routes
 from gateway.app.api.routes import authorizations as authorizations_routes
+from gateway.app.api.routes import control_ui as control_ui_routes
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import enrollment as enrollment_routes
 from gateway.app.api.routes import discovery as discovery_routes
@@ -193,6 +194,17 @@ app.include_router(discovery_routes.router, dependencies=[Depends(RateLimitDepen
 # own second gate (granting `modify`/`deliver` needs `can_approve_sensitive`
 # or admin) lives inside `permissions.is_allowed`, not here.
 app.include_router(authorizations_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# CodexBridge Control's first server-rendered screens (issue #73 Stage 5,
+# `gateway/app/api/routes/control_ui.py`). Rate-limited like every other
+# route that touches a password: `control_ui.py`'s own auth re-derives the
+# HTTP Basic credential's PBKDF2 hash on *every* request, including plain
+# navigation and pagination, for the same "close the enumeration oracle"
+# reason `POST /oauth/authorize` carries this dependency. `/control` is
+# deliberately NOT under `/api/v1` -- it is not part of the mobile contract
+# (`tests/contract/test_openapi_document.py`), the same way `/oauth/*` and
+# `/mcp` sit outside it.
+app.include_router(control_ui_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:

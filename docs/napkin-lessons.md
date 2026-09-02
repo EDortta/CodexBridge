@@ -1681,3 +1681,36 @@ próprio docstring de `permissions.is_allowed` — quem copiar o padrão
 administrativo, deve voltar a usar `is_admin()`; quem copiar para uma ação
 cujo escopo base JÁ seja `codexbridge.admin` deve repetir esta checagem
 antes de confiar no copy-paste.
+
+## 2026-09-02 — uma branch não é o repositório, e `grep` só prova a primeira
+
+O plano da PR C5 (WK-20260902-gh73-control-ui, issue #73 Stage 5) descrevia a
+quarta tela — `GET /control/invite` — chamando `POST /api/v1/nodes/invite` e
+montando um comando `scripts/enroll_node.py` pronto para copiar. O agente
+verificou antes de escrever uma linha de UI (`grep -rn "invite"`, `ls
+scripts/`, leitura de `docs/project-onboarding.md`), não achou nenhum dos
+dois, e — corretamente — não inventou o endpoint: renderizou uma explicação
+no lugar da tela e reportou a lacuna.
+
+A verificação estava certa e a conclusão estava errada. Os dois existem: são
+a PR #87 (`feature/gh76/enrollment-minimal`), cortada da mesma base, no mesmo
+dia, em paralelo. O que faltava não era a capacidade — era a linhagem. C5 foi
+cortada de C4, e C1 é irmã de C4, não ancestral. O próprio plano dizia "base:
+C4 (+C1 mergeada)"; quem cortou o worktree (o orquestrador) leu só a primeira
+metade.
+
+Duas lições, e a segunda é a que custa:
+
+1. Num dia de várias branches em paralelo, `grep -rn` prova o que está
+   **neste checkout**, não o que está no repositório. A frase honesta é
+   "não existe nesta build", nunca "não existe neste código" — e antes de
+   escrever a segunda vale um `git log --all --oneline -S<símbolo>`.
+2. Uma instrução de base entre parênteses — "(+C1 mergeada)" — é
+   indistinguível de decoração na hora de rodar `awt new --base`. Dependência
+   de merge entre branches irmãs precisa ser um passo, não um adendo: ou o
+   merge acontece antes de cortar, ou a tela sai do escopo com o motivo
+   escrito.
+
+O comportamento do agente foi o certo em tudo que estava ao alcance dele:
+verificou, não fabricou, e reportou. O erro foi de sequenciamento, uma camada
+acima — e é por isso que ele aparece aqui, e não no relatório de uma PR.

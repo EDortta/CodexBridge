@@ -549,3 +549,116 @@ continua sendo consultada — esta PR não a remove nem a substitui.
 `allowed_modes`/allowlist local; nunca alarga. Ver
 `docs/project-onboarding.md` para o que muda no fluxo operacional de cadastro
 de projeto e o que continua manual.
+
+## Stage 5 — as primeiras telas do painel (issue #73, WK-20260902-gh73-control-ui)
+
+Até aqui a #73 só tinha API. Esta PR é o primeiro corte de **CodexBridge
+Control** como página, servida pelo próprio processo do gateway —
+`gateway/app/api/routes/control_ui.py`. Três telas funcionam de verdade
+(`GET /control`, `GET /control/nodes/{nodeId}`, `GET /control/invite`); uma
+delas, `/control/invite`, existe só para explicar honestamente por que não
+funciona ainda (seção própria abaixo).
+
+### HTML no próprio processo, o mesmo precedente de `/oauth/authorize`
+
+`gateway/app/main.py:oauth_authorize`/`oauth_authorize_submit` já respondiam a
+pergunta "como servir HTML sem framework de template novo" para este código:
+um f-string com `html.escape` em cada interpolação, `HTMLResponse` de dentro
+do mesmo `FastAPI app`. `control_ui.py` segue exatamente esse padrão — sem
+Jinja2, sem segundo deployable, sem build step. Quando a SPA completa da
+Stage 5 chegar, ela troca este template pela mesma API; é por isso que a
+casca fica fina de propósito.
+
+### Leitura é renderizada no servidor; escrita é `fetch()` contra a API real
+
+Duas regras diferentes, e confundi-las é exatamente o erro que este desenho
+evita:
+
+- **Leituras** (lista de nós, capacidades/engines de um nó, uma página de
+  candidatos descobertos, autorizações ativas) chamam as **mesmas funções**
+  que as rotas JSON chamam — `routes.nodes._node_dto`,
+  `routes.discovery._discovered_resource_dto`,
+  `routes.authorizations._authorization_dto`, `store.list_nodes`/`get_node`/
+  `list_discovered_resources_page`. Nada aqui recalcula saúde, capacidade ou
+  paginação; importa a definição única e imprime como HTML em vez de JSON.
+- **Escritas** (Adotar, Negar, Conceder, Revogar) são `fetch()` contra
+  `POST /api/v1/discovered-resources/{id}/adopt|deny` e
+  `POST /api/v1/nodes/{nodeId}/projects/{projectId}/authorize|revoke` — as
+  mesmas rotas que C3/C4 já entregaram. Um `403` ao conceder `modify`/
+  `deliver` sem `can_approve_sensitive`/admin (a escada de privilégio da
+  Stage 4, acima) é o `403` real da rota, mostrado como veio — a UI não tenta
+  adivinhar a regra e arrisca divergir dela.
+
+### Autenticação: HTTP Basic, reverificado a cada request, mintando um Bearer comum por render
+
+`current_principal` (`gateway/app/api/auth.py`) só lê `Authorization: Bearer`
+— e uma navegação de browser normal não anexa header nenhum. Exigir esse
+mesmo header em `GET /control` tornaria a tela inalcançável por um browser
+comum, o que não pode ser "o painel que o operador abre na frida". A solução
+adotada é **HTTP Basic**, reverificado a cada request contra a mesma
+`authenticate_async` (a checagem de senha de custo constante) que
+`/oauth/authorize` e `POST /api/v1/auth/sign-in` já usam — não uma segunda. O
+browser reenvia a credencial Basic sozinho em toda navegação subsequente
+(clique em link, paginação, reload) sem sessão no servidor, sem cookie, sem
+token em URL. Uma sessão de cookie foi deliberadamente descartada: exigiria
+sua própria defesa contra CSRF, um segundo mecanismo de credencial para
+manter correto ao lado do que a superfície JSON já tem — exatamente a forma
+que `docs/napkin-lessons.md` já alerta contra repetir.
+
+Toda rota do módulo passa por `_control_principal`, que resolve a credencial
+Basic, chama `authenticate_async`, deriva um `AuthenticatedPrincipal` e chama
+`permissions.is_allowed(principal, action)` — **o mesmo catálogo** que
+`require_action` aplica em `/api/v1/**`. Uma credencial ausente ou errada é
+`401` com `WWW-Authenticate: Basic`; uma credencial válida sem o escopo certo
+é `403` explícito, nomeando a ação exigida — nunca um redirecionamento
+silencioso, nunca uma página em branco. É isso que "recusar na porta"
+significa aqui: a recusa acontece antes de qualquer linha de dado da frota
+ser lida, não depois de um `fetch()` já ter chegado ao browser e falhado.
+
+O que Basic **não** resolve: as ações de escrita continuam exigindo
+`Authorization: Bearer`, porque é o único esquema que `/api/v1/**` aceita e
+esta PR não é o lugar para ensinar um segundo. Por isso `GET
+/control/nodes/{nodeId}` — a única tela com botões que escrevem — minta um
+token OAuth comum a cada render, pela mesma `store.create_oauth_access_token`
+que `POST /api/v1/auth/sign-in` usa, com o mesmo teto de escopo
+(`principal.scopes ∩ settings.oauth_scopes()`), caindo na mesma tabela
+`oauth_access_tokens` que `current_principal` lê. Embutido uma vez, inline,
+num `<script>` — nunca em URL, query string, log ou `audit_events` (mintar
+não chama `record_event`, do mesmo jeito que nenhuma outra leitura deste
+código é auditada; só as escritas que esse token depois habilita são).
+Custo: `authenticate_async` reverificada a cada clique é o preço de não ter
+estado de sessão nenhum — aceitável para um console de operador único; o
+limitador de taxa (`gateway/app/main.py`) cobre todo o router pela mesma
+razão que cobre o `POST /oauth/authorize`.
+
+### `resourcePath`/`rootPath`: a mesma exceção já registrada, não uma nova
+
+`docs/api/README.md` ("Fields that must never ship") e a seção acima
+("Caminho absoluto") nomeiam uma exceção só para o path de um candidato:
+`GET /api/v1/nodes/{nodeId}/discovered-resources` e as respostas de
+`adopt`/`deny`, gated pelo mesmo escopo administrativo. A tela de detalhe do
+nó é essa mesma superfície, renderizada em HTML em vez de JSON — não uma
+segunda exceção. O path pode aparecer na tabela escapada da página; não pode
+aparecer em `<title>`, em query string, nem em log nenhum (o módulo não
+loga).
+
+### `/control/invite`: o que esta tela não faz nesta build, e por quê
+
+`GET /control/invite` chamaria `POST /api/v1/nodes/invite` e montaria um
+comando `scripts/enroll_node.py` pronto para copiar. **Os dois existem — são
+a PR #87, o corte mínimo da issue #76 — mas não estão nesta build**: vivem
+numa branch da qual esta não foi cortada, então o endpoint que a página
+precisa está genuinamente ausente do processo que a serve.
+
+A distinção importa e é a razão desta seção existir: a lacuna é de
+*linhagem*, não de capacidade. Nada aqui precisa ser desenhado de novo, e a
+tela acende sozinha quando aquele trabalho mergear. Construir um endpoint de
+convite dentro de uma PR de UI teria sido inventar lógica de negócio real
+(emissão de token, hash em repouso, trilha de auditoria, revogação) num lugar
+onde ela não pertence — e, pior, uma segunda vez, já existindo uma
+implementação revisada noutra branch.
+
+Por isso a tela renderiza uma explicação honesta em vez de um formulário que
+posta para lugar nenhum, nomeia o endpoint e o script pelos nomes exatos, e
+aponta para o procedimento manual de `docs/project-onboarding.md` enquanto o
+merge não acontece.

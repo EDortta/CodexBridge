@@ -24,6 +24,7 @@ The gateway exposes several HTTP surfaces. Only one of them is this contract.
 | `GET /metrics` | no | Prometheus scrape format, operator-facing |
 | `GET /healthz` | no | pre-existing infrastructure probe, superseded for mobile by `/health` |
 | `WS /agent/ws` | no | reverse executor channel; contract is `docs/protocol.md` |
+| `GET /control/**` | no | CodexBridge Control's server-rendered screens (issue #73 Stage 5); HTML, gated by HTTP Basic, consuming this same contract's `/api/v1/**` endpoints from the browser — see `gateway/app/api/routes/control_ui.py`'s own docstring |
 | `/openapi.json`, `/docs`, `/docs/oauth2-redirect`, `/redoc` | **not served at all** | FastAPI's auto-generated description and its UIs, switched off — see below |
 
 `docs/chatgpt-oauth-rollout.md` is **not** the contract for the OAuth endpoints.
@@ -232,7 +233,13 @@ by the contract itself, not by a filter applied late:
   `WorkspaceBindingModel.local_path` has none yet (no endpoint returns it in
   this build); `DiscoveredResourceModel.resourcePath` is returned by
   `GET /api/v1/nodes/{nodeId}/discovered-resources` and the `adopt`/`deny`
-  responses ONLY — see "Discovered resources" above for why. Since 0013,
+  responses ONLY — see "Discovered resources" above for why. CodexBridge
+  Control's node-detail screen (issue #73 Stage 5, `GET
+  /control/nodes/{nodeId}`) renders that same JSON in HTML instead of
+  fetching it a second way — it is the identical, already-excepted
+  administrative surface, not a new exception, and the module's own
+  docstring names exactly where the path may and may not appear (the escaped
+  table body; never a `<title>`, a query string, or a log line). Since 0013,
   `DiscoveredResourceModel.resource_key` itself is no longer the sensitive
   field: it is `hash_resource_key(path)`, a fixed-width lookup key with no
   reversible relationship to the path it was computed from, and it is not
