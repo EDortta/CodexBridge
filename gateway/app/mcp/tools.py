@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from gateway.app.services.issue_types import EPIC_STATUSES, ISSUE_PRIORITIES, ISSUE_STATUSES
+
 
 def tool_definitions() -> list[dict[str, Any]]:
     return [
@@ -215,6 +217,107 @@ def tool_definitions() -> list[dict[str, Any]]:
                         "description": "Filtra por estado. Util para 'o que terminou desde a ultima vez que perguntei' (ex: [\"completed\", \"failed\"]).",
                     },
                 },
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "create_epic",
+            "title": "Create epic",
+            "description": "Criar uma epica para agrupar issues dentro de um projeto que pode nao ter forge nenhum.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "project_id, nome, ou prefixo unico de um dos dois (retornado por list_projects).",
+                    },
+                    "title": {"type": "string", "minLength": 1, "maxLength": 255},
+                    "description": {"type": "string", "maxLength": 20000},
+                    "status": {"type": "string", "enum": sorted(EPIC_STATUSES)},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "description": "Repetir a mesma chave devolve a mesma epica em vez de criar outra.",
+                    },
+                },
+                "required": ["project", "title"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "list_epics",
+            "title": "List epics",
+            "description": "Listar epicas de um projeto, mais recentes primeiro.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "project_id, nome, ou prefixo unico de um dos dois (retornado por list_projects).",
+                    },
+                    "status": {"type": "array", "items": {"type": "string", "enum": sorted(EPIC_STATUSES)}},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                },
+                "required": ["project"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "create_issue",
+            "title": "Create issue",
+            "description": "Criar uma issue em um projeto, opcionalmente dentro de uma epica ja existente.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "project_id, nome, ou prefixo unico de um dos dois (retornado por list_projects).",
+                    },
+                    "epic_id": {"type": "string", "description": "id de uma epica existente no mesmo projeto (retornado por list_epics)."},
+                    "title": {"type": "string", "minLength": 1, "maxLength": 255},
+                    "description": {"type": "string", "maxLength": 20000},
+                    "status": {"type": "string", "enum": sorted(ISSUE_STATUSES)},
+                    "priority": {"type": "string", "enum": sorted(ISSUE_PRIORITIES)},
+                    "labels": {"type": "array", "items": {"type": "string"}, "maxItems": 64},
+                    "assignee_user_id": {"type": "string", "maxLength": 255},
+                    "assignee_email": {"type": "string", "maxLength": 255},
+                    "dependencies": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 64,
+                        "description": "ids de outras issues no mesmo projeto.",
+                    },
+                    "blocked_reason": {"type": "string", "maxLength": 20000},
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "description": "Repetir a mesma chave devolve a mesma issue em vez de criar outra.",
+                    },
+                },
+                "required": ["project", "title"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "list_issues",
+            "title": "List issues",
+            "description": "Listar issues de um projeto, mais recentes primeiro, com filtros opcionais.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "project_id, nome, ou prefixo unico de um dos dois (retornado por list_projects).",
+                    },
+                    "status": {"type": "array", "items": {"type": "string", "enum": sorted(ISSUE_STATUSES)}},
+                    "priority": {"type": "array", "items": {"type": "string", "enum": sorted(ISSUE_PRIORITIES)}},
+                    "epic_id": {"type": "string"},
+                    "assignee_user_id": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                },
+                "required": ["project"],
                 "additionalProperties": False,
             },
         },

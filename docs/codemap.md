@@ -140,6 +140,7 @@ tests/
     test_decisions.py  — "Operational decisions — issue #6."
     test_dispatch_payload_engine_and_delivery.py  — "`AgentHub.dispatch_next` forwards engine/issue_ref/delivery to the executor."
     test_epics_issues.py  — "Epics and issues — issue #8."
+    test_mcp_epics_issues.py  — "The `create_epic`/`list_epics`/`create_issue`/`list_issues` MCP tools -- issue #78."
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
@@ -1193,6 +1194,27 @@ tests/
 - `test_a_failed_link_does_not_keep_the_key_claimed(api)` *(async function)*
 - `test_the_epic_list_cursor_walks_every_epic_once(api)` *(async function)*
 - `test_list_epics_filters_by_status(api)` *(async function)*
+
+### `tests/integration/test_mcp_epics_issues.py`
+
+> The `create_epic`/`list_epics`/`create_issue`/`list_issues` MCP tools -- issue #78.
+
+- **`DummyHub`** *(class)*
+  - `is_connected(self, executor_id)` *(method)*
+  - `dispatch_next(self, executor_id)` *(async method)*
+  - `send(self, executor_id, envelope)` *(async method)*
+- `users_file(tmp_path)`
+- `env(users_file, monkeypatch)` *(async function)* — "One database, two doors onto it: `handle_mcp_call` directly, and a REST"
+- `_call(env, principal, tool_name, arguments)` *(async function)*
+- `test_create_epic_two_issues_and_list_them(env)` *(async function)*
+- `test_retried_create_epic_with_same_key_returns_the_same_epic(env)` *(async function)*
+- `test_same_idempotency_key_with_a_different_body_is_a_conflict(env)` *(async function)*
+- `test_principal_without_project_access_gets_a_typed_error_not_an_empty_list(env)` *(async function)*
+- `test_principal_without_write_scope_gets_missing_scope(env)` *(async function)*
+- `test_create_issue_returns_an_issue_ref_matching_the_shared_pattern(env)` *(async function)*
+- `test_unknown_status_or_priority_is_a_typed_validation_error(env)` *(async function)*
+- `test_an_epic_id_from_another_project_is_unknown_epic(env)` *(async function)*
+- `test_rows_created_via_mcp_appear_unchanged_via_rest(env)` *(async function)*
 
 ### `tests/integration/test_mcp_reminders.py`
 
