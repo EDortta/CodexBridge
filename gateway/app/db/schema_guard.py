@@ -84,12 +84,12 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     # column that is not there yet -- the same "fresh install fine, upgrade
     # broken" shape this whole module exists to catch early.
     "epics": {
-        "materialized_path": "0011_issue_materialization.sql",
-        "materialized_revision": "0011_issue_materialization.sql",
+        "materialized_path": "0012_issue_materialization.sql",
+        "materialized_revision": "0012_issue_materialization.sql",
     },
     "issues": {
-        "materialized_path": "0011_issue_materialization.sql",
-        "materialized_revision": "0011_issue_materialization.sql",
+        "materialized_path": "0012_issue_materialization.sql",
+        "materialized_revision": "0012_issue_materialization.sql",
     },
 }
 
