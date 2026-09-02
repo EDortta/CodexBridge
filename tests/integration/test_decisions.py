@@ -23,11 +23,14 @@ from gateway.app.api.routes import decisions as decisions_routes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.db.base import Base
 from gateway.app.db.session import get_session
-from gateway.app.models.entities import AuditEventModel
+from gateway.app.models.entities import AuditEventModel, ForgeOperationModel
 from gateway.app.services import store
 from gateway.app.services.agent_hub import AgentHub
 from shared.protocol import (
+    ApprovalDecision,
     ExecutorRegistration,
+    ForgeOperationKind,
+    ForgeOperationRequest,
     ProjectRegistration,
     SubmitTaskRequest,
     TaskMode,
@@ -243,6 +246,40 @@ async def make_plain_task(factory, project_id: str = "p1"):
             ),
             executor_online=True,
         )
+
+
+async def make_forge_decision(
+    factory,
+    project_id: str = "p1",
+    repo_identity: str = "acme/widgets",
+    title: str = "Bug found",
+    body: str = "Steps to reproduce",
+) -> ForgeOperationModel:
+    """A forge WRITE — born `awaiting_approval` — issue #79/#80 (PR B4)."""
+    async with factory() as s:
+        row = await store.create_forge_operation(
+            s,
+            executor_id="E1",
+            project_id=project_id,
+            operation=ForgeOperationRequest(
+                kind=ForgeOperationKind.ISSUE_OPEN, repo_identity=repo_identity, title=title, body=body
+            ),
+        )
+        assert row.state == "awaiting_approval", "fixture must produce a forge decision"
+        return row
+
+
+async def make_forge_read(factory, project_id: str = "p1", repo_identity: str = "acme/widgets") -> ForgeOperationModel:
+    """A forge READ (`issue_list`) — born `approved`, never a decision."""
+    async with factory() as s:
+        row = await store.create_forge_operation(
+            s,
+            executor_id="E1",
+            project_id=project_id,
+            operation=ForgeOperationRequest(kind=ForgeOperationKind.ISSUE_LIST, repo_identity=repo_identity),
+        )
+        assert row.state == "approved"
+        return row
 
 
 def auth(token: str) -> dict:
@@ -835,3 +872,203 @@ async def test_request_revision_on_a_resolved_decision_is_a_conflict(api) -> Non
         json={"reason": "too late"},
     )
     assert response.status_code in (409, 412)
+
+
+# --------------------------------------------------------------------------
+# Forge decisions -- issue #79/#80, WK-20260902-forge-binding (PR B4). One
+# inbox, two sources: `/api/v1/decisions` now projects `ForgeOperationModel`
+# rows alongside `TaskModel` ones. See `routes/decisions.py`'s own module
+# docstring for the full reasoning; these tests are weighted toward what
+# that docstring promises explicitly: a forge READ never shows up here, a
+# forge WRITE does with an honest discriminator, ids from the two sources
+# never collide, and approving a forge decision actually dispatches it —
+# issue #20 does not get to happen a second time on a different table.
+# --------------------------------------------------------------------------
+
+
+async def test_a_forge_read_is_not_a_decision(api) -> None:
+    """`issue_list` is born `approved` — it never needed a human, so it must
+
+    never appear here, the same way a READ-mode task does not."""
+    read = await make_forge_read(api.factory, "p1")
+    response = api.get(f"/api/v1/decisions/{read.id}", headers=auth(ALICE_TOKEN))
+    assert response.status_code == 404
+
+    listed = api.get("/api/v1/decisions", headers=auth(ADMIN_TOKEN)).json()
+    assert read.id not in [item["id"] for item in listed["items"]]
+
+
+async def test_a_forge_write_appears_as_a_decision_with_an_honest_discriminator(api) -> None:
+    row = await make_forge_decision(api.factory, "p1", repo_identity="acme/widgets", title="Bug found")
+
+    response = api.get(f"/api/v1/decisions/forge:{row.id}", headers=auth(ALICE_TOKEN))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == f"forge:{row.id}"
+    assert body["decisionType"] == "forge_operation"
+    assert body["forgeKind"] == "issue_open"
+    assert body["repoIdentity"] == "acme/widgets"
+    assert body["state"] == "pending"
+    assert body["risk"] == "sensitive"
+    assert body["projectId"] == "p1"
+    # The DTO shape a mobile client already reads for a task decision is
+    # present here too, just null where the concept does not apply — never
+    # simply absent.
+    assert body["mode"] is None
+    assert body["urgency"] is None
+    assert body["deadline"] is None
+    assert "Bug found" in body["request"]
+
+
+async def test_a_task_decisions_shape_is_unchanged_when_forge_rows_also_exist(api) -> None:
+    """The exact regression this PR must never cause: a task decision's DTO
+
+    gains new, additive, null-for-tasks keys, but every field that existed
+    before this PR is present and byte-for-byte the same."""
+    task = await make_decision(api.factory, "p1")
+    await make_forge_decision(api.factory, "p1")  # presence alone must not change the task's own shape
+
+    body = api.get(f"/api/v1/decisions/{task.id}", headers=auth(ALICE_TOKEN)).json()
+    assert body["id"] == task.id  # never prefixed
+    assert body["decisionType"] == "task"
+    assert body["forgeKind"] is None
+    assert body["repoIdentity"] is None
+    assert body["issueNumber"] is None
+    assert body["mode"] == task.mode
+    assert body["risk"] == task.policy_level
+
+
+async def test_forge_and_task_decisions_share_one_sorted_list(api) -> None:
+    task_row = await make_decision(api.factory, "p1")
+    forge_row = await make_forge_decision(api.factory, "p1")
+
+    body = api.get("/api/v1/decisions", headers=auth(APPROVER_TOKEN)).json()
+    ids = [item["id"] for item in body["items"]]
+    assert task_row.id in ids
+    assert f"forge:{forge_row.id}" in ids
+    # Newest first, across both sources, same as within one.
+    created_ats = [item["createdAt"] for item in body["items"]]
+    assert created_ats == sorted(created_ats, reverse=True)
+
+
+async def test_forge_and_task_decision_ids_never_collide(api) -> None:
+    task_row = await make_decision(api.factory, "p1")
+    forge_row = await make_forge_decision(api.factory, "p1")
+    assert task_row.id != forge_row.id  # true by uuid4() chance alone, but --
+    assert not task_row.id.startswith("forge:")
+    assert f"forge:{forge_row.id}" != task_row.id
+    # The real guarantee: a forge decision's exposed id ALWAYS carries the
+    # prefix, and a raw uuid4() string can never contain the ":" that makes
+    # it one -- so the two id spaces this endpoint serves are disjoint by
+    # construction, not by the odds of a random collision.
+    assert ":" not in task_row.id
+    assert ":" in f"forge:{forge_row.id}"
+
+
+async def test_forge_risk_and_urgency_filters(api) -> None:
+    """A forge decision has no `urgency` — an active `urgency` filter must
+
+    exclude it, not error or silently include it."""
+    forge_row = await make_forge_decision(api.factory, "p1")
+
+    by_risk = api.get(
+        "/api/v1/decisions", headers=auth(APPROVER_TOKEN), params={"risk": "sensitive"}
+    ).json()
+    assert f"forge:{forge_row.id}" in [item["id"] for item in by_risk["items"]]
+
+    by_read_risk = api.get(
+        "/api/v1/decisions", headers=auth(APPROVER_TOKEN), params={"risk": "read"}
+    ).json()
+    assert f"forge:{forge_row.id}" not in [item["id"] for item in by_read_risk["items"]]
+
+    by_urgency = api.get(
+        "/api/v1/decisions", headers=auth(APPROVER_TOKEN), params={"urgency": "normal"}
+    ).json()
+    assert f"forge:{forge_row.id}" not in [item["id"] for item in by_urgency["items"]]
+
+
+async def test_approving_a_critical_forge_decision_without_confirm_is_refused(api) -> None:
+    row = await make_forge_decision(api.factory, "p1")
+    response = api.post(
+        f"/api/v1/decisions/forge:{row.id}/approve",
+        headers={**auth(APPROVER_TOKEN), "If-Match": f'"{row.revision}"'},
+        json={},
+    )
+    assert response.status_code == 400
+
+
+async def test_approving_a_forge_decision_dispatches(api) -> None:
+    """The forge sibling of issue #20's own regression test above
+
+    (`test_approving_dispatches_to_a_connected_idle_executor`): approving a
+    forge decision through the Decision Center must not leave it sitting
+    `approved`-but-never-sent the way a pre-#20 task approval used to."""
+    row = await make_forge_decision(api.factory, "p1")
+    await api.hub.register("E1", _DummyWebSocket())
+
+    response = api.post(
+        f"/api/v1/decisions/forge:{row.id}/approve",
+        headers={**auth(APPROVER_TOKEN), "If-Match": f'"{row.revision}"'},
+        json={"confirm": True},
+    )
+    assert response.status_code == 200
+    assert response.json()["state"] == "approved"
+
+    async with api.factory() as s:
+        updated = await store.get_forge_operation(s, row.id)
+    assert updated.state == "dispatched"
+    assert response.json()["revision"] == updated.revision
+    assert response.headers["ETag"] == f'"{updated.revision}"'
+
+    connection = api.hub.connections["E1"]
+    sent_types = [msg["type"] for msg in connection.websocket.sent]
+    assert "forge.operation" in sent_types
+
+
+async def test_approving_a_forge_decision_leaves_it_approved_when_the_executor_is_offline(api) -> None:
+    row = await make_forge_decision(api.factory, "p1")
+
+    response = api.post(
+        f"/api/v1/decisions/forge:{row.id}/approve",
+        headers={**auth(APPROVER_TOKEN), "If-Match": f'"{row.revision}"'},
+        json={"confirm": True},
+    )
+    assert response.status_code == 200
+
+    async with api.factory() as s:
+        updated = await store.get_forge_operation(s, row.id)
+    assert updated.state == "approved"  # not "dispatched" -- no envelope could have been sent
+
+
+async def test_rejecting_a_forge_decision_never_dispatches(api) -> None:
+    row = await make_forge_decision(api.factory, "p1")
+    await api.hub.register("E1", _DummyWebSocket())
+
+    response = api.post(
+        f"/api/v1/decisions/forge:{row.id}/reject",
+        headers={**auth(APPROVER_TOKEN), "If-Match": f'"{row.revision}"'},
+        json={"reason": "not now"},
+    )
+    assert response.status_code == 200
+    assert response.json()["state"] == "rejected"
+
+    async with api.factory() as s:
+        updated = await store.get_forge_operation(s, row.id)
+    assert updated.state == "rejected"
+
+    connection = api.hub.connections["E1"]
+    sent_types = [msg["type"] for msg in connection.websocket.sent]
+    assert "forge.operation" not in sent_types
+
+
+async def test_approve_records_the_deciding_actor_for_a_forge_decision(api) -> None:
+    row = await make_forge_decision(api.factory, "p1")
+    api.post(
+        f"/api/v1/decisions/forge:{row.id}/approve",
+        headers={**auth(APPROVER_TOKEN), "If-Match": f'"{row.revision}"'},
+        json={"confirm": True},
+    )
+    events = await audit_events(api.factory, "forge_operation.decision_resolved_by_actor")
+    assert len(events) == 1
+    assert events[0].payload_json is not None
+    assert '"actor_id": "approver"' in events[0].payload_json

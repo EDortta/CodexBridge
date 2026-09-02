@@ -48,6 +48,7 @@ from shared.protocol import (
     DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
     DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
     ExecutorRegistration,
+    ForgeOperationKind,
     ForgeOperationRequest,
     PolicyLevel,
     ProjectRegistration,
@@ -1521,6 +1522,114 @@ async def list_tasks_requiring_control_replay(
     return list(result.scalars())
 
 
+# --------------------------------------------------------------------------
+# Decisions -- issue #6, extended by #79/#80's WK-20260902-forge-binding
+# (PR B4) to project TWO sources, `TaskModel` and `ForgeOperationModel`, onto
+# one feed. The operator asked for exactly one inbox, not two
+# (`docs/api/README.md`'s Decision Center section has the full reasoning);
+# this section is the store-layer half of that -- `routes/decisions.py`
+# builds the DTO, this module supplies the merged, paginated rows.
+#
+# Id collision, resolved explicitly: a `TaskModel.id` and a
+# `ForgeOperationModel.id` are both bare `uuid4()` strings from disjoint
+# tables, so a random collision is astronomically unlikely -- but this PR
+# does not rely on that. Every id this module exposes THROUGH THE DECISIONS
+# SURFACE for a forge operation carries an explicit `forge:` prefix
+# (`forge_decision_public_id`/`is_forge_decision_id` below); a `uuid4()`
+# string can never contain a `:`, so the two id spaces this endpoint serves
+# are disjoint BY CONSTRUCTION, not by randomness. A TaskModel's own id is
+# never prefixed or otherwise changed -- the DTO's `id` field for a task
+# decision is byte-for-byte what it always was, so no existing mobile
+# client's cached decision id breaks.
+# --------------------------------------------------------------------------
+
+FORGE_DECISION_ID_PREFIX = "forge:"
+
+# Fixed, arbitrary tie-break ranks for the cross-source cursor (see
+# `list_decisions_page`'s docstring). Task sorts before forge at an
+# EXACTLY-equal `created_at` -- a case two real rows will practically never
+# hit at microsecond resolution, but the pagination math has to have SOME
+# deterministic answer for it, so this is that answer, chosen once here.
+_TASK_DECISION_RANK = 0
+_FORGE_DECISION_RANK = 1
+
+# Every `ForgeOperationKind` that is ever born `awaiting_approval` -- i.e.
+# every kind `shared.policy.forge_operation_policy_level` classifies
+# `SENSITIVE`. A read (`ISSUE_LIST`/`ISSUE_VIEW`) never needed a human
+# decision, so it must never appear on `/api/v1/decisions`, the same way a
+# `TaskModel` whose `policy_level` was never set (a READ/CONTROLLED_WRITE
+# task) does not appear either (`policy_level.isnot(None)` below). Derived
+# from the real policy function, not hand-duplicated, so a future
+# `ForgeOperationKind` member is correctly classified here automatically.
+_FORGE_DECISION_KIND_VALUES = frozenset(
+    kind.value for kind in ForgeOperationKind if forge_operation_policy_level(kind) == PolicyLevel.SENSITIVE
+)
+
+# `ForgeOperationModel.state` values that mean "a human approved this",
+# whether or not it has dispatched/finished yet. Mirrors `TaskModel`'s own
+# split: `approval_state` is set once, at decision time, and never
+# overwritten by what happens to the task afterward -- the decision-facing
+# `state` here reads "approved" for as long as the underlying operation's
+# OWN lifecycle keeps moving, the same way a task decision reads "approved"
+# forever once decided, regardless of whether the task later completes or
+# fails.
+_FORGE_DECISION_APPROVED_LIFECYCLE_STATES = frozenset({"approved", "dispatched", "completed", "failed"})
+
+
+def forge_decision_public_id(operation_id: str) -> str:
+    """The `id` a `ForgeOperationModel` row is exposed under on
+
+    `/api/v1/decisions` -- never the bare `forge_operations.id`. See this
+    section's own module-level comment for why the prefix is what makes the
+    two id spaces this endpoint serves provably disjoint.
+    """
+    return f"{FORGE_DECISION_ID_PREFIX}{operation_id}"
+
+
+def is_forge_decision_id(decision_id: str) -> bool:
+    return decision_id.startswith(FORGE_DECISION_ID_PREFIX)
+
+
+def _forge_operation_id_from_decision_id(decision_id: str) -> str:
+    return decision_id[len(FORGE_DECISION_ID_PREFIX):]
+
+
+def decision_state_of(row: "TaskModel | ForgeOperationModel") -> str:
+    """The caller-facing decision state for either source -- `pending`, or
+
+    the recorded outcome. Lives here, not in `routes/decisions.py`, because
+    `list_decisions_page`'s own `decision_states` filter has to agree with
+    it exactly: both read this same mapping, so a row this function would
+    report as `"approved"` can never be excluded by a `decision_states=
+    ["approved"]` filter that used a different rule.
+    """
+    if isinstance(row, ForgeOperationModel):
+        if row.state == FORGE_OPERATION_DECIDABLE_STATE:
+            return "pending"
+        if row.state in _FORGE_DECISION_APPROVED_LIFECYCLE_STATES:
+            return "approved"
+        return row.state  # "rejected" / "revision_requested"
+    if row.state == TaskState.AWAITING_APPROVAL.value:
+        return "pending"
+    return row.approval_state or "unknown"
+
+
+def _forge_decision_state_clause(states: list[str]):
+    clauses = []
+    for state in states:
+        if state == "pending":
+            clauses.append(ForgeOperationModel.state == FORGE_OPERATION_DECIDABLE_STATE)
+        elif state == "approved":
+            clauses.append(ForgeOperationModel.state.in_(_FORGE_DECISION_APPROVED_LIFECYCLE_STATES))
+        else:  # "rejected" / "revision_requested" -- same raw value, forge side
+            clauses.append(ForgeOperationModel.state == state)
+    return or_(*clauses)
+
+
+def _decision_source_rank(row: "TaskModel | ForgeOperationModel") -> int:
+    return _FORGE_DECISION_RANK if isinstance(row, ForgeOperationModel) else _TASK_DECISION_RANK
+
+
 async def list_decisions_page(
     session: AsyncSession,
     *,
@@ -1532,30 +1641,69 @@ async def list_decisions_page(
     deadline_after: datetime | None = None,
     after: tuple[str, str] | None = None,
     limit: int = 50,
-) -> list[TaskModel]:
-    """Decisions the caller may see, newest first, over-fetched by one (issue #6).
+) -> list["TaskModel | ForgeOperationModel"]:
+    """Decisions the caller may see, newest first, over-fetched by one (issue
 
-    A "decision" is a task that has ever required approval: `policy_level` is
-    set once, at creation, and never cleared afterwards — see the column's
-    comment in `models/entities.py`. That is the predicate below, and it is why
-    a task nobody was ever asked to decide on cannot appear here however it is
-    filtered.
+    #6, extended by #79/#80 to merge in `ForgeOperationModel`). A "decision"
+    is a `TaskModel` that has ever required approval (`policy_level` set
+    once, never cleared) OR a `ForgeOperationModel` write
+    (`_FORGE_DECISION_KIND_VALUES`) -- a forge READ never appears here, the
+    same way a READ-mode task never does.
 
-    `decision_states` filters on the caller-facing state
-    (`routes/decisions.py:_decision_state`: `pending`, `approved`, `rejected`,
-    `revision_requested`), not on one raw column, because `pending` has no
-    column value of its own — it is `state == AWAITING_APPROVAL` — while the
-    other three read `approval_state` once the task has moved on.
+    Each source is queried SEPARATELY and merged in Python, not through a
+    SQL `UNION`: the two tables share no common column set a portable
+    `UNION` could select over without inventing NULL placeholders for
+    columns only one side has, and a raw string `UNION` would have to
+    duplicate every filter twice anyway. Both queries fetch up to `limit + 1`
+    rows each (not `limit + 1` combined) -- correct because a full page can,
+    in the worst case, come entirely from one source, and cheap because
+    `limit` is bounded by `pagination.MAX_LIMIT` regardless of how deep the
+    caller has paginated.
 
-    Same over-fetch-by-one and `(created_at DESC, id DESC)` cursor scheme as
-    `list_tasks_page`, for the same reason: authorization can filter a page
-    short, so `hasMore` has to come from an extra row rather than a length check.
+    Cross-source cursor continuation is the one genuinely subtle part.
+    `after` decodes to `(createdAt, id)` where `id` is the PUBLIC id
+    (`forge_decision_public_id` for a forge row, the bare task id
+    otherwise) of the LAST row on the previous page -- from either source.
+    Continuing correctly means: rows from the OTHER source at that exact
+    `createdAt` must not be skipped OR repeated, even though this table has
+    no natural ordering across two different id columns. This module
+    resolves it with a fixed, arbitrary tie-break rank
+    (`_TASK_DECISION_RANK` < `_FORGE_DECISION_RANK`): at an exactly-equal
+    `createdAt`, every task row is defined to sort before every forge row.
+    That makes the boundary condition for each source's own query fully
+    expressible in SQL: a query for a source ranked AFTER the cursor's own
+    source includes every row at the cursor's exact timestamp (none of them
+    have been shown yet); a query for a source ranked BEFORE it excludes
+    them all (they were necessarily already shown, on this page or an
+    earlier one); a query for the cursor's OWN source uses the ordinary
+    `id`-based tiebreak, unchanged from before this PR. In practice two
+    decisions from different sources sharing an exactly-equal, microsecond
+    `created_at` is not a case real traffic will hit; this exists so the
+    pagination contract holds even if it does, rather than silently
+    skipping or repeating a row.
     """
-    statement = select(TaskModel).where(TaskModel.policy_level.isnot(None))
+    if project_ids is not None and not project_ids:
+        return []
+
+    cursor_created_at: datetime | None = None
+    cursor_rank: int | None = None
+    cursor_task_id: str | None = None
+    cursor_forge_id: str | None = None
+    if after is not None:
+        cursor_created_at, cursor_public_id = after
+        if isinstance(cursor_created_at, str):
+            cursor_created_at = datetime.fromisoformat(cursor_created_at)
+        if is_forge_decision_id(cursor_public_id):
+            cursor_rank = _FORGE_DECISION_RANK
+            cursor_forge_id = _forge_operation_id_from_decision_id(cursor_public_id)
+        else:
+            cursor_rank = _TASK_DECISION_RANK
+            cursor_task_id = cursor_public_id
+
+    # -- TaskModel side: identical to this function's pre-#79/#80 behavior --
+    task_statement = select(TaskModel).where(TaskModel.policy_level.isnot(None))
     if project_ids is not None:
-        if not project_ids:
-            return []
-        statement = statement.where(TaskModel.project_id.in_(project_ids))
+        task_statement = task_statement.where(TaskModel.project_id.in_(project_ids))
     if decision_states:
         clauses = [
             TaskModel.state == TaskState.AWAITING_APPROVAL.value
@@ -1563,40 +1711,101 @@ async def list_decisions_page(
             else TaskModel.approval_state == state
             for state in decision_states
         ]
-        statement = statement.where(or_(*clauses))
+        task_statement = task_statement.where(or_(*clauses))
     if urgencies:
-        statement = statement.where(TaskModel.priority.in_(urgencies))
+        task_statement = task_statement.where(TaskModel.priority.in_(urgencies))
     if risks:
-        statement = statement.where(TaskModel.policy_level.in_(risks))
+        task_statement = task_statement.where(TaskModel.policy_level.in_(risks))
     if deadline_before is not None:
-        statement = statement.where(TaskModel.expires_at <= deadline_before)
+        task_statement = task_statement.where(TaskModel.expires_at <= deadline_before)
     if deadline_after is not None:
-        statement = statement.where(TaskModel.expires_at >= deadline_after)
-    if after is not None:
-        created_at, task_id = after
-        if isinstance(created_at, str):
-            created_at = datetime.fromisoformat(created_at)
-        statement = statement.where(
-            or_(
-                TaskModel.created_at < created_at,
-                and_(TaskModel.created_at == created_at, TaskModel.id < task_id),
+        task_statement = task_statement.where(TaskModel.expires_at >= deadline_after)
+    if cursor_created_at is not None:
+        if cursor_rank == _TASK_DECISION_RANK:
+            task_statement = task_statement.where(
+                or_(
+                    TaskModel.created_at < cursor_created_at,
+                    and_(TaskModel.created_at == cursor_created_at, TaskModel.id < cursor_task_id),
+                )
             )
+        else:  # cursor came from forge, which ranks AFTER task -- task rows at the exact timestamp are already spent
+            task_statement = task_statement.where(TaskModel.created_at < cursor_created_at)
+    task_statement = task_statement.order_by(TaskModel.created_at.desc(), TaskModel.id.desc()).limit(limit + 1)
+
+    # -- ForgeOperationModel side --
+    # `urgencies`/deadline filters never match a forge row (neither concept
+    # exists on `ForgeOperationModel`) -- rather than teach the query to
+    # produce zero rows the slow way, skip it outright when either is
+    # active. Same posture for `risks`: every forge decision is
+    # unconditionally `sensitive` (`shared.policy.forge_operation_policy_level`),
+    # so a `risks` filter that excludes `sensitive` also means "no forge
+    # rows can match".
+    skip_forge = bool(urgencies) or deadline_before is not None or deadline_after is not None or (
+        risks is not None and PolicyLevel.SENSITIVE.value not in risks
+    )
+    forge_rows: list[ForgeOperationModel] = []
+    if not skip_forge:
+        forge_statement = select(ForgeOperationModel).where(
+            ForgeOperationModel.kind.in_(_FORGE_DECISION_KIND_VALUES)
         )
-    statement = statement.order_by(TaskModel.created_at.desc(), TaskModel.id.desc()).limit(limit + 1)
-    result = await session.execute(statement)
-    return list(result.scalars())
+        if project_ids is not None:
+            forge_statement = forge_statement.where(ForgeOperationModel.project_id.in_(project_ids))
+        if decision_states:
+            forge_statement = forge_statement.where(_forge_decision_state_clause(decision_states))
+        if cursor_created_at is not None:
+            if cursor_rank == _FORGE_DECISION_RANK:
+                forge_statement = forge_statement.where(
+                    or_(
+                        ForgeOperationModel.created_at < cursor_created_at,
+                        and_(
+                            ForgeOperationModel.created_at == cursor_created_at,
+                            ForgeOperationModel.id < cursor_forge_id,
+                        ),
+                    )
+                )
+            else:  # cursor came from task, which ranks BEFORE forge -- every forge row at the exact timestamp is still pending
+                forge_statement = forge_statement.where(ForgeOperationModel.created_at <= cursor_created_at)
+        forge_statement = forge_statement.order_by(
+            ForgeOperationModel.created_at.desc(), ForgeOperationModel.id.desc()
+        ).limit(limit + 1)
+        forge_result = await session.execute(forge_statement)
+        forge_rows = list(forge_result.scalars())
+
+    task_result = await session.execute(task_statement)
+    task_rows = list(task_result.scalars())
+
+    combined = sorted(
+        [*task_rows, *forge_rows],
+        key=lambda row: (row.created_at, -_decision_source_rank(row), row.id),
+        reverse=True,
+    )
+    return combined[: limit + 1]
 
 
 async def get_decision_for_projects(
     session: AsyncSession, decision_id: str, project_ids: list[str] | None
-) -> TaskModel | None:
-    """A decision the caller may see, or None — "not a decision" included (issue #6).
+) -> "TaskModel | ForgeOperationModel | None":
+    """A decision the caller may see, or None — "not a decision" included
 
-    A task that never required approval has `policy_level is None` and is not a
-    decision; answering anything but the caller's usual `not_found` for it would
-    tell a caller who probed a normal task id through this resource that the id
-    exists, which `get_task_for_projects` already treats as unsafe to confirm.
+    (issue #6, extended by #79/#80 for the forge source). `decision_id` is
+    the PUBLIC id (`forge_decision_public_id` prefixes a forge operation's;
+    a task's own id is never prefixed) -- see this section's own
+    module-level comment for why that makes the routing below unambiguous.
+
+    A task that never required approval (`policy_level is None`) or a forge
+    operation that was never gated (`kind` not in
+    `_FORGE_DECISION_KIND_VALUES`, i.e. a READ) is not a decision; answering
+    anything but the caller's usual `not_found` for either would tell a
+    caller who probed a normal id through this resource that the id exists,
+    which `get_task_for_projects` already treats as unsafe to confirm.
     """
+    if is_forge_decision_id(decision_id):
+        operation = await session.get(ForgeOperationModel, _forge_operation_id_from_decision_id(decision_id))
+        if operation is None or operation.kind not in _FORGE_DECISION_KIND_VALUES:
+            return None
+        if project_ids is not None and operation.project_id not in project_ids:
+            return None
+        return operation
     task = await session.get(TaskModel, decision_id)
     if task is None or task.policy_level is None:
         return None
