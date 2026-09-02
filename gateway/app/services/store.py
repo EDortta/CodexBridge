@@ -2128,6 +2128,60 @@ async def list_epics_page(
     return list(result.scalars())
 
 
+# Sentinel distinguishing "field omitted" from "field explicitly set to null"
+# for the partial-update functions below (`update_epic`, `update_issue`).
+# `None` cannot serve: `description`, `assignee_user_id` and the like are
+# nullable columns a caller may legitimately want to clear.
+UNSET = object()
+
+
+async def update_epic(
+    session: AsyncSession,
+    epic_id: str,
+    *,
+    title: object = UNSET,
+    description: object = UNSET,
+    status: object = UNSET,
+    actor_user_id: str,
+    actor_email: str | None,
+) -> EpicModel:
+    """Change title, description or status. Mirrors `update_issue` below --
+
+    same `UNSET` sentinel, same revision bump, same audit event shape. An epic
+    has no `labels` or `dependencies`, so it does not need the parts of
+    `update_issue` that exist only for those.
+    """
+    epic = await session.get(EpicModel, epic_id)
+    if epic is None:
+        raise ValueError("unknown_epic")
+
+    if title is not UNSET:
+        cleaned = (title or "").strip()
+        if not cleaned:
+            raise IssuePlanningError("/title", "required", "title must not be empty.")
+        epic.title = cleaned
+    if description is not UNSET:
+        epic.description = description
+    if status is not UNSET:
+        if status not in EPIC_STATUSES:
+            raise IssuePlanningError(
+                "/status", "invalid_status", f"status must be one of {sorted(EPIC_STATUSES)}."
+            )
+        epic.status = status
+
+    epic.updated_by_user_id = actor_user_id
+    epic.updated_by_email = actor_email
+    epic.updated_at = datetime.now(timezone.utc)
+    epic.revision += 1
+    await record_event(
+        session, "epic", epic.id, "epic.updated",
+        {"actor_id": actor_user_id, "status": epic.status},
+    )
+    await session.commit()
+    await session.refresh(epic)
+    return epic
+
+
 async def create_issue(
     session: AsyncSession,
     *,
@@ -2243,9 +2297,6 @@ async def list_issues_page(
     statement = statement.order_by(IssueModel.created_at.desc(), IssueModel.id.desc()).limit(limit + 1)
     result = await session.execute(statement)
     return list(result.scalars())
-
-
-UNSET = object()
 
 
 async def update_issue(

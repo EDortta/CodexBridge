@@ -1,15 +1,21 @@
-"""The `create_epic`/`list_epics`/`create_issue`/`list_issues` MCP tools -- issue #78.
+"""The epics/issues MCP tools -- issue #78.
 
 Exposes the epics/issues store already tested via REST
 (`tests/integration/test_epics_issues.py`) over the MCP/ChatGPT transport, for
 a project that may have no forge at all -- "plan conversing in ChatGPT". This
 file does not re-prove store validation (that belongs to
-`tests/unit`/`tests/integration/test_epics_issues.py`); it proves the four
-tools reach the SAME store, apply the same authorization catalogue
+`tests/unit`/`tests/integration/test_epics_issues.py`); it proves the tools
+reach the SAME store, apply the same authorization catalogue
 (`gateway/app/api/permissions.py`) the REST routes use, add idempotency on the
-two creators only (mirroring the REST pair, since `PATCH /issues/{id}` has
-none), and return the `issue_ref` shape `start_development_task` already
-resolves.
+two creators and on `move_issue_to_epic` (mirroring the REST pair and the
+link endpoint, since `PATCH /issues|epics/{id}` has none), and return the
+`issue_ref` shape `start_development_task` already resolves.
+
+`update_issue`, `update_epic` and `move_issue_to_epic`
+(WK-20260902-epic-update-and-move) additionally require `expected_revision`:
+the MCP equivalent of `If-Match`, and just as mandatory -- absent is
+`expected_revision_required` (400), stale is `stale_write` (409). Each has a
+happy-path test as its positive control, in this same file.
 """
 
 from __future__ import annotations
@@ -341,3 +347,219 @@ async def test_rows_created_via_mcp_appear_unchanged_via_rest(env):
     assert rest_issue["title"] == issue["title"]
     assert rest_issue["priority"] == "high"
     assert rest_issue["labels"] == ["backend"]
+
+
+# --------------------------------------------------------------------------
+# 9. update_issue -- WK-20260902-epic-update-and-move.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_issue_changes_only_the_mentioned_fields(env):
+    """Positive control for the two expected_revision negatives below."""
+    issue = await _call(env, ALICE, "create_issue", {
+        "project": "p1", "title": "Original", "priority": "low", "labels": ["a"],
+    })
+    updated = await _call(env, ALICE, "update_issue", {
+        "issue_id": issue["issue_id"], "status": "in_progress", "expected_revision": issue["revision"],
+    })
+    assert updated["status"] == "in_progress"
+    assert updated["title"] == "Original"
+    assert updated["priority"] == "low"
+    assert updated["labels"] == ["a"]
+    assert updated["revision"] == issue["revision"] + 1
+
+
+@pytest.mark.asyncio
+async def test_update_issue_accepts_the_bare_id_or_the_local_prefixed_ref(env):
+    issue = await _call(env, ALICE, "create_issue", {"project": "p1", "title": "x"})
+
+    via_bare = await _call(env, ALICE, "update_issue", {
+        "issue_id": issue["issue_id"], "status": "in_progress", "expected_revision": issue["revision"],
+    })
+    via_ref = await _call(env, ALICE, "update_issue", {
+        "issue_id": issue["issue_ref"], "status": "blocked", "expected_revision": via_bare["revision"],
+    })
+    assert via_ref["status"] == "blocked"
+    assert via_ref["issue_id"] == issue["issue_id"]
+
+
+@pytest.mark.asyncio
+async def test_update_issue_without_expected_revision_is_refused(env):
+    issue = await _call(env, ALICE, "create_issue", {"project": "p1", "title": "x"})
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, ALICE, "update_issue", {"issue_id": issue["issue_id"], "status": "in_progress"})
+    assert raised.value.status_code == 400
+    assert raised.value.detail == "expected_revision_required"
+
+
+@pytest.mark.asyncio
+async def test_update_issue_with_a_stale_expected_revision_is_refused(env):
+    issue = await _call(env, ALICE, "create_issue", {"project": "p1", "title": "x"})
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, ALICE, "update_issue", {
+            "issue_id": issue["issue_id"], "status": "in_progress", "expected_revision": issue["revision"] + 1,
+        })
+    assert raised.value.status_code == 409
+    assert raised.value.detail == "stale_write"
+
+
+@pytest.mark.asyncio
+async def test_update_issue_with_an_unknown_status_is_a_typed_validation_error(env):
+    issue = await _call(env, ALICE, "create_issue", {"project": "p1", "title": "x"})
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, ALICE, "update_issue", {
+            "issue_id": issue["issue_id"], "status": "not-a-status", "expected_revision": issue["revision"],
+        })
+    assert raised.value.status_code == 400
+    assert raised.value.detail == "validation_failed:/status:invalid_status"
+
+
+@pytest.mark.asyncio
+async def test_update_issue_on_another_projects_issue_is_unknown_issue(env):
+    theirs = await _call(env, AuthenticatedPrincipal(
+        user_id="admin", email="admin@example.com", roles=["admin"],
+        allowed_projects=[], scopes=["codexbridge.admin"],
+    ), "create_issue", {"project": "p2", "title": "Lives in p2"})
+
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, ALICE, "update_issue", {
+            "issue_id": theirs["issue_id"], "status": "in_progress", "expected_revision": theirs["revision"],
+        })
+    assert raised.value.status_code == 404
+    assert raised.value.detail == "unknown_issue"
+
+
+# --------------------------------------------------------------------------
+# 10. update_epic -- WK-20260902-epic-update-and-move.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_epic_changes_only_the_mentioned_fields(env):
+    """Positive control for the two expected_revision negatives below."""
+    epic = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "Original"})
+    updated = await _call(env, ALICE, "update_epic", {
+        "epic_id": epic["epic_id"], "status": "cancelled", "expected_revision": epic["revision"],
+    })
+    assert updated["status"] == "cancelled"
+    assert updated["title"] == "Original"
+    assert updated["revision"] == epic["revision"] + 1
+
+
+@pytest.mark.asyncio
+async def test_update_epic_without_expected_revision_is_refused(env):
+    epic = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "x"})
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, ALICE, "update_epic", {"epic_id": epic["epic_id"], "status": "cancelled"})
+    assert raised.value.status_code == 400
+    assert raised.value.detail == "expected_revision_required"
+
+
+@pytest.mark.asyncio
+async def test_update_epic_with_a_stale_expected_revision_is_refused(env):
+    epic = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "x"})
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, ALICE, "update_epic", {
+            "epic_id": epic["epic_id"], "status": "cancelled", "expected_revision": epic["revision"] + 1,
+        })
+    assert raised.value.status_code == 409
+    assert raised.value.detail == "stale_write"
+
+
+@pytest.mark.asyncio
+async def test_update_epic_with_an_unknown_status_is_a_typed_validation_error(env):
+    epic = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "x"})
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, ALICE, "update_epic", {
+            "epic_id": epic["epic_id"], "status": "orbiting", "expected_revision": epic["revision"],
+        })
+    assert raised.value.status_code == 400
+    assert raised.value.detail == "validation_failed:/status:invalid_status"
+
+
+# --------------------------------------------------------------------------
+# 11. move_issue_to_epic -- WK-20260902-epic-update-and-move.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_move_issue_to_epic_changes_the_issues_epic(env):
+    """Positive control for the two expected_revision negatives below."""
+    origin = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "Origin"})
+    target = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "Target"})
+    issue = await _call(env, ALICE, "create_issue", {
+        "project": "p1", "epic_id": origin["epic_id"], "title": "Movable",
+    })
+
+    moved = await _call(env, ALICE, "move_issue_to_epic", {
+        "issue_id": issue["issue_id"], "epic_id": target["epic_id"], "expected_revision": issue["revision"],
+    })
+    assert moved["epic_id"] == target["epic_id"]
+    assert moved["revision"] == issue["revision"] + 1
+
+    listed = await _call(env, ALICE, "list_issues", {"project": "p1", "epic_id": target["epic_id"]})
+    assert [i["issue_id"] for i in listed["issues"]] == [issue["issue_id"]]
+
+
+@pytest.mark.asyncio
+async def test_move_issue_to_epic_without_expected_revision_is_refused(env):
+    epic = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "x"})
+    issue = await _call(env, ALICE, "create_issue", {"project": "p1", "title": "x"})
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, ALICE, "move_issue_to_epic", {"issue_id": issue["issue_id"], "epic_id": epic["epic_id"]})
+    assert raised.value.status_code == 400
+    assert raised.value.detail == "expected_revision_required"
+
+
+@pytest.mark.asyncio
+async def test_move_issue_to_epic_with_a_stale_expected_revision_is_refused(env):
+    epic = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "x"})
+    issue = await _call(env, ALICE, "create_issue", {"project": "p1", "title": "x"})
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, ALICE, "move_issue_to_epic", {
+            "issue_id": issue["issue_id"], "epic_id": epic["epic_id"], "expected_revision": issue["revision"] + 1,
+        })
+    assert raised.value.status_code == 409
+    assert raised.value.detail == "stale_write"
+
+
+@pytest.mark.asyncio
+async def test_move_issue_to_epic_from_a_foreign_project_is_unknown_epic(env):
+    foreign_epic = await _call(env, AuthenticatedPrincipal(
+        user_id="admin", email="admin@example.com", roles=["admin"],
+        allowed_projects=[], scopes=["codexbridge.admin"],
+    ), "create_epic", {"project": "p2", "title": "Lives in p2"})
+    issue = await _call(env, ALICE, "create_issue", {"project": "p1", "title": "x"})
+
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, ALICE, "move_issue_to_epic", {
+            "issue_id": issue["issue_id"], "epic_id": foreign_epic["epic_id"], "expected_revision": issue["revision"],
+        })
+    assert raised.value.status_code == 404
+    assert raised.value.detail == "unknown_epic"
+
+
+@pytest.mark.asyncio
+async def test_a_retried_move_does_not_move_the_issue_twice(env):
+    epic = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "x"})
+    issue = await _call(env, ALICE, "create_issue", {"project": "p1", "title": "x"})
+    arguments = {
+        "issue_id": issue["issue_id"], "epic_id": epic["epic_id"],
+        "expected_revision": issue["revision"], "idempotency_key": "move-1",
+    }
+
+    first = await _call(env, ALICE, "move_issue_to_epic", arguments)
+    second = await _call(env, ALICE, "move_issue_to_epic", arguments)
+    assert second == first
+
+    listed = await _call(env, ALICE, "list_issues", {"project": "p1", "epic_id": epic["epic_id"]})
+    assert len(listed["issues"]) == 1, "the move must not have applied twice"
+    assert listed["issues"][0]["revision"] == issue["revision"] + 1
+
+
+# --------------------------------------------------------------------------
+# 12. Extracting the idempotency helpers (review debt on A1, Tarefa 0) must
+#     not change what create_epic/create_issue's own idempotency tests prove
+#     -- see this module's tests #2/#3 above, left unmodified by this PR.
+# --------------------------------------------------------------------------

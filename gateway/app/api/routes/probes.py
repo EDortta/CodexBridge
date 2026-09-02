@@ -88,7 +88,16 @@ version_router = APIRouter()
 # is why this merge was a one-line text conflict instead of two different
 # 1.7.0 contracts racing to overwrite each other. Both landed; the numbering
 # above is the order they were reserved in, not the order they merged.
-API_CONTRACT_VERSION = "1.9.0"
+# 1.6.0 -> 1.11.0: `GET`/`PATCH /api/v1/epics/{epicId}` (issue #8, work_id
+# WK-20260902-epic-update-and-move) -- an epic could be created, read in a
+# list, and linked to, but never itself changed, so `cancelled` (this
+# project's answer to "there is no delete") was unreachable for an epic.
+# Additive only (new endpoints, new `UpdateEpicRequest` schema), so a minor
+# bump. The jump from 1.6.0 rather than 1.7.0 is deliberate: 1.7.0/1.8.0/
+# 1.9.0/1.10.0 are already claimed by concurrently open PRs (#61, #62, #75)
+# and another track of this same orchestration, none of which had merged
+# into this branch's ancestry when this line was written.
+API_CONTRACT_VERSION = "1.11.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a

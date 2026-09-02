@@ -830,6 +830,7 @@ validate the current mission state").
 `GET /api/v1/projects/{projectId}/epics`, `GET .../issues`,
 `GET /api/v1/issues/{issueId}`, `POST /api/v1/issues`,
 `PATCH /api/v1/issues/{issueId}`, `POST /api/v1/epics`,
+`GET /api/v1/epics/{epicId}`, `PATCH /api/v1/epics/{epicId}`,
 `POST /api/v1/epics/{epicId}/issues/{issueId}`.
 
 An **epic** groups issues within one project. An **issue** carries status,
@@ -866,6 +867,20 @@ choice a future issue should make deliberately rather than this one making it
 implicitly. A future issue that defines what a "decision" or "mission"
 reference from an issue actually means can add it the same way `epicId` was
 added here.
+
+### An epic could not itself be changed, and that was a dead end
+
+Before `WK-20260902-epic-update-and-move`, an epic could be created, listed,
+read as part of a list page, and linked to — but there was no transport, REST
+or MCP, that could change an epic's own `title`, `description` or `status`.
+That is not a gap symmetric with issues: this project's answer to "there is no
+delete, use `cancelled`" (see `docs/limits.md`) is only an answer if
+`cancelled` is reachable, and for an epic it was not. `GET /api/v1/epics/{epicId}`
+and `PATCH /api/v1/epics/{epicId}` close it, mirroring `GET`/`PATCH
+/api/v1/issues/{issueId}` field for field — `ETag`/`If-Match`, 404 for a
+hidden epic never 403, `validation_failed` for an unknown `status` — with the
+one difference that follows from the model itself: an epic has no `labels` or
+`dependencies` to carry into `UpdateEpicRequest`.
 
 ### Two ways to change an issue, on purpose kept to one relationship
 
@@ -915,10 +930,19 @@ precedent already argues against.
 `POST /api/v1/epics`, `POST /api/v1/issues` and the link endpoint all accept
 `Idempotency-Key`, the same reserve-then-complete flow `POST
 /api/v1/sessions/{sessionId}/stop` uses: a client that lost the network after
-creating an issue can retry without risking a second issue. `PATCH` does not
-carry it — a repeated identical `PATCH` is naturally idempotent at the field
-level, and `If-Match` already refuses a retry that arrived after a concurrent
-change.
+creating an issue can retry without risking a second issue. Neither `PATCH`
+(issues or epics) carries it — a repeated identical `PATCH` is naturally
+idempotent at the field level, and `If-Match` already refuses a retry that
+arrived after a concurrent change. The MCP tools this same work_id adds
+(`update_issue`, `update_epic`, `move_issue_to_epic`) follow the same split:
+the first two carry no idempotency key, `move_issue_to_epic` does, mirroring
+the link endpoint it wraps. All three require `expected_revision` — the
+JSON-RPC shape of `If-Match` — since an MCP caller must not get a laxer
+concurrency contract on the same domain just because JSON-RPC has no header
+to forget: absent is `expected_revision_required` (400), stale is
+`stale_write` (409), same codes `gateway/app/api/concurrency.py` uses for the
+REST `428`/`412` pair, translated to the status codes the `/mcp` JSON-RPC
+transport already uses elsewhere (`gateway/app/mcp/server.py`).
 
 ### The write scope is separate from cancel
 

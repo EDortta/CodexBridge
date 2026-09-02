@@ -264,6 +264,30 @@ def tool_definitions() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "update_epic",
+            "title": "Update epic",
+            "description": "Mudar titulo, descricao ou status de uma epica existente.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "epic_id": {"type": "string", "description": "id da epica (retornado por create_epic ou list_epics)."},
+                    "title": {"type": "string", "minLength": 1, "maxLength": 255},
+                    "description": {"type": "string", "maxLength": 20000},
+                    "status": {"type": "string", "enum": sorted(EPIC_STATUSES)},
+                    "expected_revision": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": (
+                            "Revisao atual da epica (campo 'revision' de create_epic/list_epics). "
+                            "Obrigatorio: protege contra sobrescrever uma mudanca concorrente."
+                        ),
+                    },
+                },
+                "required": ["epic_id", "expected_revision"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "create_issue",
             "title": "Create issue",
             "description": "Criar uma issue em um projeto, opcionalmente dentro de uma epica ja existente.",
@@ -318,6 +342,81 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
                 },
                 "required": ["project"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "update_issue",
+            "title": "Update issue",
+            "description": (
+                "Mudar status, prioridade, labels, assignee, dependencias ou motivo de bloqueio de "
+                "uma issue existente. Para trocar a epica da issue, use move_issue_to_epic."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "issue_id": {
+                        "type": "string",
+                        "description": "id da issue, ou 'local:<id>' (os dois formatos sao aceitos).",
+                    },
+                    "title": {"type": "string", "minLength": 1, "maxLength": 255},
+                    "description": {"type": "string", "maxLength": 20000},
+                    "status": {"type": "string", "enum": sorted(ISSUE_STATUSES)},
+                    "priority": {"type": "string", "enum": sorted(ISSUE_PRIORITIES)},
+                    "labels": {"type": "array", "items": {"type": "string"}, "maxItems": 64},
+                    "assignee_user_id": {"type": "string", "maxLength": 255},
+                    "assignee_email": {"type": "string", "maxLength": 255},
+                    "dependencies": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 64,
+                        "description": "Substitui o conjunto inteiro. ids de outras issues no mesmo projeto.",
+                    },
+                    "blocked_reason": {"type": "string", "maxLength": 20000},
+                    "expected_revision": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": (
+                            "Revisao atual da issue (campo 'revision' de create_issue/list_issues). "
+                            "Obrigatorio: protege contra sobrescrever uma mudanca concorrente."
+                        ),
+                    },
+                },
+                "required": ["issue_id", "expected_revision"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "move_issue_to_epic",
+            "title": "Move issue to epic",
+            "description": (
+                "Anexar (ou mover) uma issue para uma epica do mesmo projeto -- o unico mecanismo "
+                "para trocar a epica de uma issue."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "issue_id": {
+                        "type": "string",
+                        "description": "id da issue, ou 'local:<id>' (os dois formatos sao aceitos).",
+                    },
+                    "epic_id": {"type": "string", "description": "id da epica de destino, no mesmo projeto da issue."},
+                    "expected_revision": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": (
+                            "Revisao atual da issue (campo 'revision' de create_issue/list_issues). "
+                            "Obrigatorio: protege contra sobrescrever uma mudanca concorrente."
+                        ),
+                    },
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "description": "Repetir a mesma chave devolve o mesmo resultado em vez de mover de novo.",
+                    },
+                },
+                "required": ["issue_id", "epic_id", "expected_revision"],
                 "additionalProperties": False,
             },
         },

@@ -5,7 +5,7 @@
 
 ## Summary
 
-- 146 file(s) · 1570 symbol(s) indexed
+- 146 file(s) · 1596 symbol(s) indexed
 - Languages: config (2), python (142), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -156,7 +156,7 @@ tests/
     test_dispatch_payload_engine_and_delivery.py  — "`AgentHub.dispatch_next` forwards engine/issue_ref/delivery to the executor."
     test_epics_issues.py  — "Epics and issues — issue #8."
     test_events.py  — "The mobile event stream, its polling fallback, and notification preferences — issue #13."
-    test_mcp_epics_issues.py  — "The `create_epic`/`list_epics`/`create_issue`/`list_issues` MCP tools -- issue #78."
+    test_mcp_epics_issues.py  — "The epics/issues MCP tools -- issue #78."
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
     test_nodes.py  — "Bridge Node fleet visibility — issue #73 Stage 2."
@@ -456,8 +456,11 @@ tests/
 > Epics — issue #8.
 
 - **`CreateEpicRequest`** *(class)*
+- **`UpdateEpicRequest`** *(class)*
 - `list_epics(project_id, response, status, cursor, limit, principal, session)` *(async function)* — "Epics in one project, newest first."
+- `get_epic_detail(epic_id, response, principal, session)` *(async function)*
 - `create_epic(payload, response, idempotency_key, principal, session)` *(async function)*
+- `update_epic(epic_id, payload, response, if_match, principal, session)` *(async function)* — "Change title, description or status."
 - `link_issue(epic_id, issue_id, response, if_match, idempotency_key, principal, session)` *(async function)* — "Attach an issue to an epic. Both must be in a project the caller may see."
 
 ### `gateway/app/api/routes/events.py`
@@ -865,6 +868,7 @@ tests/
 - `get_epic(session, epic_id)` *(async function)*
 - `get_epic_for_projects(session, epic_id, project_ids)` *(async function)* — "An epic the caller may see, or None. Mirrors `get_task_for_projects`."
 - `list_epics_page(session)` *(async function)* — "Epics in one project, newest first, over-fetched by one."
+- `update_epic(session, epic_id)` *(async function)* — "Change title, description or status. Mirrors `update_issue` below --"
 - `create_issue(session)` *(async function)*
 - `get_issue(session, issue_id)` *(async function)*
 - `get_issue_for_projects(session, issue_id, project_ids)` *(async function)*
@@ -1531,6 +1535,13 @@ tests/
 - `test_a_failed_link_does_not_keep_the_key_claimed(api)` *(async function)*
 - `test_the_epic_list_cursor_walks_every_epic_once(api)` *(async function)*
 - `test_list_epics_filters_by_status(api)` *(async function)*
+- `test_get_epic_returns_an_etag(api)` *(async function)*
+- `test_update_epic_requires_if_match(api)` *(async function)*
+- `test_update_epic_with_a_stale_etag_is_refused(api)` *(async function)*
+- `test_update_epic_changes_only_the_mentioned_fields(api)` *(async function)* — "Positive control for the two If-Match negatives above."
+- `test_update_epic_can_explicitly_clear_a_nullable_field(api)` *(async function)*
+- `test_update_epic_rejects_an_unknown_status(api)` *(async function)*
+- `test_a_reader_cannot_update_an_epic(api)` *(async function)*
 
 ### `tests/integration/test_events.py`
 
@@ -1618,7 +1629,7 @@ tests/
 
 ### `tests/integration/test_mcp_epics_issues.py`
 
-> The `create_epic`/`list_epics`/`create_issue`/`list_issues` MCP tools -- issue #78.
+> The epics/issues MCP tools -- issue #78.
 
 - **`DummyHub`** *(class)*
   - `is_connected(self, executor_id)` *(method)*
@@ -1635,6 +1646,21 @@ tests/
 - `test_unknown_status_or_priority_is_a_typed_validation_error(env)` *(async function)*
 - `test_an_epic_id_from_another_project_is_unknown_epic(env)` *(async function)*
 - `test_rows_created_via_mcp_appear_unchanged_via_rest(env)` *(async function)*
+- `test_update_issue_changes_only_the_mentioned_fields(env)` *(async function)* — "Positive control for the two expected_revision negatives below."
+- `test_update_issue_accepts_the_bare_id_or_the_local_prefixed_ref(env)` *(async function)*
+- `test_update_issue_without_expected_revision_is_refused(env)` *(async function)*
+- `test_update_issue_with_a_stale_expected_revision_is_refused(env)` *(async function)*
+- `test_update_issue_with_an_unknown_status_is_a_typed_validation_error(env)` *(async function)*
+- `test_update_issue_on_another_projects_issue_is_unknown_issue(env)` *(async function)*
+- `test_update_epic_changes_only_the_mentioned_fields(env)` *(async function)* — "Positive control for the two expected_revision negatives below."
+- `test_update_epic_without_expected_revision_is_refused(env)` *(async function)*
+- `test_update_epic_with_a_stale_expected_revision_is_refused(env)` *(async function)*
+- `test_update_epic_with_an_unknown_status_is_a_typed_validation_error(env)` *(async function)*
+- `test_move_issue_to_epic_changes_the_issues_epic(env)` *(async function)* — "Positive control for the two expected_revision negatives below."
+- `test_move_issue_to_epic_without_expected_revision_is_refused(env)` *(async function)*
+- `test_move_issue_to_epic_with_a_stale_expected_revision_is_refused(env)` *(async function)*
+- `test_move_issue_to_epic_from_a_foreign_project_is_unknown_epic(env)` *(async function)*
+- `test_a_retried_move_does_not_move_the_issue_twice(env)` *(async function)*
 
 ### `tests/integration/test_mcp_reminders.py`
 
