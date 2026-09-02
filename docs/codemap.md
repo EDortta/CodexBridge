@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 170 file(s) · 1875 symbol(s) indexed
-- Languages: config (2), python (166), shell (2)
+- 171 file(s) · 1890 symbol(s) indexed
+- Languages: config (2), python (167), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -202,6 +202,7 @@ tests/
     test_effective_task_modes.py  — "`store.effective_task_modes` -- issue #73 Stage 4, WK-20260902-gh73-authorization-plane."
     test_email_templates.py  — "`gateway.app.services.email_templates` -- pure rendering, no I/O."
     test_enroll_node.py  — "`scripts/enroll_node.py` -- one HTTP call, one file write, issue #76."
+    test_forge_policy.py  — "The forge vocabulary and policy issue #80/#79 build the write gate on."
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
     test_google_calendar.py  — "`gateway.app.services.google_calendar`, without ever touching Google."
     test_instructions.py  — "`resolve_issue_text` and `build_task_instruction`."
@@ -1062,6 +1063,7 @@ tests/
 - `policy_level_for_mode(mode)`
 - `push_branch_is_allowed(delivery)` — "Whether `delivery.branch` is a branch a pre-authorized push may target."
 - `push_is_preauthorized(request)` — "Whether this request's own `delivery` block authorizes a push."
+- `forge_operation_policy_level(kind)` — "The policy tier a forge operation is classified at -- issue #80/#79."
 - `evaluate_task_policy(request)`
 
 ### `shared/project_discovery.py`
@@ -1097,6 +1099,8 @@ tests/
 - **`ExecutorRegistration`** *(class)*
 - **`DeliveryRequest`** *(class)* — "What the requester authorized the executor to do with git, once a task"
 - **`MaterializeRequest`** *(class)* — "What `ISSUE_MATERIALIZE` asks the executor to write to disk, for one"
+- **`ForgeOperationKind`** *(class)* — "The only things a forge operation may do, per issue #80/#79."
+- **`ForgeOperationRequest`** *(class)* — "One forge operation a `FORGE_OPERATION` envelope may carry."
 - **`SubmitTaskRequest`** *(class)*
 - **`ContinueSessionRequest`** *(class)*
 - **`AgentEnvelope`** *(class)*
@@ -2553,6 +2557,23 @@ tests/
 - `test_main_enrolls_and_writes_the_token(tmp_path, monkeypatch)`
 - `test_main_reports_a_refused_invite_and_writes_nothing(tmp_path, monkeypatch)`
 - `test_main_strips_a_trailing_slash_from_the_gateway_url(monkeypatch, tmp_path)`
+
+### `tests/unit/test_forge_policy.py`
+
+> The forge vocabulary and policy issue #80/#79 build the write gate on.
+
+- `test_issue_list_is_read_and_every_other_kind_is_sensitive()` — "Iterates `ForgeOperationKind` itself, not a literal list of names."
+- `test_every_write_kind_is_sensitive_across_every_plausible_field_combination()` — "The property that must survive any future field added to the request."
+- `test_repo_identity_pattern_accepts_plausible_identities(value)`
+- `test_repo_identity_pattern_rejects_dangerous_or_malformed_identities(value)` — "Mirrors the role `_REMOTE_NAME_PATTERN` plays for git remotes."
+- `test_forge_operation_request_refuses_a_bad_repo_identity_at_parse()`
+- `test_issue_comment_without_issue_number_is_refused_at_parse()`
+- `test_issue_comment_without_a_body_is_refused_at_parse(body)` — "An empty comment is a human decision spent on a no-op."
+- `test_issue_close_without_issue_number_is_refused_at_parse()`
+- `test_issue_open_without_title_is_refused_at_parse()`
+- `test_issue_list_requires_neither_title_nor_issue_number()`
+- `test_state_outside_the_closed_set_is_refused_at_parse()`
+- `test_forge_message_types_exist_and_are_distinct_from_task_dispatch()` — "Sanity check on the two new `AgentMessageType` members this PR adds."
 
 ### `tests/unit/test_git_delivery.py`
 

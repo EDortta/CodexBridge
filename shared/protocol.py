@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Iterable
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 EXECUTOR_TOKEN_HEADER = "X-Executor-Token"
@@ -214,6 +214,17 @@ class AgentMessageType(str, Enum):
     TASK_RESUME = "task.resume"
     TASK_RESTART = "task.restart"
     TASK_CANCELLED = "task.cancelled"
+    # WK-20260902-forge-protocol-and-policy, issue #80/#79. A forge operation
+    # travels as its own envelope pair, deliberately not folded into
+    # `TASK_DISPATCH`/`TASK_RESULT`: a task dispatch is a coding-agent session
+    # that runs inside the provider's sandbox, and a forge operation is the
+    # opposite of that on every axis that matters here -- it runs outside the
+    # sandbox, on the executor process itself, and it is `SENSITIVE` by
+    # construction rather than by what an instruction happens to say (see
+    # `shared.policy.forge_operation_policy_level`). Nothing dispatches or
+    # wires these yet -- this PR is only the vocabulary the wiring will use.
+    FORGE_OPERATION = "forge.operation"
+    FORGE_OPERATION_RESULT = "forge.operation_result"
     ERROR = "error"
     # WK-20260902-issue-materialize / issue #78, Commit 2b. Fire-and-forget,
     # like TASK_DISPATCH -- sent directly by `hub.send` from
@@ -645,6 +656,107 @@ class MaterializeRequest(BaseModel):
     epic_revision: int
     issue_revisions: dict[str, int] = Field(default_factory=dict)
     delivery: DeliveryRequest | None = None
+class ForgeOperationKind(str, Enum):
+    """The only things a forge operation may do, per issue #80/#79.
+
+    Deliberately closed and enumerable -- there is no "run `gh` with
+    arbitrary argv" kind, and no member of this enum, present or future,
+    deletes an issue in any form. That is not an oversight to fill in later;
+    a forge write already happens outside the agent's sandbox, on
+    infrastructure this codebase does not control, in the operator's name --
+    so the surface it can reach is enumerated by hand, once, here, rather
+    than passed through from whatever a caller asks for. A new kind is a
+    deliberate, reviewed addition to this class, never something a caller can
+    request by naming a string this enum does not already have.
+
+    `shared.policy.forge_operation_policy_level` is the other half of this
+    decision: every member here except `ISSUE_LIST` is `SENSITIVE`, and there
+    is no field anywhere that lets a caller change that.
+    """
+
+    ISSUE_OPEN = "issue_open"
+    ISSUE_COMMENT = "issue_comment"
+    ISSUE_LIST = "issue_list"
+    ISSUE_CLOSE = "issue_close"
+
+
+# `owner/repo`, and nothing else -- no leading `-` or `.` on either side (a
+# leading `-` is how a value smuggles itself into flag position in an argv
+# list; see `_REMOTE_NAME_PATTERN`'s own docstring,
+# `agent/codex_bridge_agent/git_delivery.py:47`, for the same reasoning
+# applied to a git remote name), no doubled slash, no `..` anywhere. This
+# plays exactly that role for `ForgeOperationRequest.repo_identity`: the
+# executor's forge module (not written in this PR) will eventually place this
+# string as a positional argument to `gh`, and a value this pattern rejects
+# can never reach that call, because it is validated here, at parse time, on
+# both the gateway and the executor -- the same "one definition, two
+# importers" shape `PUSHABLE_BRANCH_PATTERN` already uses.
+REPO_IDENTITY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+
+
+class ForgeOperationRequest(BaseModel):
+    """One forge operation a `FORGE_OPERATION` envelope may carry.
+
+    WK-20260902-forge-protocol-and-policy, issue #80/#79. This model is shape
+    and coherence validation ONLY -- it decides nothing about whether an
+    operation may run without a human decision. That question belongs to
+    `shared.policy.forge_operation_policy_level`, and its answer for every
+    kind but `ISSUE_LIST` is unconditionally `SENSITIVE`: no combination of
+    the fields below can change that answer. Refusing an incoherent request
+    here, at parse time (a comment/close with no `issue_number`, an open with
+    no `title`), is better than letting it reach the executor and fail there
+    -- the same reasoning `DeliveryRequest` and `PUSHABLE_BRANCH_PATTERN`
+    already apply to push.
+    """
+
+    kind: ForgeOperationKind
+    repo_identity: str = Field(min_length=3, max_length=200)
+    title: str | None = Field(default=None, max_length=256)
+    body: str | None = Field(default=None, max_length=65536)
+    issue_number: int | None = Field(default=None, gt=0)
+    # Only meaningful for `ISSUE_LIST`; validated against a closed set below
+    # regardless of `kind`, since a value outside it is never a real forge
+    # issue state no matter which operation carries it.
+    state: str | None = None
+
+    @field_validator("repo_identity")
+    @classmethod
+    def _validate_repo_identity(cls, value: str) -> str:
+        if not REPO_IDENTITY_PATTERN.match(value):
+            raise ValueError(
+                f"repo_identity {value!r} must look like 'owner/repo' "
+                "(no leading '-'/'.', no doubled slash, no '..')"
+            )
+        return value
+
+    @field_validator("state")
+    @classmethod
+    def _validate_state(cls, value: str | None) -> str | None:
+        allowed = {"open", "closed", "all"}
+        if value is not None and value not in allowed:
+            raise ValueError(f"state must be one of {sorted(allowed)}, got {value!r}")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_kind_requires_its_fields(self) -> "ForgeOperationRequest":
+        """Refusing at parse time beats failing on the executor.
+
+        `issue_comment`/`issue_close` name an existing issue; without
+        `issue_number` there is nothing to comment on or close.
+        `issue_open` creates one; without `title` there is nothing to open.
+        `issue_comment` additionally needs a non-empty `body`: `gh issue
+        comment` requires one, and an empty comment is an approved SENSITIVE
+        write that publishes nothing -- a human decision spent on a no-op.
+        """
+        if self.kind in (ForgeOperationKind.ISSUE_COMMENT, ForgeOperationKind.ISSUE_CLOSE):
+            if self.issue_number is None:
+                raise ValueError(f"{self.kind.value} requires issue_number")
+        if self.kind is ForgeOperationKind.ISSUE_COMMENT and not self.body:
+            raise ValueError("issue_comment requires a non-empty body")
+        if self.kind is ForgeOperationKind.ISSUE_OPEN:
+            if not self.title:
+                raise ValueError("issue_open requires title")
+        return self
 
 
 class SubmitTaskRequest(BaseModel):

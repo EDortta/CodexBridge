@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from shared.protocol import DeliveryRequest, PolicyLevel, PUSHABLE_BRANCH_PATTERN, SubmitTaskRequest, TaskMode
+from shared.protocol import (
+    DeliveryRequest,
+    ForgeOperationKind,
+    PolicyLevel,
+    PUSHABLE_BRANCH_PATTERN,
+    SubmitTaskRequest,
+    TaskMode,
+)
 
 
 SENSITIVE_KEYWORDS = (
@@ -60,6 +67,56 @@ def push_is_preauthorized(request: SubmitTaskRequest) -> bool:
     """
     delivery = request.delivery
     return bool(delivery is not None and delivery.allow_push and push_branch_is_allowed(delivery))
+
+
+def forge_operation_policy_level(kind: ForgeOperationKind) -> PolicyLevel:
+    """The policy tier a forge operation is classified at -- issue #80/#79.
+
+    `ISSUE_LIST` is `READ`: it costs the forge nothing and changes nothing.
+    Every write kind -- `ISSUE_OPEN`, `ISSUE_COMMENT`, `ISSUE_CLOSE` -- is
+    `SENSITIVE`, unconditionally, for every value of every field on
+    `ForgeOperationRequest`.
+
+    This is the single most important thing in this module, so read it
+    before adding anything near this function. There is deliberately no
+    `forge_operation_is_preauthorized` sibling to `push_is_preauthorized`
+    above, and there must never be one added by analogy. `push_is_preauthorized`
+    exists because push already had a typed, narrow shape --
+    `DeliveryRequest.allow_push` plus `PUSHABLE_BRANCH_PATTERN` -- before
+    pre-authorization was layered onto it; the field predates the bypass, and
+    the bypass is scoped to exactly what that field already meant. Reaching
+    for the same shape here -- "a forge write needs its own
+    `allow_forge_write` flag the way push needed `allow_push`" -- is exactly
+    the mistake this function exists to head off. No field on
+    `ForgeOperationRequest`, present or future, may let a write skip the
+    human approval gate.
+
+    `delivery.allow_push` already establishes the pattern this follows:
+    `evaluate_task_policy` forces `SENSITIVE` for it "whether or not the word
+    push ever appears in instruction" -- a structural classification, not a
+    textual one. A forge write is `SENSITIVE` the same way, structurally, and
+    for a stronger reason than push has: the credential that performs it
+    never enters the agent's sandbox at all
+    (WK-20260902-forge-protocol-and-policy -- the sandbox has no network,
+    tested empirically on devel3 on 2026-09-01, so forge writes run on the
+    EXECUTOR process, outside the sandbox, and the credential stays there).
+    A forge write is also a published, third-party-visible act -- an issue
+    opened, a comment posted, an issue closed -- made in the operator's name
+    on infrastructure this codebase does not control. There is no request
+    shape trusted enough to skip a human seeing it first.
+
+    If a future change wants to narrow which forge writes need approval, it
+    must not live here as a bypass function: `forge_operation_policy_level`
+    returning `SENSITIVE` for every kind but `ISSUE_LIST` is the whole
+    guarantee. `tests/unit/test_forge_policy.py` iterates
+    `ForgeOperationKind` by the enum itself, not a literal list, and asserts
+    this property exhaustively over field combinations for every write kind,
+    so it fails the moment a new kind or a new field quietly earns an
+    exception.
+    """
+    if kind is ForgeOperationKind.ISSUE_LIST:
+        return PolicyLevel.READ
+    return PolicyLevel.SENSITIVE
 
 
 def evaluate_task_policy(request: SubmitTaskRequest) -> PolicyDecision:
