@@ -13,6 +13,7 @@ from gateway.app.models.entities import (
     ConversationMessageModel,
     ConversationModel,
     ConversationReadStateModel,
+    DiscoveredResourceModel,
     EpicModel,
     ExecutorModel,
     IssueModel,
@@ -21,6 +22,7 @@ from gateway.app.models.entities import (
     OAuthAccessTokenModel,
     OAuthAuthorizationCodeModel,
     OAuthRefreshTokenModel,
+    ProjectAuthorizationModel,
     ProjectModel,
     TaskLogModel,
     TaskModel,
@@ -46,6 +48,8 @@ from shared.protocol import (
     ApprovalDecision,
     DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
     DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
+    DiscoveredState,
+    DiscoveryReport,
     ExecutorRegistration,
     NodeAnnouncement,
     PolicyLevel,
@@ -582,6 +586,161 @@ async def record_node_announcement(
     await session.commit()
     await session.refresh(node)
     return node
+
+
+async def record_discovery_report(
+    session: AsyncSession,
+    executor: ExecutorModel,
+    report: DiscoveryReport,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Persist one root's `DiscoveryReport` into `discovered_resources` -- and nothing else.
+
+    Issue #73 Stage 3. This is what makes "the node proposes, the panel
+    adopts" true by CONSTRUCTION rather than by convention: this function
+    never imports, queries for write, or assigns to
+    `ProjectAuthorizationModel`, `ProjectModel`, or `WorkspaceBindingModel`.
+    A node reporting a directory can therefore never, through this code path,
+    grant itself -- or anything else -- capability over it. See
+    `tests/unit/test_discovery_store.py::
+    test_record_discovery_report_never_writes_authorization_or_projects` for
+    the property this preserves, not just the intent.
+
+    Reconciliation, scoped to `(node.id, "project", report.root_path)` --
+    everything this node has ever reported for THIS root, never another root
+    or another node's rows:
+
+    * a `resource_key` not seen before is INSERTed with
+      `state=DISCOVERED`, `first_seen_at=last_seen_at=now`;
+    * a `resource_key` already on file has its `evidence_json` and
+      `last_seen_at` refreshed, and its `state` is left exactly as it is --
+      a repeated observation is not a new operator decision, so an `ADOPTED`
+      or `AUTHORIZED` row must not regress to `DISCOVERED` just because the
+      node reconnected and reported the same directory again
+      (`docs/control-plane.md`);
+    * a row for THIS root that is NOT in the current report, and whose state
+      is not `DENIED`, becomes `STALE` -- last observed, not currently seen;
+    * `DENIED` is a standing operator decision and is never written to by
+      observation, in either direction: a denied candidate does not regress
+      to the adoption queue on reconnect (`docs/control-plane.md`: "candidato
+      recusado volta à fila de adoção a cada reconexão" is exactly the bug
+      this refusal prevents), and it does not have its evidence refreshed
+      either -- the row simply stops moving once an operator has decided;
+    * a `STALE` row that reappears in a report does not default back to
+      `DISCOVERED` if the operator's earlier decision on it is still on
+      file -- see `_revive_stale_discovery_row`.
+
+    Batched, not one round trip per candidate: ONE `select` loads every
+    existing row for this `(node_id, root_path)` up front, the loop below
+    only mutates ORM objects in memory (`session.add`/attribute assignment,
+    neither of which issues SQL by itself), and there is exactly ONE
+    `commit`. A report of 247 candidates -- the real root that motivated this
+    work -- costs one query and one commit, not 247 of either.
+    """
+    node = await ensure_node_for_executor(session, executor)
+    now = now or datetime.now(timezone.utc)
+
+    existing = list(
+        (
+            await session.execute(
+                select(DiscoveredResourceModel).where(
+                    DiscoveredResourceModel.node_id == node.id,
+                    DiscoveredResourceModel.kind == "project",
+                    DiscoveredResourceModel.root_path == report.root_path,
+                )
+            )
+        ).scalars()
+    )
+    by_key = {row.resource_key: row for row in existing}
+    reported_keys: set[str] = set()
+
+    for candidate in report.candidates:
+        reported_keys.add(candidate.resource_key)
+        row = by_key.get(candidate.resource_key)
+        if row is not None and row.state == DiscoveredState.DENIED.value:
+            # A denial is the operator's decision, not a fact the node can
+            # overwrite by continuing to see the directory. Skipped entirely
+            # -- not even evidence/last_seen_at move -- so a denied row stops
+            # changing the moment it is denied.
+            continue
+
+        evidence = json.dumps(
+            {
+                "suggested_project_id": candidate.suggested_project_id,
+                "suggested_name": candidate.suggested_name,
+                "remote_url": candidate.remote_url,
+                "head": candidate.head,
+                "dirty": candidate.dirty,
+            },
+            ensure_ascii=True,
+        )
+
+        if row is None:
+            session.add(
+                DiscoveredResourceModel(
+                    id=str(uuid4()),
+                    node_id=node.id,
+                    kind="project",
+                    resource_key=candidate.resource_key,
+                    evidence_json=evidence,
+                    state=DiscoveredState.DISCOVERED.value,
+                    root_path=report.root_path,
+                    first_seen_at=now,
+                    last_seen_at=now,
+                )
+            )
+            continue
+
+        row.evidence_json = evidence
+        row.last_seen_at = now
+        if row.state == DiscoveredState.STALE.value:
+            await _revive_stale_discovery_row(session, row)
+        # Any other state (DISCOVERED/ADOPTED/AUTHORIZED) stays exactly as it
+        # is -- see this function's own docstring.
+
+    for row in existing:
+        if row.resource_key in reported_keys:
+            continue
+        if row.state == DiscoveredState.DENIED.value:
+            continue
+        row.state = DiscoveredState.STALE.value
+
+    await session.commit()
+
+
+async def _revive_stale_discovery_row(session: AsyncSession, row: DiscoveredResourceModel) -> None:
+    """What a `STALE` row becomes when the node reports it again.
+
+    Not unconditionally `DISCOVERED`: if the operator had already adopted or
+    authorized this resource before the node stopped reporting it, that
+    decision must survive the gap, not be forgotten because the row briefly
+    went `STALE`. `row.project_id` is set by the adoption work that follows
+    this PR, never by anything in this file -- so this function's first
+    branch (`DISCOVERED`) is the only one reachable from code that exists
+    today. The rest is written now because the row it operates on already
+    exists today, and a row this function would get wrong later is a bug
+    nobody would think to test until it reappeared.
+    """
+    if row.project_id is None:
+        row.state = DiscoveredState.DISCOVERED.value
+        return
+    authorization = (
+        (
+            await session.execute(
+                select(ProjectAuthorizationModel).where(
+                    ProjectAuthorizationModel.node_id == row.node_id,
+                    ProjectAuthorizationModel.project_id == row.project_id,
+                    ProjectAuthorizationModel.revoked_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    row.state = (
+        DiscoveredState.AUTHORIZED.value if authorization is not None else DiscoveredState.ADOPTED.value
+    )
 
 
 async def list_nodes(session: AsyncSession) -> list[tuple[NodeModel, ExecutorModel | None]]:

@@ -13,17 +13,21 @@ import websockets
 
 from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects, resolve_auto_project
 from agent.codex_bridge_agent.git_delivery import deliver_changes
+from agent.codex_bridge_agent.git_tools import run_git
 from agent.codex_bridge_agent.instructions import IssueResolutionError, build_task_instruction, resolve_issue_text
 from agent.codex_bridge_agent.runners.base import EngineNotImplementedError
 from agent.codex_bridge_agent.runners.codex import SANDBOX_READ_ONLY, SANDBOX_WORKSPACE_WRITE
 from agent.codex_bridge_agent.runners.pool import RunnerPool
 from shared.policy import evaluate_task_policy
+from shared.project_discovery import build_project_id_index
 from shared.protocol import (
     EXECUTOR_TOKEN_HEADER,
     AgentEnvelope,
     AgentMessageType,
     Capability,
     DeliveryRequest,
+    DiscoveredCandidate,
+    DiscoveryReport,
     NodeAnnouncement,
     PolicyLevel,
     SubmitTaskRequest,
@@ -42,6 +46,29 @@ logger = logging.getLogger(__name__)
 # package is introduced to get this value: it stays a plain constant local to
 # the agent, exactly as it always was.
 AGENT_VERSION = "0.1.0"
+
+# Issue #73 Stage 3 (`_scan_root` below). Depth cap for the discovery walk,
+# same value `resolve_auto_project` already defaults to -- one number, so a
+# monorepo's submodules are still found (CLAUDE.md's own "monorepo e
+# submodulos" rule) without an unbounded walk on a root that turns out to be
+# far larger or far deeper than an operator expected.
+_DISCOVERY_MAX_DEPTH = 6
+
+# How many repositories `_scan_root` probes with `git` at once. The walk
+# itself runs in a thread executor because it is blocking filesystem I/O; the
+# per-repository `git` calls below are already async subprocesses that do not
+# block the event loop, but launching all of them for a root with hundreds of
+# candidates (247, in the root that motivated this work) at the same instant
+# would still be a burst of process spawns competing with the heartbeat and
+# dispatch loops for scheduling. A modest bound smooths that out without
+# meaningfully slowing an interval measured in the thousands of seconds.
+_DISCOVERY_GIT_CONCURRENCY = 8
+
+# Per-`git` invocation ceiling during a scan. Not the whole-scan budget --
+# `_discovery_loop`'s own interval is that -- just a guard against one
+# corrupted repository (a `.git` that exists but hangs `git` indefinitely)
+# stalling the rest of a root's candidates behind it.
+_DISCOVERY_GIT_TIMEOUT_SECONDS = 10.0
 
 
 BASE_PROMPT = (
@@ -119,6 +146,7 @@ class AgentService:
                 self._envelope(AgentMessageType.HELLO, announcement.model_dump(mode="json")).model_dump_json()
             )
             heartbeat_task = asyncio.create_task(self._heartbeat_loop(websocket))
+            discovery_task = asyncio.create_task(self._discovery_loop(websocket))
             try:
                 async for raw in websocket:
                     envelope = AgentEnvelope.model_validate_json(raw)
@@ -192,11 +220,119 @@ class AgentService:
                         )
             finally:
                 heartbeat_task.cancel()
+                discovery_task.cancel()
 
     async def _heartbeat_loop(self, websocket) -> None:
         while True:
             await websocket.send(self._envelope(AgentMessageType.HEARTBEAT, {}).model_dump_json())
             await asyncio.sleep(self.settings.heartbeat_interval_seconds)
+
+    async def _discovery_loop(self, websocket) -> None:
+        """Issue #73 Stage 3: this node's own periodic filesystem scan.
+
+        Started the same way `_heartbeat_loop` is -- its own task, alongside
+        it -- and deliberately independent of it: `AgentSettings.
+        discovery_scan_interval_seconds` defaults to an hour, not 15 seconds,
+        because a real scan (`build_project_id_index`, walking a real
+        operator root of 247 repositories) is not something to repeat on a
+        heartbeat's cadence, and running it on this loop's own task means a
+        slow scan can never delay a heartbeat or a dispatch either.
+
+        A no-op when `discovery_roots` is empty (the default): no task work,
+        no scan, no message -- exactly today's behaviour for every operator
+        who has not opted in, the same posture `AgentSettings.
+        auto_project_root` already takes.
+
+        One `DISCOVERY_REPORT` envelope PER ROOT, sent as soon as that root's
+        scan finishes rather than batched into one message for every root:
+        see `DiscoveryReport`'s own docstring for why. A scan runs once
+        immediately (this method's own first loop iteration, before the
+        first `sleep`) so a freshly connected node does not wait a full
+        interval to report what it already knows the moment it reconnects.
+        """
+        if not self.settings.discovery_roots:
+            return
+        while True:
+            for root in self.settings.discovery_roots:
+                report = await self._scan_root(root)
+                if report is None:
+                    continue
+                await websocket.send(
+                    self._envelope(AgentMessageType.DISCOVERY_REPORT, report.model_dump(mode="json")).model_dump_json()
+                )
+            await asyncio.sleep(self.settings.discovery_scan_interval_seconds)
+
+    async def _scan_root(self, root: str) -> DiscoveryReport | None:
+        """One root's worth of `DiscoveryReport`, or `None` if the scan itself failed.
+
+        Reuses `shared.project_discovery.build_project_id_index` -- itself
+        built from `walk_for_git_repos` and `suggest_project_id` -- rather
+        than walking the filesystem a second, independent way: the same
+        reasoning that module's own docstring gives for
+        `resolve_auto_project` sharing it applies here, and it is what makes
+        `resource_key` (the absolute path) and `suggested_project_id` agree
+        with what `scripts/discover_projects.py` would show an operator for
+        the same directory.
+
+        The walk itself is blocking filesystem I/O, run in the default
+        executor so it cannot stall the heartbeat or dispatch loops running
+        on the same event loop -- the whole reason this method, and not
+        `_discovery_loop` itself, is the unit that gets awaited per root.
+
+        `root_path` on the returned report is the STRING `root` was passed
+        in as, never the resolved path `build_project_id_index` computes
+        internally -- see `DiscoveryReport.root_path`'s own docstring for why
+        that distinction matters to the operator-side match this feeds.
+        """
+        loop = asyncio.get_running_loop()
+        try:
+            index = await loop.run_in_executor(None, build_project_id_index, Path(root), _DISCOVERY_MAX_DEPTH)
+        except Exception:
+            logger.warning("discovery scan failed for root %r", root, exc_info=True)
+            return None
+
+        semaphore = asyncio.Semaphore(_DISCOVERY_GIT_CONCURRENCY)
+
+        async def _probe(project_id: str, repo_dir: Path) -> DiscoveredCandidate:
+            async with semaphore:
+                remote_url = await self._git_value(repo_dir, "remote", "get-url", "origin")
+                head = await self._git_value(repo_dir, "rev-parse", "HEAD")
+                dirty = await self._git_dirty(repo_dir)
+            return DiscoveredCandidate(
+                resource_key=str(repo_dir),
+                suggested_project_id=project_id,
+                suggested_name=repo_dir.name,
+                remote_url=remote_url,
+                head=head,
+                dirty=dirty,
+            )
+
+        candidates = await asyncio.gather(*(_probe(project_id, path) for project_id, path in index.items()))
+        return DiscoveryReport(root_path=root, candidates=list(candidates), scanned_at=datetime.now(timezone.utc))
+
+    @staticmethod
+    async def _git_value(repo_dir: Path, *args: str) -> str | None:
+        """One `git` field, or `None` on any non-zero exit -- including "no such remote".
+
+        `git remote get-url origin` exits non-zero when a repository simply
+        has no `origin` configured, which is the ordinary case for plenty of
+        legitimate local repositories, not a fault
+        (`DiscoveredCandidate.remote_url`'s own docstring). Reusing the same
+        helper for `rev-parse HEAD` treats a HEAD that cannot be read (an
+        empty repository with no commits yet) the same forgiving way.
+        """
+        code, out, _ = await run_git(repo_dir, *args, timeout_seconds=_DISCOVERY_GIT_TIMEOUT_SECONDS)
+        if code != 0:
+            return None
+        value = out.strip()
+        return value or None
+
+    @staticmethod
+    async def _git_dirty(repo_dir: Path) -> bool | None:
+        code, out, _ = await run_git(repo_dir, "status", "--porcelain", timeout_seconds=_DISCOVERY_GIT_TIMEOUT_SECONDS)
+        if code != 0:
+            return None
+        return bool(out.strip())
 
     async def _handle_dispatch(self, websocket, envelope: AgentEnvelope) -> None:
         task_id = envelope.payload["task_id"]
@@ -373,12 +509,18 @@ class AgentService:
         authorized, I am configured to attempt writes", not "I may write to
         anything".
 
-        `discovery_root_count`: the agent has no local `DiscoveryRoot` list to
-        count (`auto_project_root` is a single optional path, not a list --
-        see `AgentSettings.auto_project_root`'s own docstring), so this
-        reports 1 when that single opt-in root is set and 0 otherwise, rather
-        than inventing a new setting to carry a count `AgentSettings` does not
-        otherwise track.
+        `discovery_root_count`: as of issue #73 Stage 3, `len(self.settings.
+        discovery_roots)` -- the node's own scan-root list
+        (`AgentSettings.discovery_roots`, this method's caller,
+        `_discovery_loop`). Deliberately NOT `auto_project_root`: that path
+        never produces a `DiscoveryReport` or any other message to the
+        gateway -- it only widens which `project_id` values a dispatch may
+        resolve to locally (`AgentSettings.auto_project_root`'s own
+        docstring) -- so counting it here would answer "is this node
+        configured to discover anything at all" with a number the gateway
+        can never observe evidence for. Stage 2 counted it anyway, as a
+        stand-in, because no real list existed yet to count; its own
+        docstring said as much and predicted this replacement.
 
         Never allowed to raise past this method: building the announcement
         must not cost the connection. Any exception here (a runner's `probe`
@@ -400,10 +542,9 @@ class AgentService:
                 engines=await self.runners.probe_all(),
                 capabilities=capabilities,
                 max_concurrent_tasks=self.settings.max_concurrent_tasks,
-                # See this method's own docstring: no local list of discovery
-                # roots exists to count, so the single opt-in
-                # `auto_project_root` collapses to 0 or 1.
-                discovery_root_count=1 if self.settings.auto_project_root else 0,
+                # See this method's own docstring: the node's own scan-root
+                # count, not `auto_project_root` (a different valve entirely).
+                discovery_root_count=len(self.settings.discovery_roots),
             )
         except Exception:
             logger.warning("Failed to build full node announcement; sending minimal fallback", exc_info=True)

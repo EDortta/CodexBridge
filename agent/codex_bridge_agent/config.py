@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import BaseModel, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseModel, Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from shared.project_discovery import build_project_id_index
 from shared.protocol import ProjectRegistration
@@ -39,6 +40,35 @@ class AgentSettings(BaseSettings):
     # explicit list leaves it unset and keeps using `allowed_projects_file`
     # alone, exactly as before this setting existed.
     auto_project_root: str | None = None
+    # WK-20260902-gh73-discovery-report, issue #73 Stage 3. The directory
+    # trees THIS node scans for git repositories to propose as discovery
+    # candidates -- empty by default, so an operator who never sets it keeps
+    # today's behaviour exactly: no scan loop starts at all
+    # (`AgentService._discovery_loop`).
+    #
+    # NOT `shared.protocol.ExecutorRegistration.discovery_roots`, even though
+    # the names and the `path` strings must line up for the two to cooperate.
+    # That one is the OPERATOR's registry entry (on the gateway) saying what a
+    # tree grants automatically once something is reported under it. This one
+    # is the NODE's own decision about which parts of ITS filesystem it is
+    # willing to walk at all -- only the node can make that call, because only
+    # the node has the filesystem. A discovery report never grants anything by
+    # itself either way (`gateway/app/services/store.py:record_discovery_report`);
+    # this setting only controls what gets PROPOSED, never what gets AUTHORIZED.
+    #
+    # A plain comma-separated string in the environment, like every other
+    # list-shaped setting in this codebase (`Settings.mcp_bearer_tokens`,
+    # `.oauth_allowed_client_ids`, ...) -- pydantic-settings would otherwise
+    # require JSON-encoding a `list[str]` env var, which nothing else here
+    # does. See `_split_comma_separated` below.
+    discovery_roots: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Own interval, deliberately not derived from or coupled to
+    # `heartbeat_interval_seconds`: a filesystem walk over a real operator
+    # root (247 repositories, in the root that motivated this work) is not
+    # something to repeat every 15 seconds, and `_discovery_loop` runs as its
+    # own task precisely so a slow scan can never delay a heartbeat or a
+    # dispatch. One scan right after HELLO, then one every this-many seconds.
+    discovery_scan_interval_seconds: int = 3600
     codex_bin: str = "codex"
     # WK-20260830-chatgpt-entry-provider-and-delivery, issue #41a.
     claude_bin: str = "claude"
@@ -72,6 +102,22 @@ class AgentSettings(BaseSettings):
     git_push_timeout_seconds: float = 120
 
     model_config = SettingsConfigDict(env_prefix="CODEX_BRIDGE_AGENT_", env_file=".env")
+
+    @field_validator("discovery_roots", mode="before")
+    @classmethod
+    def _split_comma_separated(cls, value: object) -> object:
+        """Accept `CODEX_BRIDGE_AGENT_DISCOVERY_ROOTS=/a,/b` from the environment.
+
+        pydantic-settings parses a `list[str]` field from the environment as
+        JSON by default, which is not how any other list-shaped setting in
+        this codebase is written (`.env.example` uses plain comma-separated
+        values throughout). Runs only when the raw value is a string --
+        constructing `AgentSettings(discovery_roots=[...])` directly, as the
+        tests do, is untouched.
+        """
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
 
 class AgentProjectConfig(BaseModel):

@@ -169,7 +169,12 @@ by the contract itself, not by a filter applied late:
   the contents of `users.json` or `registry.json`;
 - **server filesystem paths.** `ProjectModel.path` is the canonical trap: it is
   the project's real path on the executor and it is an internal field. Projects
-  are addressed by `ProjectId` and nothing else;
+  are addressed by `ProjectId` and nothing else. Same category, same rule:
+  `WorkspaceBindingModel.local_path` (issue #73) and
+  `DiscoveredResourceModel.resource_key` (issue #73 Stage 3) — the latter IS
+  the candidate's absolute path on the node, not a project id
+  (`docs/control-plane.md`, "`resource_key` é dado sensível"). Both are
+  operator-surface-only, exactly like `ProjectModel.path`;
 - executor hostnames, internal IPs, ports, or anything that would let a client
   reach an executor without going through the gateway;
 - raw stack traces and raw driver errors. These map to `internal_error` plus a

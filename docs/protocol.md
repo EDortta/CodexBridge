@@ -95,6 +95,7 @@ Mensagens (`AgentMessageType` em `shared/protocol.py`):
 * `task.restart`
 * `task.cancelled`
 * `error`
+* `discovery.report`
 
 Não existe mensagem `task.progress`. O progresso é inferido pelo fluxo de
 `task.log`, cada uma com `offset` incremental.
@@ -130,6 +131,83 @@ a configuração da máquina permitiria, nunca uma concessão sobre projeto — 
 ...}`. O gateway lê essa forma como `agent_version` e um payload que não valide
 gera `WARNING` e **não derruba a conexão** — um gateway que desliga o agente da
 release anterior transforma deploy em interrupção.
+
+### Payload de `discovery.report`: `DiscoveryReport`
+
+Issue #73 Stage 3. Um nó com `AgentSettings.discovery_roots` configurado (por
+padrão, vazio — nenhum comportamento novo sem opt-in) varre cada raiz num laço
+próprio (`AgentService._discovery_loop`, intervalo
+`discovery_scan_interval_seconds`, padrão 3600s), **desacoplado do
+heartbeat de 15s**: uma varredura real (247 repositórios, na raiz que motivou
+este trabalho) não é algo para repetir a cada 15 segundos, nem algo que possa
+atrasar um heartbeat ou um despacho.
+
+**Uma mensagem por raiz, nunca um payload único para todas as raízes** — uma
+raiz lenta ou incomumente grande não pode atrasar o relatório de nenhuma
+outra:
+
+```json
+{
+  "root_path": "/home/esteban/Sync/Projects",
+  "candidates": [
+    {
+      "resource_key": "/home/esteban/Sync/Projects/AI/CodexBridge",
+      "suggested_project_id": "codexbridge",
+      "suggested_name": "CodexBridge",
+      "remote_url": "git@github.com:example/codexbridge.git",
+      "head": "a1b2c3d",
+      "dirty": false
+    }
+  ],
+  "scanned_at": "2026-09-02T18:00:00Z"
+}
+```
+
+Deliberadamente **separada** de `NodeAnnouncement`/`hello`, não um campo a
+mais nele: o `hello` é pequeno e viaja a cada reconexão; um relatório de
+descoberta pode carregar centenas de candidatos, e misturar os dois faria
+toda reconexão arrastar esse inventário inteiro junto — ver o próprio
+docstring de `DiscoveryReport` em `shared/protocol.py`.
+
+`resource_key` é o path absoluto do candidato no nó — dado sensível, na mesma
+categoria de `workspace_bindings.local_path`
+(`docs/control-plane.md`, `docs/api/README.md` "Fields that must never
+ship"). Deliberadamente **não** é `suggested_project_id`:
+`suggest_project_id` só garante unicidade dentro da varredura de uma raiz, e
+duas raízes varridas de forma independente podem sugerir o mesmo id para
+dois diretórios diferentes — o que de fato identifica uma linha em
+`discovered_resources` é o path.
+
+`remote_url` vem de `git remote get-url origin`; ausência de `origin`
+configurado não é erro, vira `None`.
+
+`root_path` é exatamente a string configurada em
+`AgentSettings.discovery_roots` no nó, nunca resolvida/expandida — ela
+precisa casar, caractere a caractere, com o `DiscoveryRoot.path` que o
+operador configura no lado do gateway (`ExecutorRegistration.
+discovery_roots`, consumido pela PR de adoção que segue este trabalho), que
+por sua vez também nunca é resolvido (`DiscoveryRoot.path`'s próprio
+docstring): o gateway não enxerga o disco do nó.
+
+**Recepção no gateway:** o laço de `/agent/ws` (`gateway/app/main.py`) chama
+**apenas** `store.record_discovery_report(session, executor, report)`, que
+escreve **apenas** em `discovered_resources` — nunca em
+`project_authorizations`, `projects` ou `workspace_bindings`. Isso é o que
+torna "o nó propõe, o painel adota" verdade **por construção**: o caminho que
+recebe uma descoberta não tem, no código, nenhum jeito de conceder
+autorização. As regras de reconciliação de estado (candidato novo, candidato
+já visto, ausência, `DENIED`, `STALE` que reaparece) estão em
+`docs/control-plane.md`.
+
+Mesma postura tolerante do `hello`: um payload que não valida como
+`DiscoveryReport` gera `WARNING` e é descartado — a conexão **nunca** é
+derrubada por um relatório malformado, e o guard de identidade
+(`envelope.executor_id` reivindicado vs. autenticado no handshake, "Identidade:
+o handshake manda, o envelope não" acima) já cobre este tipo de mensagem
+também, por estar antes de qualquer branch, não dentro de um.
+
+**Nenhuma rota REST lê `discovered_resources` ainda** — listar e decidir
+candidatos é a próxima PR.
 
 
 Campos comuns:
