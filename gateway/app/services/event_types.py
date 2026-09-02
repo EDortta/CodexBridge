@@ -181,6 +181,14 @@ _STATIC_MAPPING: dict[str, tuple[str, str]] = {
     # mobile client that never heard about it would show a plan that quietly
     # stopped being true.
     "epic.updated": ("epic.updated", ENTITY_KIND_EPIC),
+    # WK-20260902-issue-materialize: publishing an epic to the project's own
+    # repository is a state change the operator started from another client
+    # and finishes minutes later, on a machine they are not watching --
+    # exactly the shape the event stream exists for. The failure is
+    # delivered too: a publish that silently did nothing is the outcome a
+    # client most needs to hear about.
+    "epic.materialized": ("epic.materialized", ENTITY_KIND_EPIC),
+    "epic.materialize_failed": ("epic.materialize_failed", ENTITY_KIND_EPIC),
     "issue.created": ("issue.created", ENTITY_KIND_ISSUE),
     "issue.updated": ("issue.updated", ENTITY_KIND_ISSUE),
     "issue.linked_to_epic": ("issue.linked_to_epic", ENTITY_KIND_ISSUE),
@@ -426,6 +434,14 @@ def _epic_updated(payload: dict, redact) -> str:
     return f"Epic updated; status {_enum(payload, 'status')}."
 
 
+def _epic_materialized(payload: dict, redact) -> str:
+    return "Epic published to the project's repository."
+
+
+def _epic_materialize_failed(payload: dict, redact) -> str:
+    return "Publishing the epic to the project's repository failed."
+
+
 def _issue_created(payload: dict, redact) -> str:
     return f"Issue created with status {_enum(payload, 'status')}."
 
@@ -470,6 +486,8 @@ _SUMMARY_BUILDERS = {
     "decision.resolved_by_actor": _decision_resolved_by_actor,
     "epic.created": _epic_created,
     "epic.updated": _epic_updated,
+    "epic.materialized": _epic_materialized,
+    "epic.materialize_failed": _epic_materialize_failed,
     "issue.created": _issue_created,
     "issue.updated": _issue_updated,
     "issue.linked_to_epic": _issue_linked_to_epic,
