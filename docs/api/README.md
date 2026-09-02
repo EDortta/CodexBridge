@@ -86,9 +86,19 @@ read a single `requestBody` or `responses` block. An endpoint that returns a
 shape this document does not describe — FastAPI's default `{"detail": ...}` with
 HTTP 422, for instance, which matches no field of `Error` — passes this gate.
 
-Body-level conformance is issue #14's scope. Until it lands, read a green run as
-*"the same endpoints exist on both sides"*, never as *"the implementation matches
-the contract"*.
+Body-level conformance is a **separate** gate,
+`tests/contract/test_declared_examples_are_real.py` (issue #14). It validates
+live response bodies against the schemas declared here, checks that no response
+carries a top-level field this document omits, and checks every declared example
+against the schema it illustrates. It reaches only what it can drive without a
+credential — the operations that declare `security: []` — so **authenticated
+endpoints' bodies are still unchecked against this document**; they are covered
+in `tests/integration` against expectations written in Python, which is the
+weaker form, because two independent statements of one contract drift.
+
+Read a green route-drift run as *"the same endpoints exist on both sides"*,
+never as *"the implementation matches the contract"*. `docs/api/testing.md`
+has the table of which gate guards which pair.
 
 ---
 
@@ -103,8 +113,25 @@ The public namespace is `/api/v1`.
   patch versions move within a namespace.
 - **Every change to the document moves `info.version`.** A client that pins
   `1.0.0` must receive the same bytes tomorrow; leaving the version still while
-  the content changes is what makes a pin meaningless. Nothing enforces this
-  today — see "Getting the contract to the mobile repository".
+  the content changes is what makes a pin meaningless.
+- `x-minimum-supported-version` names the oldest **published** version this
+  build still promises to serve. `scripts/check_contract_compatibility.py`
+  compares the working document against the published copy of that version and
+  fails the build on any change the next section forbids. Raising the floor
+  drops the promise to every client still on the older pin, and needs the same
+  conversation with the mobile team that a deprecation does — so it must be the
+  oldest published version unless `x-minimum-supported-version-raised` records
+  why not, naming the mobile release that stopped using it. That is not
+  bureaucracy: raising the floor is also the cheapest way to silence this gate
+  permanently, and a one-line diff should not be able to do that unremarked.
+
+What is enforced, and what is still on trust: the digest of a published version
+is enforced (a version edited after publication fails
+`tests/contract/test_published_contract_artifact.py`), and so is the absence of
+a mechanically visible break against the floor. **`info.version` moving on every
+change is not enforced** — a byte change with the version left still fails the
+publish check, which is satisfied by republishing under the same number. See
+"Getting the contract to the mobile repository".
 
 ### The `/api/version` carve-out
 
@@ -128,10 +155,27 @@ stop working because of it:
 - renaming anything, in either direction;
 - narrowing a type, tightening a constraint (`maxLength`, `pattern`, `required`),
   or making an optional request field required;
+- **a field of a *response* leaving that schema's `required` list.** A generated
+  client makes a required field non-nullable and reads it unconditionally, so
+  "it might not be there now" breaks it. On a request-only schema the same edit
+  is a relaxation — the gate reports both and names the direction, because a
+  JSON pointer cannot tell which a shared schema is, and most here are shared;
+- **changing a `default`.** A client that omits the field gets different
+  behaviour with no code change on either side and no error to notice;
+- **changing which credential an operation accepts** — a different scheme, or a
+  scope a client's token does not carry. An endpoint that stops being
+  unauthenticated is the same rule at its limit;
+- **requiring a request body where the operation accepted none**, or pointing an
+  operation at an already-required component parameter;
 - changing the meaning of an existing field while keeping its name and type
   — the most dangerous kind, because no schema diff catches it;
 - changing the HTTP status or the `code` returned for an existing failure;
 - changing default sort order, or the identity/lifetime of a pagination cursor.
+
+The five bold rules were added by issue #14 alongside the gate that enforces
+them. They were always true; nothing stated them, so nothing could be held to
+them. `scripts/check_contract_compatibility.py` transcribes **this** list, and
+`docs/api/testing.md` records which of these it can and cannot see.
 
 ### What is not breaking
 
@@ -1196,16 +1240,38 @@ python3 scripts/apply_migrations.py
 
 ## Getting the contract to the mobile repository
 
-Today there is none: the document lives in this repository and a consumer copies
-it by hand. Nothing publishes it, nothing checksums it, and nothing detects that
-a copy has diverged — so the drift gate protects the *gateway ↔ document* pair
-and leaves the *document ↔ mobile client* pair, which is the pair this epic
-exists for, unguarded.
+`scripts/publish_contract.py` writes the document to `contract/<version>/` with
+a `manifest.json` carrying its SHA-256, and refreshes `contract/index.json`. The
+mechanics, the consumer-side fetch-and-verify commands and the immutability rule
+are in **[`testing.md`](./testing.md)**.
 
-That gap is issue #14's scope ("publish a machine-consumable contract artifact
-for the mobile project", "the mobile repository can consume a pinned contract
-version"). It is recorded here rather than left implicit so that nobody reads
-the `info.version` field as a working pin before #14 lands.
+**The producing half is done; the consuming half is not.** This repository now
+publishes a pinnable, checksummed artifact and refuses to let it drift.
+`EDortta/CodexBridgeMobile` does **not** consume it yet: it has no `contract/`
+directory, fetches nothing, verifies no digest, and still cites this document by
+hand. And **no branch carries `contract/` yet** — not `development`, and `main`
+has no `docs/api/` at all; it exists only on the branch that introduced it.
+Nothing here is a pin until this work merges *and* the mobile build does the
+verifying, and the second half is a change in the other repository.
+
+`tests/contract/test_published_contract_artifact.py` fails when the published
+copy falls behind the document, and separately when a version that was already
+published no longer hashes to its own manifest — two failures with opposite
+remedies, which is why they are reported apart.
+
+Before this existed the document lived here and a consumer copied it by hand:
+nothing published it, nothing checksummed it, and nothing detected a diverged
+copy, so the drift gate protected the *gateway ↔ document* pair and left the
+*document ↔ mobile client* pair — the pair this epic exists for — unguarded.
+
+**One hole is left open on purpose, and it is not small.** Republishing an
+edited document under the *same* `info.version` rewrites both the copy and its
+manifest, so the digest agrees again and every gate goes green while the bytes
+behind a number a client pinned have changed. Only the version-control history
+shows it. Enforcing "every change moves `info.version`" in the publisher is the
+fix; it was left out here because doing it would have forced a version bump that
+belongs to the endpoint work in flight, not to this gate. Until then: **review
+any diff that touches `contract/` without adding a directory.**
 
 ---
 
@@ -1228,6 +1294,11 @@ CI runs the same suite on every push and pull request
 only when a human remembered to — which is the same reliability as no gate at
 all, and it went unnoticed until adversarial review pointed at the empty
 `.github/` directory.
+
+`tests/contract` holds six gates — one per file in it — each guarding one pair,
+and a green run on one says nothing about the others. The table naming them, and
+what each one cannot see, is in [`testing.md`](./testing.md) — read it before
+concluding from a green build that the implementation matches the contract.
 
 Changing an endpoint means changing this document **first**. The drift test
 exists so that "the implementation and the contract disagree" is a red test and

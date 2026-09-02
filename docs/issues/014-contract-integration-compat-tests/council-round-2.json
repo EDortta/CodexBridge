@@ -1,0 +1,61 @@
+{
+  "round": 2,
+  "triggers": ["shared-contract", "adds-not-validated-claim"],
+  "lenses": ["verification of round 1", "regression hunt on the round-1 fixes"],
+  "findings": [
+    {
+      "lens": "regression hunt on the round-1 fixes",
+      "trigger": "add a required requestBody to GET /api/v1/auth/me, an operation that has none today",
+      "wrong_outcome": "exit 0, 'No breaking change'. Every existing caller sends no body and starts getting 4xx. 28 of the 40 operations in this contract carry no request body, so that is the surface. _additions had a branch for a required parameter and none for a required body, and round 1's ancestor suppression removed a signal that had previously existed by accident, because the new media type is ADDRESSABLE",
+      "location": "scripts/check_contract_compatibility.py _additions, the branch list around the parameter case; TIGHTENING_WHEN_ADDED omitted requestBody",
+      "evidence": "the same mutation through the pre-round-1 checker (git show bf6c7fe:scripts/check_contract_compatibility.py) reports '...requestBody.content[application/json].schema.required: [reason] became required where nothing was'; post-round-1 it returns []",
+      "closure": "an `elif kind == 'requestBody' and value` branch in _additions; test demand_a_request_body_where_there_was_none. Classification: introduzido-pela-r1"
+    },
+    {
+      "lens": "regression hunt on the round-1 fixes",
+      "trigger": "append {$ref: '#/components/parameters/IfMatch'} to GET /api/v1/projects; the component is required: true",
+      "wrong_outcome": "0 findings, while every existing caller of that operation now omits a required header. _parameter emitted required=False unconditionally for a $ref site, on the reasoning that required lives on the component -- true, but the component is unchanged, so nothing fires. 41 of the 90 operation parameters in the contract are $refs and all 40 operations are exposed",
+      "location": "scripts/check_contract_compatibility.py _parameter, the $ref branch",
+      "evidence": "a single document carrying both this and the requestBody mutation runs through the real CLI as 'No breaking change... exit=0'. Byte-identical code at bf6c7fe",
+      "closure": "_component_parameter_is_required resolves the component's required flag at the reference site; test point_an_operation_at_a_required_component_parameter. Classification: pre-existente"
+    },
+    {
+      "lens": "verification of round 1",
+      "trigger": "follow docs/api/testing.md section 'Consuming a pinned version' as rewritten by round 1, with REF=development",
+      "wrong_outcome": "every command still 404s. The round-1 fix replaced one wrong branch name (main) with another (development). testing.md asserted 'development is where the artifact lives today' and README said the same; both false",
+      "location": "docs/api/testing.md, the 'Not usable yet' paragraph and the REF assignment; docs/api/README.md section 'Getting the contract to the mobile repository'",
+      "evidence": "after git fetch origin: git ls-tree -r --name-only origin/development | grep -c '^contract/' -> 0; contract/ exists only on the unmerged feature/gh-14 branch; origin/development is at 2e18820, an ancestor of HEAD",
+      "closure": "both documents now say no branch carries contract/ yet and that it becomes fetchable when this work merges. Classification: introduzido-pela-r1 for the new false claim, aberto-da-r1 for the recipe not resolving"
+    },
+    {
+      "lens": "verification of round 1",
+      "trigger": "read docs/issues/014-contract-integration-compat-tests/RESUME.md, added by the round-1 fix commit itself",
+      "wrong_outcome": "four false statements in the delivery's own handoff: stale test counts (615/91 vs actual 650/126), the deploy/incus citation that claim-auditor finding 4 had just retired, 'four blind spots' contradicting the corrected lists, and an empty Council section. The denial gate added in the same commit iterated only README.md and testing.md, so a handoff note -- the first thing the next agent reads -- sat outside it",
+      "location": "docs/issues/014-contract-integration-compat-tests/RESUME.md; coverage gap in tests/contract/test_docs_match_the_runtime.py, the denial loop's document list",
+      "evidence": "grep -rn RESUME tests/ returns only unrelated TASK_RESUME hits, so no test read the file; counts measured in the same session as 650 passed / 3 skipped and 126 in tests/contract",
+      "closure": "RESUME.md rewritten with measured counts and the full two-round record; _contract_prose_documents now includes every docs/issues/**/RESUME.md, so the same denials are policed there. Classification: introduzido-pela-r1"
+    },
+    {
+      "lens": "verification of round 1",
+      "trigger": "a reviewer meets \"['x'] stopped being required\" and consults docs/api/README.md section 'What is a breaking change', as both the script and the README tell them to",
+      "wrong_outcome": "the rule is not there. The README listed six breaking rules and none covered a required name leaving a response schema, a schema default changing (the README says default *sort order*, a different thing), or which credential an operation accepts. 'Relaxing a constraint' in the not-breaking list reads as licence to dismiss the first. x-minimum-supported-version-raised, a key the build now requires, appeared nowhere. The script's docstring claims 'The rules are not invented here'",
+      "location": "scripts/check_contract_compatibility.py module docstring rule table vs docs/api/README.md sections 'Versioning' and 'What is a breaking change'",
+      "evidence": "greps against README: 'stops being required' 0 hits, 'x-minimum-supported-version-raised' 0 hits, 'changing a default' 0 hits, while all three rules were verified live in round 2's per-finding table",
+      "closure": "five rules added to the normative README list, marked as introduced by issue #14 alongside the gate, plus the raised-floor key in the Versioning section. Classification: introduzido-pela-r1"
+    },
+    {
+      "lens": "verification of round 1",
+      "trigger": "follow the test-id pointer in the ancestor-suppression comment",
+      "wrong_outcome": "test_a_compatible_change_is_left_alone[add_an_endpoint_with_a_required_constrained_parameter] does not exist; the fixture that keeps that branch honest is add_a_realistic_endpoint. Same genre of defect round 1 spent nine findings on",
+      "location": "scripts/check_contract_compatibility.py, the _additions ancestor-suppression comment",
+      "evidence": "grep -rn add_an_endpoint_with_a_required_constrained_parameter . returns one hit, the comment itself",
+      "closure": "comment corrected to name add_a_realistic_endpoint and what it carries. Classification: introduzido-pela-r1"
+    }
+  ],
+  "questions": [
+    "Verified closed by reproduction: 23 of the 26 round-1 findings. The decisive measurement was re-run -- the compatibility gate reports 0 breaking changes against the real feature/gh-11 and feature/gh-13 documents, down from 31 and 21, and a fact-level audit confirms it is right for the right reason (gh-11 +300 facts / 0 removed / 0 changed; gh-13 +217 / 0 / 0, with zero new addressables inside a pre-existing endpoint).",
+    "Round 2 also caught a cry-wolf trap before it fired: the unmodelled-keyword tripwire yielded unconditionally, so the first readOnly: true anywhere in the contract would have made the build permanently red with no way to make it green. It now reports only on a change. No such keyword is in the contract today.",
+    "Still open and accepted as risks in RESUME.md, carried from round 1: securitySchemes entry contents are not compared; republishing under the same info.version rewrites a pin; the request-side required-removal false positive; and the floor equalling info.version today.",
+    "Residual, not re-raised: the duplicated setup-error volume when info.version moves before publishing went 23 -> 32, because the guard is per-parametrized-case and the matrix grew. No bare exception survives -- every failure names the publish command."
+  ]
+}

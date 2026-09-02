@@ -1352,3 +1352,42 @@ falha, e nao por sorte.
 Adendo do mesmo teste: `sandbox_workspace_write.network_access=true` liga a rede
 dentro do sandbox com uma unica flag por invocacao. A facilidade e o argumento
 *contra* usar esse caminho, nao a favor (issue #80).
+
+## 2026-08-26 — #14: a contract gate's false positives decide whether it survives
+
+The compatibility gate for issue #14 shipped its first cut reporting **31**
+breaking changes against `feature/gh-11` and **21** against `feature/gh-13`,
+both purely additive releases, with not one finding naming a pointer a 1.6.0
+client could address. The cause is worth remembering because it is not obvious:
+a constraint is only a *tightening* when the thing it constrains already
+existed. OpenAPI forces `required: true` on every path parameter, so "a new
+required parameter appeared" fired on every endpoint with a path parameter,
+forever.
+
+The self-test that should have caught it added an endpoint with no parameters,
+no request body and no response schema — the one shape that dodges the defect.
+**A compatible-side fixture is only worth what its realism is worth.** The
+replacement carries a required path parameter, a constrained optional query
+parameter, a required request body and a response `required`, all at once.
+
+Two more of the same family, from the same delivery:
+
+- a fixture named `drop_a_required_request_field` actually mutated `Actor`,
+  which is response-only, so the matrix *certified* a real break as compatible.
+  A fixture's name is not evidence of what it does;
+- the fix for the false positives introduced a new blind spot — an existing
+  operation gaining a **required request body** went silent, because the
+  suppression's ancestor rule swallowed the new media type. A signal that had
+  existed by accident was removed by a deliberate change. Round 2 found it by
+  running the *old* checker against the same mutation.
+
+And a trap caught before it fired: a tripwire that reports "this gate does not
+model keyword X" must report on a **change**, not on presence. Reporting on
+presence would have made the first `readOnly: true` a permanently red build with
+no edit that could turn it green — and a gate you cannot satisfy gets deleted,
+not obeyed.
+
+Finally: the delivery's own `RESUME.md`, written by the commit that retired four
+false sentences from `docs/api/`, reinstated one of them and carried stale test
+counts. The prose gate scanned `README.md` and `testing.md` and not the handoff
+note the next agent reads first. It scans `docs/issues/**/RESUME.md` now.
