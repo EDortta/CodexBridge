@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from agent.codex_bridge_agent.config import AgentSettings
+from agent.codex_bridge_agent.forge.gh_tool import GH_ENV_ALLOWLIST
 from agent.codex_bridge_agent.runners.base import EngineNotImplementedError, Runner
 from agent.codex_bridge_agent.runners.codex import CodexRunner
 from agent.codex_bridge_agent.runners.pool import RunnerPool
@@ -41,12 +42,23 @@ def test_no_registered_engines_env_allowlist_overlaps_another():
     F08): a Codex-only credential (`OPENAI_API_KEY`) must never reach a
     different engine's subprocess, and vice versa. Only implemented engines
     have a real allowlist to check.
+
+    WK-20260902-forge-github-module (issue #80/#79, PR B2) extends this to a
+    THIRD allowlist that is not a `Runner` at all:
+    `forge/gh_tool.GH_ENV_ALLOWLIST`, which is where `GH_TOKEN` -- the forge
+    credential -- may legally appear. This is one of the most important
+    tests in that PR: if `GH_TOKEN` (or any future forge-only variable) ever
+    showed up in a runner's `env_allowlist`, it would reach a coding agent's
+    own sandboxed subprocess, defeating the entire point of keeping the
+    forge credential out of that sandbox (`gh_tool.py`'s own module
+    docstring). This test fails the moment that happens.
     """
     allowlists = {
         name: registration.factory(AgentSettings()).capabilities().env_allowlist
         for name, registration in KNOWN_ENGINES.items()
         if registration.implemented and registration.factory is not None
     }
+    allowlists["forge-github"] = GH_ENV_ALLOWLIST
     engine_specific = {
         name: allowlist - {"HOME", "PATH", "LANG", "LC_ALL"}
         for name, allowlist in allowlists.items()
@@ -56,6 +68,20 @@ def test_no_registered_engines_env_allowlist_overlaps_another():
         for right in names[i + 1 :]:
             overlap = engine_specific[left] & engine_specific[right]
             assert not overlap, f"{left} and {right} share engine-specific env vars: {overlap}"
+
+
+def test_gh_token_is_on_the_forge_allowlist_and_nowhere_else():
+    """Positive control, spelled out by name rather than left implicit in the
+
+    set-overlap loop above: `GH_TOKEN` belongs on `GH_ENV_ALLOWLIST`, and no
+    implemented runner's `env_allowlist` may contain it.
+    """
+    assert "GH_TOKEN" in GH_ENV_ALLOWLIST
+    for name, registration in KNOWN_ENGINES.items():
+        if not registration.implemented or registration.factory is None:
+            continue
+        runner_allowlist = registration.factory(AgentSettings()).capabilities().env_allowlist
+        assert "GH_TOKEN" not in runner_allowlist, name
 
 
 def test_unimplemented_engines_are_declared_not_absent():

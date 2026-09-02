@@ -112,6 +112,23 @@ def test_ordinary_source_paths_are_not_forbidden():
     assert _is_forbidden_path("docs/README.md") is None
 
 
+def test_forbidden_paths_defend_the_forge_github_token_specifically():
+    """WK-20260902-forge-github-module, issue #80/#79 (PR B2): the forge
+
+    credential this PR added (`AgentSettings.forge_credential_relative_path`,
+    default `.credentials/github-token`) relies on this pre-existing guard --
+    `_is_forbidden_path`'s `.credentials` check, `git_delivery.py:56-80` --
+    to keep the token's resolved bytes from ever reaching a commit even if
+    `gh_tool.run_gh`'s own symlink-outside-repo guard were somehow bypassed.
+    Named here, by the forge feature, so a future "cleanup" of
+    `_is_forbidden_path` does not remove it for looking unused: this test is
+    what proves it is load-bearing for forge, not only for the generic
+    `.credentials/` case `test_forbidden_paths_are_named_by_reason` above
+    already covers.
+    """
+    assert _is_forbidden_path(".credentials/github-token") == "credentials_dir"
+
+
 # --------------------------------------------------------------------------
 # deliver_changes: refusals
 # --------------------------------------------------------------------------

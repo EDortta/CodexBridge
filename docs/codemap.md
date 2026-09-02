@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 171 file(s) · 1890 symbol(s) indexed
-- Languages: config (2), python (167), shell (2)
+- 177 file(s) · 1929 symbol(s) indexed
+- Languages: config (2), python (173), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -37,6 +37,11 @@ agent/
     __main__.py
     codex_runner.py  — "Re-export shim."
     config.py
+    forge/
+      __init__.py  — "The executor's forge module -- where a `FORGE_OPERATION` actually talks to"
+      base.py  — "The forge-neutral surface any provider module in this package exposes."
+      gh_tool.py  — "Runs the `gh` CLI as a subprocess, and only that -- the forge-side sibling"
+      github.py  — "Runs one `ForgeOperationRequest` against GitHub, via `gh`."
     git_delivery.py  — "The commit/push step a completed task's own `delivery` block authorizes."
     git_tools.py
     instructions.py  — "Resolves `issue_ref` to file content, and builds the provider prompt with"
@@ -202,7 +207,9 @@ tests/
     test_effective_task_modes.py  — "`store.effective_task_modes` -- issue #73 Stage 4, WK-20260902-gh73-authorization-plane."
     test_email_templates.py  — "`gateway.app.services.email_templates` -- pure rendering, no I/O."
     test_enroll_node.py  — "`scripts/enroll_node.py` -- one HTTP call, one file write, issue #76."
+    test_forge_github.py  — "`forge.github.run_forge_operation` -- argv assembly, the kill switch, local"
     test_forge_policy.py  — "The forge vocabulary and policy issue #80/#79 build the write gate on."
+    test_gh_tool.py  — "`gh_tool.run_gh`/`resolve_gh_token` against a fake `gh` subprocess."
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
     test_google_calendar.py  — "`gateway.app.services.google_calendar`, without ever touching Google."
     test_instructions.py  — "`resolve_issue_text` and `build_task_instruction`."
@@ -233,6 +240,29 @@ tests/
 - `resolve_auto_project(project_id, root)` — "Fallback lookup for a `project_id` the static allowlist does not know."
 - **`MachineTokenFileError`** *(class)* — "`machine_token_file` is set but unusable -- always an operator problem,"
 - `resolve_machine_token(settings)` — "The machine token to present at the `/agent/ws` handshake."
+
+### `agent/codex_bridge_agent/forge/base.py`
+
+> The forge-neutral surface any provider module in this package exposes.
+
+- **`ForgeOutcome`** *(class)* — "What happened when the executor tried to run one forge operation."
+  - `__post_init__(self)` *(method)*
+  - `to_dict(self)` *(method)*
+
+### `agent/codex_bridge_agent/forge/gh_tool.py`
+
+> Runs the `gh` CLI as a subprocess, and only that -- the forge-side sibling
+
+- **`GhResult`** *(class)* — "Mirrors `run_git`'s `(code, stdout, stderr)` tuple, plus the one"
+  - `ok` *(property)*
+- `resolve_gh_token(project_root, credential_relative_path)` — "Reads the GH token, enforcing the symlink-outside-repo guard."
+- `run_gh(project_root, *args)` *(async function)* — "Runs one `gh` subcommand in `project_root`, capturing stdout/stderr."
+
+### `agent/codex_bridge_agent/forge/github.py`
+
+> Runs one `ForgeOperationRequest` against GitHub, via `gh`.
+
+- `run_forge_operation()` *(async function)* — "Runs `operation` against GitHub via `gh`, and reports what happened."
 
 ### `agent/codex_bridge_agent/git_delivery.py`
 
@@ -2558,6 +2588,28 @@ tests/
 - `test_main_reports_a_refused_invite_and_writes_nothing(tmp_path, monkeypatch)`
 - `test_main_strips_a_trailing_slash_from_the_gateway_url(monkeypatch, tmp_path)`
 
+### `tests/unit/test_forge_github.py`
+
+> `forge.github.run_forge_operation` -- argv assembly, the kill switch, local
+
+- `test_kill_switch_refuses_before_run_gh_is_ever_called(tmp_path, monkeypatch)` *(async function)*
+- `test_kill_switch_on_lets_a_valid_operation_through(tmp_path, monkeypatch)` *(async function)* — "Positive control for the refusal above."
+- `test_issue_open_builds_the_exact_argv_and_succeeds_on_a_real_postcondition(tmp_path, monkeypatch)` *(async function)*
+- `test_issue_open_exit_zero_without_an_issue_url_is_refused_not_succeeded(tmp_path, monkeypatch)` *(async function)* — "The post-condition check: `git_delivery.py` compares the remote sha"
+- `test_issue_open_body_file_is_deleted_even_when_gh_fails(tmp_path, monkeypatch)` *(async function)*
+- `test_issue_comment_builds_the_exact_argv_and_succeeds(tmp_path, monkeypatch)` *(async function)*
+- `test_issue_comment_without_a_real_issue_number_is_refused_locally_before_run_gh(tmp_path, monkeypatch)` *(async function)* — "Simulates an object that bypassed `ForgeOperationRequest`'s own"
+- `test_issue_close_builds_the_exact_fully_static_argv_and_succeeds(tmp_path, monkeypatch)` *(async function)*
+- `test_issue_close_propagates_a_credential_refusal_from_run_gh(tmp_path, monkeypatch)` *(async function)*
+- `test_issue_list_builds_the_exact_fully_static_argv_with_default_state(tmp_path, monkeypatch)` *(async function)*
+- `test_issue_list_honors_an_explicit_state_and_parses_the_json_result(tmp_path, monkeypatch)` *(async function)*
+- `test_issue_list_non_json_output_is_refused_not_succeeded(tmp_path, monkeypatch)` *(async function)*
+- `test_a_malformed_repo_identity_that_bypassed_pydantic_never_reaches_run_gh(tmp_path, monkeypatch)` *(async function)*
+- `test_a_wellformed_repo_identity_that_bypassed_pydantic_still_reaches_run_gh(tmp_path, monkeypatch)` *(async function)* — "Positive control: `model_construct` alone is not what gets refused --"
+- `test_settings_are_forwarded_to_run_gh(tmp_path, monkeypatch)` *(async function)*
+- `test_captured_output_is_bounded_before_it_leaves_the_executor()` — "`gh` output is third-party text of unbounded size, and it travels."
+- `test_output_within_the_bound_is_left_exactly_as_gh_produced_it()` — "Positive control: the cap must not rewrite ordinary output."
+
 ### `tests/unit/test_forge_policy.py`
 
 > The forge vocabulary and policy issue #80/#79 build the write gate on.
@@ -2575,6 +2627,23 @@ tests/
 - `test_state_outside_the_closed_set_is_refused_at_parse()`
 - `test_forge_message_types_exist_and_are_distinct_from_task_dispatch()` — "Sanity check on the two new `AgentMessageType` members this PR adds."
 
+### `tests/unit/test_gh_tool.py`
+
+> `gh_tool.run_gh`/`resolve_gh_token` against a fake `gh` subprocess.
+
+- `test_resolve_gh_token_refuses_a_regular_file_inside_the_repo(tmp_path)`
+- `test_resolve_gh_token_accepts_a_symlink_resolving_outside_the_repo(tmp_path)` — "Positive control for the test above: same shape, but a symlink whose"
+- `test_resolve_gh_token_refuses_a_symlink_whose_target_is_still_inside_the_repo(tmp_path)` — "A symlink alone is not the guard -- the resolved TARGET must be"
+- `test_resolve_gh_token_refuses_a_missing_credential(tmp_path)`
+- `test_resolve_gh_token_refuses_a_broken_symlink(tmp_path)`
+- `test_run_gh_refuses_a_regular_file_credential_without_spawning_a_process(tmp_path, monkeypatch)` *(async function)*
+- `test_run_gh_runs_the_process_when_the_credential_is_a_valid_symlink(tmp_path, monkeypatch)` *(async function)* — "Positive control for the refusal above."
+- `test_run_gh_injects_gh_token_and_filters_everything_else(tmp_path, monkeypatch)` *(async function)*
+- `test_gh_env_allowlist_is_exactly_home_path_gh_token()`
+- `test_run_gh_calls_create_subprocess_exec_with_a_list_argv_no_shell(tmp_path, monkeypatch)` *(async function)*
+- `test_run_gh_always_passes_the_timeout_to_wait_for(tmp_path, monkeypatch)` *(async function)*
+- `test_run_gh_times_out_and_kills_the_process(tmp_path, monkeypatch)` *(async function)*
+
 ### `tests/unit/test_git_delivery.py`
 
 > `git_delivery.deliver_changes` against real throwaway git repos.
@@ -2585,6 +2654,7 @@ tests/
 - `test_parse_shortstat_missing_fields_default_to_zero()`
 - `test_forbidden_paths_are_named_by_reason(path, expected_reason)`
 - `test_ordinary_source_paths_are_not_forbidden()`
+- `test_forbidden_paths_defend_the_forge_github_token_specifically()` — "WK-20260902-forge-github-module, issue #80/#79 (PR B2): the forge"
 - `test_refuses_main_regardless_of_the_kill_switch(tmp_path)` *(async function)*
 - `test_refuses_a_branch_that_fails_the_pushable_pattern(tmp_path)` *(async function)* — "Defense in depth: even though `DeliveryRequest` itself accepts any"
 - `test_refuses_when_the_executor_kill_switch_is_off(tmp_path)` *(async function)*
@@ -2776,6 +2846,7 @@ tests/
 - `test_codex_satisfies_the_runner_protocol()`
 - `test_codex_declares_an_os_enforced_sandbox()` — "The honest field from `RunnerCapabilities`: Codex's `-s read-only` is a"
 - `test_no_registered_engines_env_allowlist_overlaps_another()` — "Env custody must never be unioned across providers (council finding"
+- `test_gh_token_is_on_the_forge_allowlist_and_nowhere_else()` — "Positive control, spelled out by name rather than left implicit in the"
 - `test_unimplemented_engines_are_declared_not_absent()` — "Every `AgentEngine` value is a registered candidate, whether or not it"
 - `test_pool_defaults_to_codex_and_rejects_unknown_engines()`
 - `test_pool_routes_control_messages_only_to_dispatched_tasks()` *(async function)*
