@@ -232,6 +232,29 @@ EPICS_LINK_ISSUE = Action(
     summary="Attach an issue to an epic.",
 )
 
+ARTIFACTS_READ = Action(
+    name="artifacts.read",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="List artifacts and Android builds and read one, within the actor's projects.",
+)
+
+# Minting a download token is a read, not an operational action: it changes
+# nothing an executor is doing, and what it authorizes is reading bytes the
+# actor may already see the metadata of. It is a *separate* action from
+# `artifacts.read` even though both require `READ_SCOPE`, because a client
+# decides whether to show a Download control separately from whether to show
+# the catalogue — the same relationship `sessions.read` and `sessions.readLogs`
+# already have. A deployment that later wants to withhold bytes while still
+# showing metadata splits the scope here, and `GET /api/v1/auth/me` reports the
+# split without a client change.
+ARTIFACTS_DOWNLOAD = Action(
+    name="artifacts.download",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="Mint a short-lived authorization to download an artifact's bytes.",
+)
+
 CONVERSATIONS_READ = Action(
     name="conversations.read",
     category=READ,
@@ -266,6 +289,8 @@ CATALOGUE: tuple[Action, ...] = (
     EPICS_READ,
     ISSUES_READ,
     CONVERSATIONS_READ,
+    ARTIFACTS_READ,
+    ARTIFACTS_DOWNLOAD,
     SESSIONS_STOP,
     SESSIONS_PAUSE,
     SESSIONS_RESUME,

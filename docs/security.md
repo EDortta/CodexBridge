@@ -19,6 +19,42 @@
   pipeline de observabilidade. A forma antiga segue aceita por uma release, com
   `WARNING` de depreciação que **não** imprime o valor; o header vence quando os
   dois estão presentes. Resolução em `gateway/app/core/agent_auth.py`.
+* download de artefatos (issue #11, `/api/v1/artifacts`, `/api/v1/builds/android`):
+  os bytes ficam atrás de um token curto, emitido por
+  `POST /api/v1/artifacts/{id}/download-token` e aceito **apenas** por
+  `GET /api/v1/artifacts/{id}/download`. Pontos de segurança:
+  - o token de sessão **não** baixa. O Android entrega uma transferência grande
+    ao downloader do sistema, processo separado sem acesso à sessão do app; dar
+    a ele o bearer de sessão colocaria a credencial que aprova tarefa sensível
+    dentro de um componente cujo único trabalho é buscar arquivo. O contrato
+    declara essa credencial como um `securityScheme` próprio
+    (`artifactDownloadToken`), para que um cliente gerado não anexe o token
+    errado e entre em laço de refresh;
+  - a credencial viaja em `Authorization: Bearer`, **nunca** em query string —
+    mesma regra que o #15 impôs ao `X-Executor-Token` (`security-standards.md`
+    §2). A resposta do mint devolve um *caminho* sem credencial;
+  - amarrada a um artefato, à conta que a emitiu (relida a cada download, então
+    conta desabilitada ou com projeto retirado para de baixar) e a um prazo
+    curto (`CODEX_BRIDGE_ARTIFACT_DOWNLOAD_TOKEN_TTL_SECONDS`, 300 s por padrão,
+    limitado a `[30, 3600]`);
+  - **`POST /api/v1/auth/revoke` mata também os tokens de download** do ator, em
+    ambas as portas de revogação. Sem isso o sign-out derrubava a sessão e
+    deixava o APK sendo baixado até o fim do TTL — a falha que aquele endpoint
+    existe para impedir. Duas lentes do concílio reproduziram;
+  - guardada com hash (`shared.security.hash_token`), como o access token: quem
+    lê a tabela não baixa nada. Linhas expiradas são varridas a cada emissão;
+  - **emitir é auditado** (`auth.artifact_download_authorized`, tipo de entidade
+    `auth`, dentro da janela de retenção que `purge_expired_audit_events` varre).
+    Sem isso, um APK vazado não teria como responder "quem foi autorizado a
+    buscá-lo, e quando" — a linha do token some ao expirar;
+  - toda recusa do download é o **mesmo** `401`: ausente, desconhecido,
+    expirado, emitido para outro artefato, de conta desabilitada, ou revogado;
+  - `artifacts.storage_path` nunca sai do servidor. A confinação é checada duas
+    vezes: lexicamente na escrita (recusa `..`, absoluto, separador, segmento
+    vazio) e após `Path.resolve()` na leitura, que é o que pega symlink plantado
+    dentro da raiz. `CODEX_BRIDGE_ARTIFACTS_ROOT` define a raiz e **precisa ser
+    definido no deploy**: o padrão resolve contra o diretório de trabalho do
+    processo, não contra o checkout.
 * rate limiting por IP em `POST /mcp` (`MemoryRateLimiter`, `gateway/app/main.py`),
   padrão de 120 requisições por janela de 60 segundos, resposta `429` e métrica
   `RATE_LIMIT_REJECTIONS`.
@@ -117,6 +153,27 @@
   um `grant_id` novo que o token antigo não endereça. Fixado por
   `tests/integration/test_auth.py::test_a_consumed_refresh_token_still_ends_its_own_grant`,
   que é o que precisa mudar se a decisão mudar.
+
+### Risco aceito: token de download não é de uso único
+
+* **Superfície:** `GET /api/v1/artifacts/{artifactId}/download` (issue #11), com
+  um token emitido por `POST .../download-token`.
+* **Caminho de abuso:** quem interceptar o token dentro da janela de validade
+  (300 s por padrão) pode baixar aquele artefato quantas vezes quiser até o
+  vencimento, ou até a conta ser desabilitada ou a sessão revogada.
+* **Mitigação / por que fica assim:** a issue #11 pede *range e download
+  retomável* na mesma frase em que pede *autorização de vida curta*, e as duas
+  puxam para lados opostos. Um token consumido pela primeira requisição torna a
+  retomada impossível — o downloader teria que se reautenticar no meio da
+  transferência, que é exatamente o que essa credencial existe para evitar. O
+  **prazo** é o controle, e é curto por isso. As demais amarras continuam:
+  um artefato, uma conta (relida a cada download), e `POST /api/v1/auth/revoke`
+  apaga todos os tokens de download vivos do ator.
+* **Risco residual:** leitura repetida de bytes que o portador do token já podia
+  ler uma vez, dentro de minutos. Nada é escrito, nada é emitido. Fixado por
+  `tests/integration/test_artifacts.py::test_a_token_survives_reuse_inside_its_lifetime`,
+  que é o que precisa mudar se a decisão mudar.
+
 
 ## Lacunas assumidas para endurecimento
 

@@ -1391,3 +1391,62 @@ Finally: the delivery's own `RESUME.md`, written by the commit that retired four
 false sentences from `docs/api/`, reinstated one of them and carried stale test
 counts. The prose gate scanned `README.md` and `testing.md` and not the handoff
 note the next agent reads first. It scans `docs/issues/**/RESUME.md` now.
+
+## 2026-08-26 — WK-20260826-gh11-artifacts: issue #11, and a two-round council on an auth surface
+
+`[2026-08-26] WK-20260826-gh11-artifacts - Um "cada uma dessas propriedades é
+testada" numa docstring é exatamente o tipo de afirmação que o auditor de
+alegações existe para pegar: quatro propriedades listadas, três testadas, e
+trocar hash_token(token) por token mantinha a suíte inteira verde.`
+**Action next time:** ao listar propriedades de segurança numa docstring, cite o
+nome do teste ao lado de cada uma. Uma lista sem nome de teste não é evidência.
+
+`[2026-08-26] WK-20260826-gh11-artifacts - Revogar "por ator" parece mais seguro
+que revogar "por concessão" e é o contrário. /auth/revoke age de propósito sobre
+refresh token já morto (fail-closed); os dois UPDATEs viram no-op nesse caso, e o
+DELETE por user_id virou a única instrução que ainda acertava algo — replay não
+autenticado de um token morto matava a credencial de download de uma concessão
+viva, repetidamente.`
+**Action next time:** antes de escrever um DELETE numa função de revogação,
+pergunte com qual chave as outras instruções dela estão escopadas. Se a nova for
+mais ampla, ela é a nova superfície de abuso, não a proteção.
+
+`[2026-08-26] WK-20260826-gh11-artifacts - REQUIRED_TABLES do schema_guard não
+reprova boot nenhum: main.py roda Base.metadata.create_all uma instrução antes do
+check_schema, e toda tabela exigida está no Base. Vale para 0006, 0007 e 0008.
+Cinco arquivos (install.sh, deploy/README.md, apply_migrations.py, o próprio
+schema_guard.py e required-reading.md) prometiam crash loop ao operador.`
+**Action next time:** ao registrar objeto novo no schema_guard, distinga coluna
+(reprova mesmo) de tabela (não reprova). E ao corrigir uma promessa falsa, grep
+pela promessa no repositório inteiro — corrigir só o arquivo onde o concílio a
+encontrou deixa as outras quatro cópias de pé.
+
+`[2026-08-26] WK-20260826-gh11-artifacts - Um portão novo pode medir a coisa
+errada. O teste que exige guarda de autorização em toda rota /api/v1 detectava
+autenticação: rota com só Depends(current_principal) passava, e rota sem
+autenticação alguma cuja dependência se chamasse "guard" também. A rodada 2 do
+mesmo concílio construiu as duas.`
+**Action next time:** marcador explícito (`require_action` etiqueta o closure com
+`guarded_action`), nunca casamento por nome de callable. E todo item de lista de
+exceção precisa de um teste que falhe quando ele é removido — senão a exceção não
+está isentando nada.
+
+`[2026-08-26] WK-20260826-gh11-artifacts - int() do CPython recusa string decimal
+com mais de 4300 dígitos (mitigação da CVE-2020-10735). Um `\d*` sem teto num
+regex de Range virou 500 internal_error com retryable:true. O primeiro conserto
+limitou a 19 dígitos "porque nenhum arquivo é tão grande" — mas o limite conta
+dígitos, não magnitude, e a RFC 9110 permite zeros à esquerda: bytes=000…01-2
+deixou de casar e o servidor reenviava o arquivo inteiro em silêncio.`
+**Action next time:** limite de tamanho em regex de entrada é obrigatório; escolha
+o teto pela restrição real (o limiar do int()), não pela semântica do valor.
+
+**Concílio de entrega, duas rodadas (`.docs/agents/council.md` §4).**
+Rodada 1: 13 relatos, 11 distintos sobreviveram ao §2, 11 viraram teste ou
+correção, 5 perguntas em aberto.
+Rodada 2: 11 relatos, 11 sobreviveram, 11 viraram teste ou correção, 5 perguntas
+em aberto — classificados 7 `introduzido-pela-r1`, 3 `aberto-da-r1`,
+1 `pré-existente`. Sete defeitos criados pelos próprios consertos da rodada 1 é
+o argumento mais forte que este projeto já teve a favor da segunda rodada:
+`.docs/agents/council.md` chama duas rodadas de hipótese com n=1, e desta vez a
+rodada 2 encontrou a falha de segurança mais séria de toda a entrega.
+Registro completo em `docs/issues/011-artifacts-downloads-apk/RESUME.md`.

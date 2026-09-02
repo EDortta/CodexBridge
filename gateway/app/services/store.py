@@ -9,6 +9,9 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.models.entities import (
+    AndroidBuildModel,
+    ArtifactDownloadTokenModel,
+    ArtifactModel,
     AuditEventModel,
     ConversationMessageModel,
     ConversationModel,
@@ -23,6 +26,21 @@ from gateway.app.models.entities import (
     ProjectModel,
     TaskLogModel,
     TaskModel,
+)
+from gateway.app.services.artifact_storage import validate_storage_path
+from gateway.app.services.artifact_types import (
+    ANDROID_ENVIRONMENTS,
+    ARTIFACT_ORIGINS,
+    ARTIFACT_TYPES,
+    CONTENT_TYPE_RE,
+    DEFAULT_CONTENT_TYPE,
+    MAX_CHANGELOG_LENGTH,
+    NAME_RE,
+    PACKAGE_NAME_RE,
+    SHA256_RE,
+    VERSION_RE,
+    ArtifactError,
+    normalize_fingerprint,
 )
 from gateway.app.services.audit import record_event
 from gateway.app.services.conversation_types import (
@@ -927,6 +945,29 @@ async def revoke_auth_grant(
     Both tables, one commit: leaving the access tokens behind would mean a
     sign-out that keeps working for the rest of the access-token TTL, which is
     the failure the endpoint exists to prevent.
+
+    **Three tables, since issue #11.** An artifact download token is a third
+    credential this actor holds, and the first version of #11 left it alive
+    through a sign-out: the session died and the minted token kept streaming an
+    APK for the rest of its TTL — the exact failure this docstring's second
+    paragraph says the endpoint exists to prevent, and a contradiction of
+    `docs/security.md`'s "revogação vale para os dois transportes". A council
+    round reproduced it (`200`, full body, after a `200` from `/auth/revoke`).
+
+    Revoked **by grant**, which the first cut of this fix got wrong and a second
+    council round caught. Deleting by actor alone made a *dead* refresh token
+    dangerous: `POST /api/v1/auth/revoke` deliberately acts on a token it has
+    already classified as consumed or revoked (see `routes/auth.py`), the two
+    `UPDATE`s above are no-ops in that case, and the by-actor `DELETE` was the
+    one statement that still hit something — so an unauthenticated replay of a
+    long-dead token killed the download tokens of a *live* grant, repeatably.
+    The same widening let a ChatGPT sign-out abort an APK transfer on the
+    operator's phone.
+
+    So `artifact_download_tokens.grant_id` records which grant minted the token,
+    and revocation stays inside it. A grantless access token (the browser OAuth
+    flow issues those) revokes the grantless download tokens of that actor and
+    nothing else, which is the same rule read through a null.
     """
     now = datetime.now(timezone.utc)
     access = await session.execute(
@@ -941,6 +982,7 @@ async def revoke_auth_grant(
         .where(OAuthRefreshTokenModel.revoked_at.is_(None))
         .values(revoked_at=now)
     )
+    downloads = await _revoke_artifact_download_tokens(session, user_id, grant_id=grant_id)
     revoked = {"access_tokens": max(access.rowcount, 0), "refresh_tokens": max(refresh.rowcount, 0)}
     # Only record when something was actually revoked. `/revoke` is idempotent
     # and its own contract blesses the retry, so a client (or an unauthenticated
@@ -948,13 +990,21 @@ async def revoke_auth_grant(
     # `auth.credentials_revoked` row on every no-op call floods the audit trail
     # with `0/0` rows that bury the real revocations — the more so now that the
     # retention sweep no longer ages `auth.credentials_revoked` out.
-    if revoked["access_tokens"] or revoked["refresh_tokens"]:
+    #
+    # `downloads` counts in that test: revoking only a grant's artifact download
+    # tokens is still a real revocation, and the row is the only record of it.
+    if revoked["access_tokens"] or revoked["refresh_tokens"] or downloads:
         await record_event(
             session,
             AUTH_ENTITY_TYPE,
             user_id,
             "auth.credentials_revoked",
-            {"grant_id": grant_id, "reason": reason, **revoked},
+            {
+                "grant_id": grant_id,
+                "reason": reason,
+                "artifact_download_tokens": downloads,
+                **revoked,
+            },
         )
     await session.commit()
     return revoked
@@ -966,26 +1016,72 @@ async def revoke_access_token(
     """Revoke one access token that belongs to no grant.
 
     The browser OAuth flow issues those: there is no refresh chain to revoke,
-    so revocation stops at the token presented.
+    so revocation stops at the token presented — and, since issue #11, at the
+    download tokens minted *under that same grantless credential*, for the
+    reason `revoke_auth_grant` gives above. Both revocation doors have to close
+    the same set of credentials, or which door the caller used decides what
+    stays alive (`design-standards.md` §3).
+
+    `grant_id=None` here is a value, not an omission: it addresses exactly the
+    download tokens minted by a grantless session. Signing out of ChatGPT must
+    not abort a download the phone started under its own grant.
     """
     item = await session.get(OAuthAccessTokenModel, hash_token(token))
     revoked = {"access_tokens": 0, "refresh_tokens": 0}
     if item is not None and item.revoked_at is None:
         item.revoked_at = datetime.now(timezone.utc)
         revoked["access_tokens"] = 1
+    downloads = await _revoke_artifact_download_tokens(session, user_id, grant_id=None)
     # Only record a real revocation — see `revoke_auth_grant`. A retry against an
     # already-revoked or unknown access token revokes nothing and must not add a
     # `0/0` audit row.
-    if revoked["access_tokens"] or revoked["refresh_tokens"]:
+    if revoked["access_tokens"] or revoked["refresh_tokens"] or downloads:
         await record_event(
             session,
             AUTH_ENTITY_TYPE,
             user_id,
             "auth.credentials_revoked",
-            {"grant_id": None, "reason": reason, **revoked},
+            {
+                "grant_id": None,
+                "reason": reason,
+                "artifact_download_tokens": downloads,
+                **revoked,
+            },
         )
     await session.commit()
     return revoked
+
+
+async def _revoke_artifact_download_tokens(
+    session: AsyncSession, user_id: str, *, grant_id: str | None
+) -> int:
+    """Drop the download tokens one grant minted for one actor. Returns how many.
+
+    Both keys, always. `user_id` alone was the first cut and it reached across
+    grants (see `revoke_auth_grant`); `grant_id` alone would let a stolen grant
+    id address another account's rows. `grant_id=None` is a real value that
+    addresses the grantless browser-OAuth session's own tokens.
+
+    Deleted rather than flagged `revoked_at`: the row's whole purpose is to
+    authorize, it is already swept on expiry, and a deleted row cannot be
+    resurrected by a bug that forgets to read a flag — the fail-closed
+    direction (`design-standards.md` §6).
+
+    Defined here, next to both revocation paths, rather than in the artifacts
+    section below: it is part of what revocation *means* in this store, and a
+    guard the next revocation path has to remember is a guard it will forget
+    (`design-standards.md` §3).
+    """
+    result = await session.execute(
+        delete(ArtifactDownloadTokenModel)
+        .where(ArtifactDownloadTokenModel.user_id == user_id)
+        .where(
+            ArtifactDownloadTokenModel.grant_id.is_(None)
+            if grant_id is None
+            else ArtifactDownloadTokenModel.grant_id == grant_id
+        )
+    )
+    return max(result.rowcount, 0)
 
 
 async def record_auth_event(
@@ -1025,6 +1121,9 @@ async def purge_expired_audit_events(
     `entity_type` filter already spared). The successful `/revoke` no-op rows that
     used to share this scope no longer exist — `revoke_auth_grant` stopped writing
     them (see above).
+
+    Everything outside that set — the task, issue, epic, conversation and
+    artifact rows — is reachable only by an authenticated actor and is kept.
 
     A non-positive window means "keep everything", for a deployment that exports
     the table elsewhere. It is an explicit opt-in to unbounded growth.
@@ -2280,3 +2379,408 @@ async def estimate_task_duration_seconds(
     if durations:
         return {"eta_seconds": statistics.median(durations), "eta_basis": "global", "eta_sample_size": len(durations)}
     return {"eta_seconds": None, "eta_basis": "none", "eta_sample_size": 0}
+
+
+# Artifacts, Android builds and download tokens (issue #11).
+#
+# There is no producer. No executor message, no upload endpoint and no build
+# hook writes an artifact row; `create_artifact` below is the only way one
+# comes into existence, which today means a test fixture or an operator
+# script. See `gateway/app/services/artifact_types.py` for why that is stated
+# rather than implied, and `gateway/app/services/artifact_storage.py` for the
+# confinement rule `storage_path` is held to.
+# --------------------------------------------------------------------------
+
+
+def _require(condition: bool, field: str, code: str, message: str) -> None:
+    if not condition:
+        raise ArtifactError(field, code, message)
+
+
+def _validated_android(metadata: dict) -> dict:
+    """The APK half of `create_artifact`, checked field by field.
+
+    Separate from the artifact half so the two rules that matter — an `apk`
+    carries this and nothing else does — read as one line at the call site
+    instead of being spread through a long function.
+    """
+    package_name = str(metadata.get("package_name") or "").strip()
+    _require(
+        bool(PACKAGE_NAME_RE.match(package_name)),
+        "/android/packageName",
+        "invalid_package_name",
+        "packageName must be a dotted Android application id.",
+    )
+    version_name = str(metadata.get("version_name") or "").strip()
+    _require(
+        bool(VERSION_RE.match(version_name)),
+        "/android/versionName",
+        "invalid_version",
+        "versionName must match [A-Za-z0-9][A-Za-z0-9._+-]{0,63}.",
+    )
+    version_code = metadata.get("version_code")
+    _require(
+        isinstance(version_code, int) and not isinstance(version_code, bool) and version_code > 0,
+        "/android/versionCode",
+        "invalid_version_code",
+        "versionCode must be a positive integer.",
+    )
+    environment = str(metadata.get("environment") or "").strip()
+    _require(
+        environment in ANDROID_ENVIRONMENTS,
+        "/android/environment",
+        "invalid_environment",
+        f"environment must be one of {sorted(ANDROID_ENVIRONMENTS)}.",
+    )
+    min_sdk_version = metadata.get("min_sdk_version")
+    _require(
+        min_sdk_version is None
+        or (isinstance(min_sdk_version, int) and not isinstance(min_sdk_version, bool) and min_sdk_version > 0),
+        "/android/minSdkVersion",
+        "invalid_min_sdk",
+        "minSdkVersion must be a positive integer when present.",
+    )
+    changelog = metadata.get("changelog")
+    _require(
+        changelog is None or len(str(changelog)) <= MAX_CHANGELOG_LENGTH,
+        "/android/changelog",
+        "too_long",
+        f"changelog may be at most {MAX_CHANGELOG_LENGTH} characters.",
+    )
+    return {
+        "package_name": package_name,
+        "version_name": version_name,
+        "version_code": version_code,
+        "environment": environment,
+        "min_sdk_version": min_sdk_version,
+        "changelog": changelog,
+        # Raises `ArtifactError` itself, with its own pointer.
+        "signing_fingerprint": normalize_fingerprint(str(metadata.get("signing_fingerprint") or "")),
+    }
+
+
+async def create_artifact(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    artifact_type: str,
+    name: str,
+    size_bytes: int,
+    sha256: str,
+    origin: str,
+    storage_path: str,
+    version: str | None = None,
+    content_type: str | None = None,
+    retained_until: datetime | None = None,
+    android: dict | None = None,
+) -> ArtifactModel:
+    """Record an artifact and, for an APK, its build metadata.
+
+    Every rule this write must never violate lives here rather than at the
+    caller (`design-standards.md` §3): the project must exist and be enabled,
+    the vocabulary must be one of `artifact_types`', the checksum must be a real
+    SHA-256, the name must be safe to put in a `Content-Disposition` header, and
+    the storage path must be confined to the artifacts root. There is exactly
+    one caller today; the guard is here so the second one cannot forget it.
+
+    An `apk` **must** carry `android` and nothing else may: an APK with no
+    metadata would appear in `GET /api/v1/builds/android` with nothing to show,
+    and metadata on a log bundle describes nothing.
+    """
+    project = await session.get(ProjectModel, project_id)
+    if project is None or not project.enabled:
+        raise ArtifactError("/projectId", "unknown_project", "No such project.")
+
+    _require(
+        artifact_type in ARTIFACT_TYPES,
+        "/type", "invalid_type", f"type must be one of {sorted(ARTIFACT_TYPES)}.",
+    )
+    _require(
+        origin in ARTIFACT_ORIGINS,
+        "/origin", "invalid_origin", f"origin must be one of {sorted(ARTIFACT_ORIGINS)}.",
+    )
+    cleaned_name = (name or "").strip()
+    _require(
+        bool(NAME_RE.match(cleaned_name)),
+        "/name",
+        "invalid_name",
+        "name must match [A-Za-z0-9][A-Za-z0-9._-]{0,254} — it is served as a filename.",
+    )
+    _require(
+        isinstance(size_bytes, int) and not isinstance(size_bytes, bool) and size_bytes >= 0,
+        "/sizeBytes", "invalid_size", "sizeBytes must be a non-negative integer.",
+    )
+    checksum = (sha256 or "").strip().lower()
+    _require(
+        bool(SHA256_RE.match(checksum)),
+        "/sha256", "invalid_checksum", "sha256 must be 64 lowercase hex characters.",
+    )
+    if version is not None:
+        version = version.strip()
+        _require(
+            bool(VERSION_RE.match(version)),
+            "/version", "invalid_version", "version must match [A-Za-z0-9][A-Za-z0-9._+-]{0,63}.",
+        )
+    media_type = (content_type or DEFAULT_CONTENT_TYPE).strip()
+    _require(
+        bool(CONTENT_TYPE_RE.match(media_type)),
+        "/contentType",
+        "invalid_content_type",
+        "contentType must be a bare media type with no parameters.",
+    )
+    # Raises `ArtifactError` with its own pointer; returns the normalized form.
+    relative_path = validate_storage_path(storage_path)
+
+    if artifact_type == "apk":
+        _require(android is not None, "/android", "required", "An apk artifact must carry Android build metadata.")
+    else:
+        _require(
+            android is None,
+            "/android",
+            "not_applicable",
+            "Android build metadata belongs only to an apk artifact.",
+        )
+
+    now = datetime.now(timezone.utc)
+    artifact = ArtifactModel(
+        id=str(uuid4()),
+        project_id=project_id,
+        type=artifact_type,
+        name=cleaned_name,
+        version=version,
+        size_bytes=size_bytes,
+        sha256=checksum,
+        origin=origin,
+        content_type=media_type,
+        storage_path=relative_path,
+        created_at=now,
+        retained_until=retained_until,
+    )
+    session.add(artifact)
+    if android is not None:
+        fields = _validated_android(android)
+        session.add(AndroidBuildModel(artifact_id=artifact.id, **fields))
+    await record_event(
+        session,
+        "artifact",
+        artifact.id,
+        "artifact.recorded",
+        # No `storage_path`. No endpoint reads `entity_type == "artifact"`
+        # today — the mission timeline filters `entity_type == "task"` — so the
+        # reader this protects is an operator with a database prompt, not a
+        # response body. That is still a reader, and an internal path is
+        # internal in front of both.
+        {"project_id": project_id, "type": artifact_type, "origin": origin, "sha256": checksum},
+    )
+    await session.commit()
+    await session.refresh(artifact)
+    return artifact
+
+
+def artifact_is_retained(artifact: ArtifactModel, now: datetime | None = None) -> bool:
+    """Whether the artifact is still inside its retention window.
+
+    A null `retained_until` means "kept until an operator removes it". Past the
+    window the catalogue still lists the row — a client that shows a stale link
+    deserves an explanation rather than a 404 — but no download token is minted
+    and no bytes are served.
+    """
+    if artifact.retained_until is None:
+        return True
+    return _as_utc(artifact.retained_until) > (now or datetime.now(timezone.utc))
+
+
+async def get_artifact_for_projects(
+    session: AsyncSession, artifact_id: str, project_ids: list[str] | None
+) -> ArtifactModel | None:
+    """An artifact the caller may see, or None. Mirrors `get_conversation_for_projects`.
+
+    None covers both "no such artifact" and "in a project you cannot see", and
+    the route answers a single `404` for both — the probing-prevention rule
+    every other resource in this contract follows.
+    """
+    artifact = await session.get(ArtifactModel, artifact_id)
+    if artifact is None:
+        return None
+    if project_ids is not None and artifact.project_id not in project_ids:
+        return None
+    return artifact
+
+
+async def list_artifacts_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    types: list[str] | None = None,
+    origins: list[str] | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[ArtifactModel]:
+    """Artifacts the caller may see, newest first, over-fetched by one.
+
+    Project scope is applied to the query, never to the result: filtering after
+    loading is how `page.hasMore` ends up describing rows the caller may not
+    see (`gateway/app/api/auth.py`).
+    """
+    statement = select(ArtifactModel)
+    if project_ids is not None:
+        if not project_ids:
+            return []
+        statement = statement.where(ArtifactModel.project_id.in_(project_ids))
+    if types:
+        statement = statement.where(ArtifactModel.type.in_(types))
+    if origins:
+        statement = statement.where(ArtifactModel.origin.in_(origins))
+    if after is not None:
+        created_at, artifact_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                ArtifactModel.created_at < created_at,
+                and_(ArtifactModel.created_at == created_at, ArtifactModel.id < artifact_id),
+            )
+        )
+    statement = statement.order_by(ArtifactModel.created_at.desc(), ArtifactModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def android_builds_for(
+    session: AsyncSession, artifact_ids: list[str]
+) -> dict[str, AndroidBuildModel]:
+    """`{artifact_id: AndroidBuildModel}` for a whole page in one query.
+
+    Same reasoning as `conversation_read_states`: one query for a page rather
+    than one per row.
+    """
+    if not artifact_ids:
+        return {}
+    result = await session.execute(
+        select(AndroidBuildModel).where(AndroidBuildModel.artifact_id.in_(artifact_ids))
+    )
+    return {row.artifact_id: row for row in result.scalars()}
+
+
+async def get_android_build(session: AsyncSession, artifact_id: str) -> AndroidBuildModel | None:
+    return await session.get(AndroidBuildModel, artifact_id)
+
+
+async def list_android_builds_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    environments: list[str] | None = None,
+    package_name: str | None = None,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[tuple[ArtifactModel, AndroidBuildModel]]:
+    """APK artifacts with their build metadata, newest first, over-fetched by one.
+
+    A join rather than "list artifacts, then look each one up": the filters
+    (`environment`, `packageName`) live on the metadata table, and a filter
+    applied after the page is chosen is a page that can come back short for a
+    reason `hasMore` cannot describe.
+    """
+    statement = select(ArtifactModel, AndroidBuildModel).join(
+        AndroidBuildModel, AndroidBuildModel.artifact_id == ArtifactModel.id
+    )
+    if project_ids is not None:
+        if not project_ids:
+            return []
+        statement = statement.where(ArtifactModel.project_id.in_(project_ids))
+    if environments:
+        statement = statement.where(AndroidBuildModel.environment.in_(environments))
+    if package_name:
+        statement = statement.where(AndroidBuildModel.package_name == package_name)
+    if after is not None:
+        created_at, artifact_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                ArtifactModel.created_at < created_at,
+                and_(ArtifactModel.created_at == created_at, ArtifactModel.id < artifact_id),
+            )
+        )
+    statement = statement.order_by(ArtifactModel.created_at.desc(), ArtifactModel.id.desc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return [(artifact, build) for artifact, build in result.all()]
+
+
+async def create_artifact_download_token(
+    session: AsyncSession,
+    *,
+    artifact_id: str,
+    user_id: str,
+    token: str,
+    expires_at: datetime,
+    grant_id: str | None = None,
+) -> ArtifactDownloadTokenModel:
+    """Store the hash of a freshly minted download token.
+
+    The plaintext is never persisted, exactly as with `create_oauth_access_token`
+    — `shared.security.hash_token` is the same one-way function both use, so a
+    reader of this table cannot download anything.
+
+    Expired rows are swept here rather than by a scheduler, for the same reason
+    `idempotency.purge_expired` sweeps at startup: this deployment has no
+    scheduler, and a credential table nothing ever prunes grows forever.
+
+    **Issuing it is audited**, under `AUTH_ENTITY_TYPE` and keyed by the actor,
+    exactly as `issue_auth_grant` audits an access/refresh pair. This is a
+    credential for bytes: an operator investigating a leaked APK has to be able
+    to answer "who was authorized to fetch it, and when" from the audit trail,
+    and a credential table whose rows are deleted as they expire cannot answer
+    it. `auth` is the entity type on purpose rather than `artifact` — it is what
+    puts these rows inside `purge_expired_audit_events`'s retention window, so
+    the trail does not become the unbounded table this function's own sweep
+    exists to avoid. The payload names the artifact and the expiry and never
+    the token: writing a credential into the audit table would undo the hashing
+    two lines below it.
+
+    `grant_id` is which sign-in minted it, copied from the access token that
+    authorized the mint, so `revoke_auth_grant` revokes exactly this grant's
+    download credentials and no others. Null for the grantless browser-OAuth
+    session, which is a value and not "unknown".
+    """
+    now = datetime.now(timezone.utc)
+    await session.execute(
+        delete(ArtifactDownloadTokenModel).where(ArtifactDownloadTokenModel.expires_at <= now)
+    )
+    item = ArtifactDownloadTokenModel(
+        token_hash=hash_token(token),
+        artifact_id=artifact_id,
+        user_id=user_id,
+        grant_id=grant_id,
+        created_at=now,
+        expires_at=expires_at,
+    )
+    session.add(item)
+    await record_event(
+        session,
+        AUTH_ENTITY_TYPE,
+        user_id,
+        "auth.artifact_download_authorized",
+        {"artifact_id": artifact_id, "expires_at": expires_at.isoformat()},
+    )
+    await session.commit()
+    await session.refresh(item)
+    return item
+
+
+async def get_artifact_download_token(
+    session: AsyncSession, token: str
+) -> ArtifactDownloadTokenModel | None:
+    """The live token row for `token`, or None when it is unknown or expired.
+
+    Collapsing "never existed" and "expired" into one None is deliberate and is
+    the same choice `get_oauth_access_token` makes: telling a holder which one
+    happened tells them whether the credential was ever real.
+    """
+    item = await session.get(ArtifactDownloadTokenModel, hash_token(token))
+    if item is None:
+        return None
+    if _as_utc(item.expires_at) <= datetime.now(timezone.utc):
+        return None
+    return item

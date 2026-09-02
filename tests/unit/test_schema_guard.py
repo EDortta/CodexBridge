@@ -105,3 +105,58 @@ def test_engine_and_delivery_columns_are_required(tmp_path) -> None:
     assert "tasks.delivery_json" in message
     assert "tasks.delivery_result_json" in message
     assert "0008_engine_and_delivery.sql" in message
+
+def test_required_tables_cannot_fire_at_boot_today() -> None:
+    """`REQUIRED_TABLES` is documentation, not a boot gate — pinned, not fixed.
+
+    `gateway/app/main.py:startup` runs `Base.metadata.create_all` one statement
+    before `check_schema`, and every table `REQUIRED_TABLES` demands is also
+    declared on `Base`. So a gateway started against a database missing any of
+    them creates them itself and the guard sees them present: the missing-table
+    half of this module can never fire on the real boot path. Only the
+    `REQUIRED_COLUMNS` half can, because `CREATE TABLE IF NOT EXISTS` does not
+    add a column to an existing table — which is the defect this module was
+    written for.
+
+    A council round found `docs/api/README.md` promising the opposite for
+    migration 0008 ("fails at boot naming the file"). The prose is corrected;
+    this test is what keeps it corrected. **It is not an endorsement.** The cost
+    is real — a deployment that skips a migration silently runs the `create_all`
+    schema, without the indexes and defaults the `.sql` carries and without a
+    `schema_migrations` row. Moving `check_schema` ahead of `create_all` (or
+    narrowing `create_all`) changes how every migration in this project is
+    gated, so it is an operator's decision, not a side effect of one issue.
+
+    **If someone makes the gate real, this test must fail.** Delete it then, and
+    put the promise back in the prose it was taken out of.
+    """
+    import inspect
+
+    from gateway.app.db.schema_guard import REQUIRED_TABLES
+    import gateway.app.main as main
+
+    declared_on_base = set(Base.metadata.tables)
+    assert not set(REQUIRED_TABLES) - declared_on_base, (
+        "some REQUIRED_TABLES entries are no longer created by `create_all`, so the "
+        f"guard can now fire for them: {sorted(set(REQUIRED_TABLES) - declared_on_base)}. "
+        "That is an improvement — update docs/api/README.md and delete this test."
+    )
+
+    # The other half, and the one the first cut of this test left unpinned: it
+    # is the *order* in `startup` that disarms the guard, and a version that
+    # only compared the two table sets would keep passing after someone made
+    # the gate real — which is the drift in the opposite direction. A second
+    # council round caught that. Read off the source because there is no other
+    # observable: both calls are `run_sync` on the same connection.
+    startup = inspect.getsource(main.startup)
+    # The `run_sync(...)` calls, not any mention of the names: the comment above
+    # them names `check_schema` first, and matching that made this assertion
+    # fire on correct code.
+    create_all_at = startup.index("run_sync(Base.metadata.create_all)")
+    check_schema_at = startup.index("run_sync(check_schema)")
+    assert create_all_at < check_schema_at, (
+        "`check_schema` now runs before `create_all`, so REQUIRED_TABLES is a real "
+        "boot gate. Put the promise back in docs/api/README.md §\"Deploy needs "
+        "migration 0008\", in scripts/install.sh, in deploy/README.md and in "
+        "scripts/apply_migrations.py, and delete this test."
+    )

@@ -157,6 +157,14 @@ def require_action(action: Action):
             )
         return principal
 
+    # The action this closure enforces, readable from the outside. A route
+    # inventory cannot otherwise tell an *authorization* guard from bare
+    # authentication: `_dependency` reaches `current_principal`, so a recursion
+    # looking for the latter reports "guarded" for a route that checks no
+    # action at all. A council round built exactly that route and walked it
+    # past the gate in `tests/integration/test_probes.py`, which now reads this
+    # attribute instead of guessing from a callable's name.
+    _dependency.guarded_action = action  # type: ignore[attr-defined]
     return _dependency
 
 
