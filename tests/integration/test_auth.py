@@ -32,6 +32,7 @@ from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import decisions as decisions_routes
 from gateway.app.api.routes import enrollment as enrollment_routes
+from gateway.app.api.routes import discovery as discovery_routes
 from gateway.app.api.routes import epics as epics_routes
 from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import issues as issues_routes
@@ -174,6 +175,7 @@ async def api(users_file, monkeypatch):
     app.include_router(notifications_routes.router)
     app.include_router(nodes_routes.router)
     app.include_router(enrollment_routes.router)
+    app.include_router(discovery_routes.router)
 
     async def override():
         async with factory() as s:
@@ -1330,6 +1332,15 @@ ENDPOINT_FOR_ACTION = {
     # same reasoning as `decisions.decide` below.
     "nodes.invite": ("POST", "/api/v1/nodes/invite"),
     "nodes.revoke": ("POST", "/api/v1/nodes/{id}/revoke"),
+    # `{id}` here is a `TaskModel.id` (see `make_task` below), not a real node
+    # id -- fine for this parity check, whose only claim is about the 403
+    # boundary: `require_action` runs before the route body ever looks a
+    # node/resource up, so a caller lacking the scope gets 403 regardless of
+    # what {id} resolves to, and one holding it gets whatever the (possibly
+    # 404) lookup produces -- never 403 either way. Same reasoning the
+    # `epics`/`issues` entries above already document.
+    "nodes.discoveries.read": ("GET", "/api/v1/nodes/{id}/discovered-resources"),
+    "nodes.discoveries.decide": ("POST", "/api/v1/discovered-resources/{id}/deny"),
     "sessions.read": ("GET", "/api/v1/sessions"),
     "sessions.readLogs": ("GET", "/api/v1/sessions/{id}/logs"),
     "sessions.explainError": ("POST", "/api/v1/sessions/{id}/explain-error"),

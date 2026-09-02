@@ -1,0 +1,60 @@
+-- WK-20260902-gh73-discovery-adoption / issue #73, Stage 3 (adoption half)
+--
+-- Fixes a defect the previous PR (Stage 3, discovery report) found and left
+-- for this one: `discovered_resources.resource_key` is `varchar(255)`
+-- (`0009_control_plane.sql`), sized when the column was still imagined as a
+-- short suggested id. The report work repurposed it to hold the candidate's
+-- absolute path on the node -- up to `DiscoveredCandidate.resource_key`'s own
+-- `max_length` of 2048. SQLite never enforces a column's declared width (type
+-- affinity, not a constraint), so the mismatch was silent there. `aiomysql`
+-- is a declared dependency, and MySQL DOES enforce it -- so the same insert
+-- is `Data too long for column 'resource_key'` on that target.
+--
+-- Widening the column is not the fix. `resource_key` anchors the composite
+-- unique index `discovered_resources_node_kind_key_idx (node_id, kind,
+-- resource_key)`, and MySQL's InnoDB index key limit (3072 bytes, ~767
+-- `utf8mb4` characters) is almost certainly what the original 255 was sized
+-- against. Widening `resource_key` to 2048 would trade today's silent
+-- failure for a different one on the same target the moment a long enough
+-- path arrived -- not a fix, a relocation.
+--
+-- The chosen shape: `resource_key` keeps its declared width and becomes a
+-- fixed-width lookup key -- `shared.security.hash_resource_key`, sha256 hex,
+-- always 64 characters, comfortably inside both the column and the MySQL
+-- index limit that likely sized it. The real path moves to a new, UNINDEXED
+-- column, `resource_path`, at the same 2048-character width the protocol
+-- already allows -- so no path is ever truncated, and the index the unique
+-- constraint depends on never has to bound an operator's filesystem layout.
+-- `gateway/app/services/store.py:record_discovery_report` matches incoming
+-- candidates against `resource_path`, not the hash, and writes both columns
+-- together going forward -- see that function's own docstring.
+--
+-- Backfill, not a rewrite of existing values: `resource_path` is populated
+-- by copying whatever `resource_key` already holds (the plain path, written
+-- by every row this table has ever received) -- a portable `UPDATE`, no
+-- hashing needed for a copy. `resource_key` itself is deliberately NOT
+-- rewritten to a hash here: sha256 has no portable expression across
+-- SQLite/PostgreSQL/MySQL in plain DDL (`0009_control_plane.sql`'s own
+-- precedent -- the `workspace_bindings` backfill from `executors.
+-- metadata_json` -- already established that a backfill "não exprimível em
+-- SQL portável" belongs in application code, not the migration file). A row
+-- whose `resource_key` still holds a raw path instead of a hash is
+-- self-healing: `record_discovery_report` matches by `resource_path` (which
+-- this migration DOES populate), and unconditionally rewrites
+-- `resource_key` to the hash on every match or insert -- so any pre-0013 row
+-- is repaired the next time its node reports it. A row that is never
+-- reported again keeps its old-format `resource_key` forever, but nothing
+-- reads that value as a lookup key from this migration on, and no NEW write
+-- can ever again exceed the column's width -- see `hash_resource_key`'s own
+-- docstring for why that is enough.
+--
+-- Portability: `alter table ... add column` (no default, nullable -- same
+-- shape as this table's own `root_path`) and one `update ... where ... is
+-- null`, both valid on SQLite, PostgreSQL and MySQL. No `alter column`, no
+-- index change: the existing unique index is left exactly as it is, because
+-- what it indexes (a 64-character hash from here on) already fits it.
+--
+-- Apply with `python3 scripts/apply_migrations.py`.
+alter table discovered_resources add column resource_path varchar(2048);
+
+update discovered_resources set resource_path = resource_key where resource_path is null;

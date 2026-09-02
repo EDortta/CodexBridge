@@ -223,10 +223,21 @@ by the contract itself, not by a filter applied late:
   that did not contain it;
   are addressed by `ProjectId` and nothing else. Same category, same rule:
   `WorkspaceBindingModel.local_path` (issue #73) and
-  `DiscoveredResourceModel.resource_key` (issue #73 Stage 3) — the latter IS
-  the candidate's absolute path on the node, not a project id
-  (`docs/control-plane.md`, "`resource_key` é dado sensível"). Both are
-  operator-surface-only, exactly like `ProjectModel.path`;
+  `DiscoveredResourceModel.resource_path` (issue #73 Stage 3 adoption half,
+  `migrations/0013_discovery_resource_key_hash.sql`) — the latter IS the
+  candidate's absolute path on the node, not a project id
+  (`docs/control-plane.md`, "resource_key é dado sensível"). Both are
+  operator-surface-only, exactly like `ProjectModel.path` — and both have
+  exactly one exception, both narrow and both administrative-scoped:
+  `WorkspaceBindingModel.local_path` has none yet (no endpoint returns it in
+  this build); `DiscoveredResourceModel.resourcePath` is returned by
+  `GET /api/v1/nodes/{nodeId}/discovered-resources` and the `adopt`/`deny`
+  responses ONLY — see "Discovered resources" above for why. Since 0013,
+  `DiscoveredResourceModel.resource_key` itself is no longer the sensitive
+  field: it is `hash_resource_key(path)`, a fixed-width lookup key with no
+  reversible relationship to the path it was computed from, and it is not
+  part of this contract's response shape at all (present in the database,
+  absent from every DTO);
 - executor hostnames, internal IPs, ports, or anything that would let a client
   reach an executor without going through the gateway;
 - raw stack traces and raw driver errors. These map to `internal_error` plus a
@@ -1582,6 +1593,103 @@ reuse revocation's enforcement path.
 (`codexbridge.admin`), the same posture as `nodes.read` — fleet-wide, no
 per-project scope to key off of. `nodes.enroll` has no action: the endpoint
 takes no principal at all.
+## Discovered resources (issue #73 Stage 3, WK-20260902-gh73-discovery-adoption)
+
+`GET /api/v1/nodes/{nodeId}/discovered-resources`,
+`POST /api/v1/discovered-resources/{resourceId}/adopt` and
+`POST .../{resourceId}/deny`. The panel's half of "the node proposes, the
+panel adopts" (`docs/control-plane.md`): the report half (Stage 3's other PR)
+writes only `discovered_resources`; this half is the only REST surface that
+may turn a row there into a `ProjectModel`, a `WorkspaceBindingModel`, a
+`ScmAssociationModel`, or a `project_authorizations` grant.
+
+### Administrative, not project-scoped — reason, not just form
+
+A discovered candidate is not scoped to any project the caller already sees;
+often none exists yet, which is the whole point of the adoption decision. Both
+actions (`nodes.discoveries.read`, `nodes.discoveries.decide`) therefore
+follow `nodes.read`'s precedent: `codexbridge.admin`, fleet-wide, never
+`visible_projects`-scoped. Deciding is a separate action from reading for the
+same reason `decisions.read`/`decisions.decide` are separate: seeing the queue
+and deciding it are capabilities an operator may grant independently.
+
+### Why `resourcePath`/`rootPath` are allowed on the wire here
+
+"No response exposes a server filesystem path" (this document's own
+conventions, and "Fields that must never ship" below) has exactly one standing
+exception, pre-registered by the report PR before this one existed
+(`docs/control-plane.md`, "resource_key é dado sensível... quando a rota de
+adoção existir, cai na mesma regra de local_path"): this endpoint, and only
+this endpoint, because an operator deciding whether to adopt a candidate
+cannot decide from an opaque id — they need to see which directory it is. The
+exception is narrow on purpose: gated by the same administrative scope as
+every other node-fleet field, and not extended to any other DTO on this
+contract. `ProjectStatus`, `Session`, `Mission` and every MCP tool still never
+carry it.
+
+### Why `resourcePath` exists at all, distinct from `resourceKey`
+
+`discovered_resources.resource_key` was written, from Stage 3's report PR
+through `migrations/0013_discovery_resource_key_hash.sql`, as the candidate's
+raw absolute path — up to 2048 characters — into a column declared
+`varchar(255)`. SQLite never enforced that width (type affinity, not a
+constraint); MySQL, a declared target via `aiomysql`, does, so a long enough
+path was an unhit insert failure. `resource_key` is now
+`shared.security.hash_resource_key(path)` — a fixed-width lookup key, never
+part of this contract's response — and `resourcePath`, a new, unindexed
+column, carries the actual path instead. See `hash_resource_key`'s own
+docstring and that migration's comment for why widening the original column
+was rejected in favor of hashing.
+
+### `adopt`: exactly one of `projectId`/`newProject`, and two grant origins that can coexist
+
+`grantCapabilities` in the request body is the operator's explicit grant,
+recorded `grantedBy: "operator:<userId>"`. Separately, when the candidate's
+`rootPath` string-matches a `DiscoveryRoot` on the node's own registration
+that carries `autoAuthorize`, that grant is applied too, recorded
+`grantedBy: "root-config:<path>"`. Both can apply in the same call — the
+underlying `project_authorizations` table allows exactly one row per
+`(nodeId, projectId)` (`0009_control_plane.sql`), so the two origins merge
+into one row rather than racing that constraint, and `grantedBy` becomes a
+`;`-joined set naming every origin that contributed. Neither `autoAuthorize`
+nor a node's own configuration can ever reach `modify`/`deliver` —
+`shared.protocol.AUTO_AUTHORIZABLE_CAPABILITIES` caps it to `read`/`test`,
+enforced when `DiscoveryRoot` is parsed, before any node connects. Only an
+explicit `grantCapabilities` naming a human operator can grant those two.
+
+### A node cannot reach `adopt`/`deny` — structurally, not by convention
+
+Both routes require `nodes.discoveries.decide` (`codexbridge.admin`), which
+`gateway/app/api/auth.py:current_principal` grants only to a caller presenting
+an OAuth access token. The executor WebSocket
+(`gateway/app/main.py:agent_ws`) authenticates with a `machine_token`, checked
+independently in `main.py` and never turned into an `AuthenticatedPrincipal` —
+there is no code path from a connected node's credential to either endpoint.
+Issue #73: "a node cannot grant itself project authorization merely by
+reporting a discovery" — this is the one door into `project_authorizations`
+this build has, and only a human can open it
+(`tests/integration/test_discovery_routes.py::
+test_a_principal_without_the_administrative_scope_cannot_adopt`,
+`tests/unit/test_discovery_store.py::
+test_a_matching_auto_authorize_root_grants_nothing_from_a_report_alone`).
+
+### `adopt`/`deny` require a decidable state, and that is what prevents duplication
+
+Only `discovered`/`stale` may be adopted or denied; a candidate already
+`adopted`/`authorized`/`denied` answers `409 conflict`. This is not a
+defensive check layered on top of the write — it IS what keeps a repeated
+`adopt` from creating a second `WorkspaceBindingModel` or
+`ScmAssociationModel` for the same candidate: the second call never reaches
+the write at all.
+
+### No `revision`, no `ETag`, no `If-Match`
+
+`DiscoveredResourceModel` carries no revision column — same posture
+`Conversations` above documents for its own GET-only shapes, extended here to
+a row two POST endpoints do mutate: `adopt`/`deny` are one-shot state
+transitions guarded by the decidable-state check above, not a general-purpose
+update a concurrent writer could race meaningfully. `Idempotency-Key` is what
+protects a retry instead, the same shape `POST /api/v1/issues` established.
 
 ---
 

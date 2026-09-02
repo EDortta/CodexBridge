@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.11.0
+  version: 1.12.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -556,6 +556,7 @@ paths:
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
 
+<<<<<<< HEAD
   /api/v1/nodes/invite:
     post:
       operationId: inviteNode
@@ -683,6 +684,31 @@ paths:
         while leaving an already-open connection running would not actually
         revoke anything. Does not touch the node's local checkouts; that is
         an operator concern on the machine itself, not this API's.
+=======
+  /api/v1/nodes/{nodeId}/discovered-resources:
+    get:
+      operationId: listDiscoveredResources
+      tags: [discovery]
+      summary: Candidates one Bridge Node has discovered
+      description: |
+        Issue #73 Stage 3 (adoption half). What the node's own discovery
+        scan has SEEN under its configured roots, not what it may run —
+        "discovery is not authorization" (#73). Administrative and
+        fleet-wide, same posture as `GET /api/v1/nodes`: a candidate is not
+        scoped to any project the caller already sees, often because none
+        exists yet.
+
+        Cursor-paginated, unlike `GET /api/v1/nodes` — a single real operator
+        root has reported 247 candidates in one scan, which is exactly the
+        scale `GET /api/v1/nodes` does not have to handle.
+
+        `resourcePath` and `rootPath` are absolute filesystem paths on the
+        node. This is the one endpoint on this contract that returns them —
+        a pre-registered, narrow exception to "no response exposes a server
+        filesystem path" (see `docs/api/README.md`, "Fields that must never
+        ship"), gated by the same administrative scope as every other field
+        here.
+>>>>>>> feature/gh-73/discovery-adoption
       security:
         - bearerAuth: []
       parameters:
@@ -691,9 +717,23 @@ paths:
           required: true
           schema:
             $ref: '#/components/schemas/NodeId'
+<<<<<<< HEAD
       responses:
         '200':
           description: The node's post-revoke state.
+=======
+        - name: state
+          in: query
+          required: false
+          description: Restrict to one `DiscoveredResource.state`.
+          schema:
+            $ref: '#/components/schemas/DiscoveredState'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of discovered candidates.
+>>>>>>> feature/gh-73/discovery-adoption
           headers:
             X-Request-Id:
               $ref: '#/components/headers/XRequestId'
@@ -701,6 +741,7 @@ paths:
             application/json:
               schema:
                 type: object
+<<<<<<< HEAD
                 required: [id, admissionState, enabled, connectionClosed]
                 properties:
                   id:
@@ -713,12 +754,137 @@ paths:
                   connectionClosed:
                     type: boolean
                     description: Whether a live socket was actually closed by this call, as opposed to none being open.
+=======
+                required: [items, page]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DiscoveredResource'
+                  page:
+                    $ref: '#/components/schemas/PageInfo'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+>>>>>>> feature/gh-73/discovery-adoption
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/PermissionDenied'}
         '404': {$ref: '#/components/responses/NotFound'}
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
 
+<<<<<<< HEAD
+=======
+  /api/v1/discovered-resources/{resourceId}/adopt:
+    post:
+      operationId: adoptDiscoveredResource
+      tags: [discovery]
+      summary: Bind a discovered candidate to a project
+      description: |
+        Issue #73 Stage 3 (adoption half). Creates or reuses a `ProjectModel`,
+        binds it to the candidate's node (`local_path` = the candidate's own
+        path), records an SCM association when the candidate's evidence
+        carried a `remote_url`, and moves `state` to `adopted` or
+        `authorized`.
+
+        Exactly one of `projectId` or `newProject` is required. When the
+        candidate's `rootPath` matches a `DiscoveryRoot` the node's own
+        registration marks `autoAuthorize`, or when `grantCapabilities` is
+        given, the resulting authorization is granted in the same call — both
+        may apply at once. Neither path can ever grant `modify` or `deliver`
+        through `autoAuthorize` (`shared.protocol.AUTO_AUTHORIZABLE_
+        CAPABILITIES`); only an explicit `grantCapabilities` naming an
+        operator can.
+
+        Only a `discovered`/`stale` candidate may be adopted — one already
+        `adopted`/`authorized`/`denied` answers `409`, which is also what
+        keeps a repeated adopt from duplicating the project/binding/
+        association it already produced.
+
+        With `Idempotency-Key`, a retry returns the first response and
+        adopts nothing twice; the replay carries `Idempotent-Replay: true`.
+
+        A node cannot reach this endpoint: it requires an authenticated
+        human/operator principal with `codexbridge.admin`, a class of
+        credential the executor's `machine_token` cannot satisfy (issue #73:
+        "a node cannot grant itself project authorization merely by
+        reporting a discovery").
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdoptDiscoveredResourceRequest'
+      responses:
+        '200':
+          description: The discovered resource after adoption.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoveredResource'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/discovered-resources/{resourceId}/deny:
+    post:
+      operationId: denyDiscoveredResource
+      tags: [discovery]
+      summary: Refuse a discovered candidate
+      description: |
+        Moves `state` to `denied`. Distinct from an "ignore" — the contract
+        (and `shared.protocol.DiscoveredState`) names no sixth state; "ignore"
+        is a client-side filter over `discovered`/`stale`, not a server
+        decision. Once `denied`, the candidate is never touched by another
+        discovery report from its node — reappearing does not return it to
+        the adoption queue.
+
+        Only a `discovered`/`stale` candidate may be denied; one already
+        decided answers `409`.
+
+        With `Idempotency-Key`, a retry returns the first response and denies
+        nothing twice; the replay carries `Idempotent-Replay: true`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The discovered resource after denial.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoveredResource'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+>>>>>>> feature/gh-73/discovery-adoption
   /api/v1/sessions:
     get:
       operationId: listSessions
@@ -4295,6 +4461,106 @@ components:
             `true` when `capabilitiesObservedAt` is `null`, or older than the
             gateway's inventory freshness window. A client should render stale
             inventory as visibly stale rather than as current fact.
+
+    DiscoveredState:
+      type: string
+      enum: [discovered, adopted, authorized, denied, stale]
+      description: |
+        Lifecycle of one candidate a node has reported (issue #73). `discovered`
+        — reported, nothing decided; this is NOT permission to run it
+        ("discovery is not authorization"). `adopted` — bound to a project, no
+        capability granted yet. `authorized` — at least one capability is
+        granted. `denied` — refused; does not return to the queue on
+        reconnect. `stale` — last seen in an earlier scan, absent from the
+        current one; the row and its prior decision survive.
+
+    DiscoveredResource:
+      type: object
+      description: |
+        One candidate a Bridge Node's own discovery scan found. `resourcePath`
+        and `rootPath` are absolute paths on the node's filesystem — see
+        `docs/api/README.md`, "Fields that must never ship", for why this is
+        the one shape on this contract allowed to carry them.
+      required: [id, nodeId, kind, state, firstSeenAt, lastSeenAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        nodeId:
+          $ref: '#/components/schemas/NodeId'
+        kind:
+          type: string
+          description: Always `project` in this build; the schema leaves room for other machine-local resource kinds issue #73 anticipates.
+        state:
+          $ref: '#/components/schemas/DiscoveredState'
+        projectId:
+          type: [string, 'null']
+          description: Set once this candidate is adopted; `null` before that.
+        resourcePath:
+          type: [string, 'null']
+          maxLength: 2048
+          description: The candidate's absolute path on the node. Sensitive — see the schema description above.
+        rootPath:
+          type: [string, 'null']
+          maxLength: 2048
+          description: The `discoveryRoots` entry this candidate was found under, exactly as the node's own configuration names it.
+        suggestedProjectId:
+          type: [string, 'null']
+          maxLength: 128
+        suggestedName:
+          type: [string, 'null']
+          maxLength: 255
+        remoteUrl:
+          type: [string, 'null']
+          maxLength: 2048
+          description: '`git remote get-url origin`, or `null` when the repository has no `origin`.'
+        head:
+          type: [string, 'null']
+        dirty:
+          type: [boolean, 'null']
+        firstSeenAt:
+          $ref: '#/components/schemas/Timestamp'
+        lastSeenAt:
+          $ref: '#/components/schemas/Timestamp'
+        decidedBy:
+          type: [string, 'null']
+          description: '`operator:<userId>`, set by `adopt`/`deny`. `null` before any decision.'
+        decidedAt:
+          type: [string, 'null']
+          format: date-time
+
+    NewProjectSpec:
+      type: object
+      required: [projectId, name]
+      properties:
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+
+    AdoptDiscoveredResourceRequest:
+      type: object
+      description: |
+        Exactly one of `projectId` or `newProject` is required — neither or
+        both is `validation_failed`.
+      properties:
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+          description: Reuse an existing project. Mutually exclusive with `newProject`.
+        newProject:
+          $ref: '#/components/schemas/NewProjectSpec'
+          description: Create a project for this candidate. Mutually exclusive with `projectId`.
+        grantCapabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/Capability'
+          description: |
+            Capabilities the operator explicitly grants on adoption, recorded
+            with `grantedBy: "operator:<userId>"`. May include `modify`/
+            `deliver` — unlike a discovery root's `autoAuthorize`, which never
+            can. May coexist with a matching root's own grant in the same
+            call; both merge into one authorization row.
 
     Session:
       type: object

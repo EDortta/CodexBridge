@@ -101,7 +101,17 @@ version_router = APIRouter()
 # `POST /api/v1/nodes/enroll` and `POST /api/v1/nodes/{nodeId}/revoke`, and
 # `NodeStatus` gains `admissionState`. Additive only (three new endpoints, one
 # new response field on an existing schema), so another minor bump.
-API_CONTRACT_VERSION = "1.11.0"
+# 1.9.0 -> 1.12.0 (WK-20260902-gh73-discovery-adoption, issue #73 Stage 3
+# adoption half): `GET /api/v1/nodes/{nodeId}/discovered-resources`,
+# `POST /api/v1/discovered-resources/{resourceId}/adopt` and
+# `POST /api/v1/discovered-resources/{resourceId}/deny`. Additive only (three
+# new endpoints, new schemas), so a minor bump per docs/api/README.md's "What
+# is not breaking" -- jumping straight to 1.12.0 rather than 1.10.0 because
+# 1.10.0, 1.11.0 and 1.13.0 are claimed by other branches of this same
+# orchestration (issue #73's other Stage 3/4 tracks) not yet merged onto this
+# one; only one bump survives the eventual merge, same reasoning the 1.4.0
+# comment above already gives for four branches sharing one line.
+API_CONTRACT_VERSION = "1.12.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a

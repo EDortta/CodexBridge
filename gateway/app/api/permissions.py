@@ -228,6 +228,36 @@ NODES_REVOKE = Action(
     summary="Revoke a Bridge Node's credential and close its live connection.",
 )
 
+# Issue #73 Stage 3 adoption half (WK-20260902-gh73-discovery-adoption).
+# Same reasoning as `NODES_READ`: a discovered candidate belongs to a node,
+# not to a project the caller may or may not see, so this follows the
+# administrative/fleet-wide precedent rather than `visible_projects` scoping.
+NODES_DISCOVERIES_READ = Action(
+    name="nodes.discoveries.read",
+    category=ADMINISTRATIVE,
+    scope=ADMIN_SCOPE,
+    summary="List the candidates one Bridge Node has discovered.",
+)
+
+# Deciding a candidate (`adopt`/`deny`) can create a project, a workspace
+# binding, an SCM association and -- when a discovery root or the request
+# grants capability -- a `project_authorizations` row. Separate action from
+# `NODES_DISCOVERIES_READ` for the same reason `DECISIONS_READ`/
+# `DECISIONS_DECIDE` are separate: seeing the queue and deciding it are
+# different capabilities an operator may grant independently. Administrative,
+# not operational, for the same reason `NODES_READ` is: a discovered
+# candidate is not scoped to any project the caller already sees -- often
+# there is no project yet -- so this reaches beyond `visible_projects` by
+# definition, which is the axis this classification tracks
+# (`DECISIONS_DECIDE` stays operational because the task it resolves IS
+# already inside the actor's own projects).
+NODES_DISCOVERIES_DECIDE = Action(
+    name="nodes.discoveries.decide",
+    category=ADMINISTRATIVE,
+    scope=ADMIN_SCOPE,
+    summary="Adopt or deny a discovered candidate.",
+)
+
 EPICS_READ = Action(
     name="epics.read",
     category=READ,
@@ -394,6 +424,8 @@ CATALOGUE: tuple[Action, ...] = (
     NODES_READ,
     NODES_INVITE,
     NODES_REVOKE,
+    NODES_DISCOVERIES_READ,
+    NODES_DISCOVERIES_DECIDE,
 )
 
 

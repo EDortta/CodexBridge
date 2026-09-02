@@ -17,6 +17,7 @@ from gateway.app.api.routes import decisions, missions, nodes as nodes_routes, p
 from gateway.app.api.routes import artifacts as artifacts_routes
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import enrollment as enrollment_routes
+from gateway.app.api.routes import discovery as discovery_routes
 from gateway.app.api.routes import epics as epics_routes
 from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import issues as issues_routes
@@ -180,6 +181,10 @@ app.include_router(nodes_routes.router, dependencies=[Depends(RateLimitDependenc
 # and mints a credential, so it gets the identical per-IP bucket rather than a
 # router-specific one.
 app.include_router(enrollment_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+# Discovered-resource adoption (issue #73, Stage 3 adoption half). Same
+# limiter, same administrative/fleet-wide posture as nodes.router above --
+# guarded by `NODES_DISCOVERIES_READ`/`NODES_DISCOVERIES_DECIDE`.
+app.include_router(discovery_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:
