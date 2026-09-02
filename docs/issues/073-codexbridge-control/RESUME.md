@@ -3,14 +3,15 @@
 - work_id: WK-20260901-gh73-fleet-visibility
 - data: 2026-09-01
 - Stage 1: **PR #74 merged** into `development` as `80e5d2f`.
-- Stage 2: branch `feature/gh-73/fleet-visibility` (commit `2ed550f`), worktree
-  `../CodexBridge--gh-73-control`. Pushed; **PR #75** open. NOT merged.
+- Stage 2: **PR #75 merged** into `development` on 2026-09-02, and on `main`.
+  Contract `1.9.0`. Not deployed.
 
 ## Next Step (DO THIS FIRST)
 
 Start Stage 3 (project discovery and adoption: scan the configured roots,
 correlate candidates, write `discovered_resources`, and the adopt/ignore
-decision) on a branch cut from `feature/gh-73/fleet-visibility`. Stage 2 left
+decision) on a branch cut from **`development`** — Stage 2 is merged, so cutting
+from `feature/gh-73/fleet-visibility` would now branch from behind. Stage 2 left
 the node reporting only a `discovery_root_count`; Stage 3 is what makes the
 roots produce rows.
 

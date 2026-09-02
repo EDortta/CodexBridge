@@ -3,14 +3,13 @@
 - work_id: WK-20260826-gh14-contract-tests
 - data: 2026-08-26
 - branch: `feature/gh-14/contract-integration-compat-tests`
+- status: **merged** via **PR #60** (2026-09-02), on `main`. Not deployed.
 
 ## Next Step (DO THIS FIRST)
 
-Nothing is pushed and no PR exists. The branch is five commits ahead of
-`development` and the full suite is green.
-
-**Before merging, and before merging #11 or #13:** whoever merges a branch that
-changed `docs/api/codex-bridge.openapi.yaml` must run
+Nothing is pending on this issue. What it leaves behind is a **standing rule**,
+and it is the one thing a later session has to know: whoever merges a branch
+that changed `docs/api/codex-bridge.openapi.yaml` must run
 
 ```bash
 python3 scripts/publish_contract.py
@@ -18,7 +17,8 @@ python3 scripts/publish_contract.py
 
 and commit `contract/`. `pytest tests/contract` fails until they do and the
 message names the command — but the person seeing it will not have read this,
-so say it in the pull request.
+so say it in the pull request. Done for `1.7.0` (#11), `1.8.0` (#13) and
+`1.9.0` (#75); `contract/index.json` names `1.9.0` as latest.
 
 Verified against the real sibling branches, read-only: the compatibility gate
 reports **0 breaking changes** for both `feature/gh-11` (1.7.0) and
@@ -27,12 +27,12 @@ the command above fixes.
 
 ## Current state
 
-Committed on the branch, not pushed, not merged, not deployed. Nothing under
+Merged and on `main`; not deployed. Nothing under
 `gateway/`, `agent/`, `shared/` or `migrations/` was touched
 (`git diff --stat 2e18820..HEAD -- gateway/ agent/ shared/ migrations/` is
 empty), no endpoint was added, and `info.version` /
-`probes.API_CONTRACT_VERSION` are both still `1.6.0` — #11 and #13 own the
-version bumps.
+`probes.API_CONTRACT_VERSION` were both still `1.6.0` on this branch — #11, #13
+and #75 own the version bumps, and after the merges the pair reads `1.9.0`.
 
 The delivery is anti-drift **machinery**, and it iterates the contract's own
 paths dynamically. No test in it names an endpoint.
