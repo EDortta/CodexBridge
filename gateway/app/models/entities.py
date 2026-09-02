@@ -73,7 +73,7 @@ class NodeModel(Base):
     # credential does not have to reuse revocation's enforcement path.
     # `"invited"`/`"suspended"` are states the issue anticipates; only
     # `"enrolled"` (the default, and every pre-#76 row via
-    # `0010_node_enrollment.sql`'s backfill) and `"revoked"` are written by
+    # `0013_node_enrollment.sql`'s backfill) and `"revoked"` are written by
     # this cut.
     admission_state: Mapped[str] = mapped_column(String(32), default="enrolled")
 

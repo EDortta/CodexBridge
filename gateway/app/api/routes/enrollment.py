@@ -37,7 +37,7 @@ gated, API-driven decision instead of a file edit plus a restart:
 
 Token rotation, the full `invited`/`suspended` state machine, and binding an
 invite to a claimed machine identity are explicitly not here. See
-`migrations/0010_node_enrollment.sql` for what `admission_state` values this
+`migrations/0013_node_enrollment.sql` for what `admission_state` values this
 cut actually writes.
 """
 

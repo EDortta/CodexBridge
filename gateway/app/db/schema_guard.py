@@ -55,7 +55,7 @@ REQUIRED_TABLES: dict[str, str] = {
     # Issue #76 (minimal cut): enrollment invites. Missing this table means
     # `POST /api/v1/nodes/invite` and `POST /api/v1/nodes/enroll` fail on
     # their first query with a driver error instead of at startup.
-    "node_invites": "0010_node_enrollment.sql",
+    "node_invites": "0013_node_enrollment.sql",
 }
 
 REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
@@ -85,13 +85,13 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     # migration".
     "executors": {
         "node_id": "0009_control_plane.sql",
-        "machine_token_hash": "0010_node_enrollment.sql",
+        "machine_token_hash": "0013_node_enrollment.sql",
     },
     # Without this, `revoke_node` (issue #76) writes a value the ORM believes
     # in but the table has no column for, and the first revoke fails at commit
     # time instead of at startup.
     "nodes": {
-        "admission_state": "0010_node_enrollment.sql",
+        "admission_state": "0013_node_enrollment.sql",
     },
 }
 

@@ -767,7 +767,7 @@ async def agent_ws(
         # compared here -- `store.upsert_registry` backfills the hash column
         # from it once, at startup, and this handshake reads only the hash
         # from then on. A `machine_token_hash` that is still empty (a
-        # database that has not run `0010_node_enrollment.sql`, or an
+        # database that has not run `0013_node_enrollment.sql`, or an
         # executor row nothing has ever backfilled) can never match a
         # presented token, and is refused the same as a wrong one.
         if not executor.machine_token_hash or not secure_compare(
