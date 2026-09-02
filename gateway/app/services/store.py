@@ -693,7 +693,7 @@ async def record_discovery_report(
     everything this node has ever reported for THIS root, never another root
     or another node's rows. Matched by `resource_path` (the candidate's raw
     path), never by the `resource_key` column: since
-    `migrations/0013_discovery_resource_key_hash.sql`, `resource_key` is
+    `migrations/0014_discovery_resource_key_hash.sql`, `resource_key` is
     `hash_resource_key(resource_path)` -- a fixed-width lookup key, not
     identity itself. Matching on the hash would work too (it is
     deterministic), but matching on the path is what lets a pre-0013 row --

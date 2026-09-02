@@ -95,7 +95,7 @@ não existe.
   comprometido que relata candidatos fabricados só polui a fila de adoção —
   não tem, por construção, nenhum caminho para conceder capacidade a nada
 * controle: o path absoluto do candidato (`DiscoveredResourceModel.
-  resource_path` desde `migrations/0013_discovery_resource_key_hash.sql`;
+  resource_path` desde `migrations/0014_discovery_resource_key_hash.sql`;
   antes disso vivia em `resource_key`) só sai por uma rota REST: `GET
   /api/v1/nodes/{nodeId}/discovered-resources` e as respostas de
   `adopt`/`deny` — a mesma regra de `local_path`

@@ -26,7 +26,7 @@ filesystem path in any response, with one standing, pre-registered exception:
 `docs/control-plane.md` names it explicitly ("resource_key é dado sensível...
 quando a rota de adoção existir, cai na mesma regra de local_path") for
 exactly this endpoint. `resourcePath` (the candidate's absolute path,
-`migrations/0013_discovery_resource_key_hash.sql`) and `rootPath` (the
+`migrations/0014_discovery_resource_key_hash.sql`) and `rootPath` (the
 discovery root it came from) are returned here and ONLY here, guarded by the
 same administrative scope as `NODES_READ`. The internal `resource_key` hash
 itself is not part of this DTO at all -- it is a lookup key for

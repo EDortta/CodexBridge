@@ -49,7 +49,7 @@ def hash_resource_key(value: str) -> str:
     one-line hashes that happen to use the same primitive.
 
     The candidate's real path never disappears: `DiscoveredResourceModel.
-    resource_path` (added by `migrations/0013_discovery_resource_key_hash.
+    resource_path` (added by `migrations/0014_discovery_resource_key_hash.
     sql`) carries it, unindexed, at the same 2048-character width the
     protocol already allows. `resource_key` is purely a lookup key from here
     on -- see `gateway/app/services/store.py:record_discovery_report` for how

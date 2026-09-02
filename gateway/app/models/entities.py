@@ -181,7 +181,7 @@ class DiscoveredResourceModel(Base):
     processes/services #73 anticipates without a schema change.
 
     `resource_key`/`resource_path` split (WK-20260902-gh73-discovery-adoption,
-    `migrations/0013_discovery_resource_key_hash.sql`). Issue #73 Stage 3
+    `migrations/0014_discovery_resource_key_hash.sql`). Issue #73 Stage 3
     wrote the candidate's absolute path straight into `resource_key`, a
     `varchar(255)` that also anchors the composite unique index `(node_id,
     kind, resource_key)`. SQLite never enforced that width; MySQL -- a

@@ -147,7 +147,7 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     # first discovery report or adoption call, not a startup failure that
     # names the fix.
     "discovered_resources": {
-        "resource_path": "0013_discovery_resource_key_hash.sql",
+        "resource_path": "0014_discovery_resource_key_hash.sql",
     },
 }
 

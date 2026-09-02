@@ -1635,7 +1635,7 @@ para um deles. Quem generaliza o uso de uma coluna existente deve verificar
 a largura contra TODOS os motores declarados como alvo, não só contra o que
 os testes locais usam.
 
-O conserto (`migrations/0013_discovery_resource_key_hash.sql`) não alargou a
+O conserto (`migrations/0014_discovery_resource_key_hash.sql`) não alargou a
 coluna — alargar teria estourado o limite de chave do índice único composto
 que essa mesma coluna ancora, trocando uma falha silenciosa por outra no
 mesmo alvo. A saída foi separar "chave de busca" (hash de largura fixa) de

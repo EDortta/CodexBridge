@@ -224,7 +224,7 @@ by the contract itself, not by a filter applied late:
   are addressed by `ProjectId` and nothing else. Same category, same rule:
   `WorkspaceBindingModel.local_path` (issue #73) and
   `DiscoveredResourceModel.resource_path` (issue #73 Stage 3 adoption half,
-  `migrations/0013_discovery_resource_key_hash.sql`) — the latter IS the
+  `migrations/0014_discovery_resource_key_hash.sql`) — the latter IS the
   candidate's absolute path on the node, not a project id
   (`docs/control-plane.md`, "resource_key é dado sensível"). Both are
   operator-surface-only, exactly like `ProjectModel.path` — and both have
@@ -1630,7 +1630,7 @@ carry it.
 ### Why `resourcePath` exists at all, distinct from `resourceKey`
 
 `discovered_resources.resource_key` was written, from Stage 3's report PR
-through `migrations/0013_discovery_resource_key_hash.sql`, as the candidate's
+through `migrations/0014_discovery_resource_key_hash.sql`, as the candidate's
 raw absolute path — up to 2048 characters — into a column declared
 `varchar(255)`. SQLite never enforced that width (type affinity, not a
 constraint); MySQL, a declared target via `aiomysql`, does, so a long enough

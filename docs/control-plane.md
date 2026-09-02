@@ -280,7 +280,7 @@ aqui e em `docs/api/README.md` ("Fields that must never ship") e
 evitou uma vez.
 
 **Atualização (WK-20260902-gh73-discovery-adoption, `migrations/
-0013_discovery_resource_key_hash.sql`).** O parágrafo acima descreve a coluna
+0014_discovery_resource_key_hash.sql`).** O parágrafo acima descreve a coluna
 como a PR de relatório a deixou — e é exatamente aí que mora um defeito que
 essa PR encontrou e não teve escopo para consertar: `resource_key` é
 `varchar(255)`, dimensionado quando a coluna ainda era pensada como um id

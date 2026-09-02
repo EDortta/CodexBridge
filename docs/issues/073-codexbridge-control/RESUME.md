@@ -55,7 +55,7 @@ own issue body, not this file, for the authoritative stage list).
 - **Defect fixed, found by the previous PR and left for this one**:
   `discovered_resources.resource_key` was `varchar(255)` but held a path up
   to 2048 chars — silent on SQLite, a hard failure on MySQL (`aiomysql` is a
-  declared dependency). `migrations/0013_discovery_resource_key_hash.sql`:
+  declared dependency). `migrations/0014_discovery_resource_key_hash.sql`:
   `resource_key` becomes `hash_resource_key(path)` (sha256 hex, 64 chars);
   the real path moves to a new, unindexed `resource_path` column. A
   pre-migration row self-heals its `resource_key` the next time its node
@@ -71,7 +71,7 @@ own issue body, not this file, for the authoritative stage list).
 
 ## Changed files
 
-`migrations/0013_discovery_resource_key_hash.sql` (new),
+`migrations/0014_discovery_resource_key_hash.sql` (new),
 `gateway/app/api/routes/discovery.py` (new),
 `gateway/app/services/discovery_types.py` (new),
 `tests/integration/test_discovery_routes.py` (new),

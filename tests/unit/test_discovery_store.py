@@ -91,7 +91,7 @@ def _report(root_path: str, candidates: list[DiscoveredCandidate], *, scanned_at
 async def _row(session: AsyncSession, node_id: str, path: str) -> DiscoveredResourceModel | None:
     """The row for `path` on `node_id`, matched by `resource_path`.
 
-    Not `resource_key`: since `migrations/0013_discovery_resource_key_hash.
+    Not `resource_key`: since `migrations/0014_discovery_resource_key_hash.
     sql`, that column holds `hash_resource_key(path)`, a lookup key rather
     than the path itself -- see that migration's own comment.
     """
