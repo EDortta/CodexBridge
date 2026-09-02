@@ -7,10 +7,13 @@ from uuid import uuid4
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.app.api import idempotency, permissions
+from gateway.app.api.errors import ApiError
 from gateway.app.models.entities import ExecutorModel, IssueModel
 from gateway.app.services import store
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
 from gateway.app.services.audit import record_event
+from gateway.app.services.issue_types import IssuePlanningError
 from gateway.app.mcp.tools import tool_definitions
 from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.version import APP_VERSION
@@ -74,6 +77,31 @@ async def handle_mcp_call(
             raise HTTPException(status_code=401, detail="oauth_required")
         if not principal.has_scope(scope):
             raise HTTPException(status_code=403, detail=f"missing_scope:{scope}")
+
+    def require_action(action: permissions.Action) -> None:
+        # Epics/issues reuse the REST catalogue in gateway/app/api/permissions.py
+        # instead of a hand-copied scope string: that catalogue is the one
+        # `GET /api/v1/auth/me` and the REST routes both read, so a scope
+        # rename or a re-classification (issue #8's ISSUES_WRITE_SCOPE) shows
+        # up here for free instead of silently diverging on the next change.
+        if principal is None:
+            raise HTTPException(status_code=401, detail="oauth_required")
+        if not permissions.is_allowed(principal, action):
+            raise HTTPException(status_code=403, detail=f"missing_scope:{action.scope}")
+
+    async def resolve_project_or_404(text: str) -> "store.ProjectModel":
+        try:
+            project = await store.resolve_project_reference(session, str(text))
+        except store.AmbiguousProjectReference as exc:
+            candidates = ", ".join(f"{c.id} ({c.name})" for c in exc.candidates)
+            raise HTTPException(status_code=409, detail=f"ambiguous_project: {candidates}")
+        except ValueError:
+            raise HTTPException(status_code=404, detail="unknown_project")
+        # require_action already ensured `principal` is not None for every
+        # caller of this helper.
+        if not principal.can_access_project(project.id):
+            raise HTTPException(status_code=403, detail="project_access_denied")
+        return project
 
     def require_task_access(task) -> None:
         if principal is None:
@@ -550,6 +578,234 @@ async def handle_mcp_call(
             ]
         }
         result = _text_result(f"Returned {len(payload['tasks'])} tasks.", payload)
+    elif tool_name == "create_epic":
+        # Issue #78: exposes the same store.create_epic REST already tests
+        # (gateway/app/api/routes/epics.py) over the MCP/ChatGPT transport, for
+        # a project that may have no forge at all -- planning entities live in
+        # this gateway's own tables, not in GitHub.
+        require_action(permissions.EPICS_CREATE)
+        project = await resolve_project_or_404(arguments["project"])
+
+        idempotency_key = arguments.get("idempotency_key")
+        endpoint = "mcp:create_epic"
+        request_fingerprint = idempotency.fingerprint(
+            json.dumps(
+                {k: v for k, v in arguments.items() if k != "idempotency_key"},
+                sort_keys=True, default=str,
+            ).encode()
+        )
+        claim = None
+        if idempotency_key:
+            # ApiError is idempotency.py's native failure (a reused key with a
+            # different body, or one still in flight) -- gateway/app/api/scope.py
+            # exempts `/mcp` from the app-wide ApiError handler, so left
+            # uncaught this becomes a raw 500 that breaks the JSON-RPC envelope.
+            try:
+                outcome = await idempotency.reserve(
+                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id,
+                    request_fingerprint=request_fingerprint,
+                )
+            except ApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+            if isinstance(outcome, idempotency.ReplayedResponse):
+                result = _text_result(f"Epic {outcome.body['epic_id']} already existed.", outcome.body)
+                return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
+            claim = outcome
+
+        try:
+            epic = await store.create_epic(
+                session,
+                project_id=project.id,
+                title=str(arguments["title"]),
+                description=arguments.get("description"),
+                status=arguments.get("status"),
+                actor_user_id=principal.user_id,
+                actor_email=principal.email,
+            )
+        except IssuePlanningError as exc:
+            if claim is not None:
+                await idempotency.release(
+                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id, claim=claim
+                )
+            raise HTTPException(status_code=400, detail=f"validation_failed:{exc.field}:{exc.code}") from exc
+        except Exception:
+            if claim is not None:
+                await idempotency.release(
+                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id, claim=claim
+                )
+            raise
+
+        payload = {
+            "epic_id": epic.id,
+            "project_id": epic.project_id,
+            "title": epic.title,
+            "description": epic.description,
+            "status": epic.status,
+        }
+        if claim is not None:
+            try:
+                await idempotency.complete(
+                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id,
+                    status_code=201, body=payload, claim=claim, request_fingerprint=request_fingerprint,
+                )
+            except ApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+        result = _text_result(f"Epic {epic.id} created.", payload)
+    elif tool_name == "list_epics":
+        require_action(permissions.EPICS_READ)
+        project = await resolve_project_or_404(arguments["project"])
+        limit = int(arguments.get("limit", 20))
+        rows = await store.list_epics_page(
+            session, project_id=project.id, status=arguments.get("status"), limit=limit + 1
+        )
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        payload = {
+            "epics": [
+                {
+                    "epic_id": epic.id,
+                    "project_id": epic.project_id,
+                    "title": epic.title,
+                    "description": epic.description,
+                    "status": epic.status,
+                }
+                for epic in rows
+            ],
+            "has_more": has_more,
+        }
+        result = _text_result(f"Found {len(payload['epics'])} epics.", payload)
+    elif tool_name == "create_issue":
+        require_action(permissions.ISSUES_CREATE)
+        project = await resolve_project_or_404(arguments["project"])
+
+        epic_id = arguments.get("epic_id")
+        if epic_id is not None:
+            # Pre-checked here, distinct from the IssuePlanningError store.create_issue
+            # would otherwise raise for the same condition: this is a reference the
+            # caller should have gotten right by listing epics first (like an
+            # unknown project or issue), not a malformed field on this request's own
+            # body -- so it gets its own typed detail instead of validation_failed's
+            # generic shape.
+            epic_row = await store.get_epic_for_projects(session, str(epic_id), [project.id])
+            if epic_row is None:
+                raise HTTPException(status_code=404, detail="unknown_epic")
+
+        idempotency_key = arguments.get("idempotency_key")
+        endpoint = "mcp:create_issue"
+        request_fingerprint = idempotency.fingerprint(
+            json.dumps(
+                {k: v for k, v in arguments.items() if k != "idempotency_key"},
+                sort_keys=True, default=str,
+            ).encode()
+        )
+        claim = None
+        if idempotency_key:
+            try:
+                outcome = await idempotency.reserve(
+                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id,
+                    request_fingerprint=request_fingerprint,
+                )
+            except ApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+            if isinstance(outcome, idempotency.ReplayedResponse):
+                result = _text_result(f"Issue {outcome.body['issue_id']} already existed.", outcome.body)
+                return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
+            claim = outcome
+
+        try:
+            issue = await store.create_issue(
+                session,
+                project_id=project.id,
+                epic_id=str(epic_id) if epic_id is not None else None,
+                title=str(arguments["title"]),
+                description=arguments.get("description"),
+                status=arguments.get("status"),
+                priority=arguments.get("priority"),
+                labels=arguments.get("labels"),
+                assignee_user_id=arguments.get("assignee_user_id"),
+                assignee_email=arguments.get("assignee_email"),
+                dependencies=arguments.get("dependencies"),
+                blocked_reason=arguments.get("blocked_reason"),
+                actor_user_id=principal.user_id,
+                actor_email=principal.email,
+            )
+        except IssuePlanningError as exc:
+            if claim is not None:
+                await idempotency.release(
+                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id, claim=claim
+                )
+            raise HTTPException(status_code=400, detail=f"validation_failed:{exc.field}:{exc.code}") from exc
+        except Exception:
+            if claim is not None:
+                await idempotency.release(
+                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id, claim=claim
+                )
+            raise
+
+        payload = {
+            "issue_id": issue.id,
+            # Same shape ISSUE_REF_PATTERN (shared/protocol.py) already accepts
+            # and start_development_task already resolves -- an issue created
+            # in chat goes straight to execution without a second id space.
+            "issue_ref": f"local:{issue.id}",
+            "project_id": issue.project_id,
+            "epic_id": issue.epic_id,
+            "title": issue.title,
+            "description": issue.description,
+            "status": issue.status,
+            "priority": issue.priority,
+            "labels": json.loads(issue.labels_json or "[]"),
+            "assignee_user_id": issue.assignee_user_id,
+            "assignee_email": issue.assignee_email,
+            "dependencies": json.loads(issue.dependencies_json or "[]"),
+            "blocked_reason": issue.blocked_reason,
+        }
+        if claim is not None:
+            try:
+                await idempotency.complete(
+                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id,
+                    status_code=201, body=payload, claim=claim, request_fingerprint=request_fingerprint,
+                )
+            except ApiError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+        result = _text_result(f"Issue {issue.id} created.", payload)
+    elif tool_name == "list_issues":
+        require_action(permissions.ISSUES_READ)
+        project = await resolve_project_or_404(arguments["project"])
+        limit = int(arguments.get("limit", 20))
+        rows = await store.list_issues_page(
+            session,
+            project_id=project.id,
+            status=arguments.get("status"),
+            priority=arguments.get("priority"),
+            epic_id=arguments.get("epic_id"),
+            assignee_user_id=arguments.get("assignee_user_id"),
+            limit=limit + 1,
+        )
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        payload = {
+            "issues": [
+                {
+                    "issue_id": issue.id,
+                    "issue_ref": f"local:{issue.id}",
+                    "project_id": issue.project_id,
+                    "epic_id": issue.epic_id,
+                    "title": issue.title,
+                    "description": issue.description,
+                    "status": issue.status,
+                    "priority": issue.priority,
+                    "labels": json.loads(issue.labels_json or "[]"),
+                    "assignee_user_id": issue.assignee_user_id,
+                    "assignee_email": issue.assignee_email,
+                    "dependencies": json.loads(issue.dependencies_json or "[]"),
+                    "blocked_reason": issue.blocked_reason,
+                }
+                for issue in rows
+            ],
+            "has_more": has_more,
+        }
+        result = _text_result(f"Found {len(payload['issues'])} issues.", payload)
     elif tool_name == "create_reminder":
         # WK-20260830-chatgpt-entry-provider-and-delivery, issue #71. Runs on
         # the gateway, not the executor -- see google_calendar.py's module

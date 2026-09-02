@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 145 file(s) · 1559 symbol(s) indexed
-- Languages: config (2), python (141), shell (2)
+- 146 file(s) · 1570 symbol(s) indexed
+- Languages: config (2), python (142), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -21,7 +21,7 @@
 ## Ignored Paths
 
 - Built-in: `.docs-migration-bak`, `.git`, `.idea`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`, `.venv`, `.vscode`, `__pycache__`, `build`, `dist`, `env`, `node_modules`, `venv`
-- `.gitignore`: `__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.coverage`, `codex_bridge.db`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `venv/`, `.governancekit-identity.json`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md`, `.windsurfrules`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/ai-agents.md`, `handoff.md`, `new-tag.sh`, `scripts/install-agents-kit.sh`, `scripts/agent-worktree.sh`, `.docs-migration-bak/`, `.gk/operator.json`, `.gk/secrets.json`, `.gk/context-telemetry.jsonl`, `.gk/overwritten/`, `.gk/pre-upgrade/`, `.gk/pre-migrate/`, `.gk/remove-agents-backup/`, `.gk/remove-agents-plan.json`, `.gk/context-proposal/`, `*.kit-new`, `*.pre-draft`, `.env`, `.env.*`, `.envrc`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, `.credentials/*`, `!.env.example`, `!.env.sample`, `!.env.template`, `!.env.dist`, `!.env-example`, `!.env.missing`, `!.credentials/.gitignore`, `!.credentials/.keep`, `!.credentials/README*`, `!.credentials/*.example`, `!.credentials/*.sample`, `!.credentials/*.template`, `!.credentials/*.dist`
+- `.gitignore`: `__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.coverage`, `codex_bridge.db`, `backups/`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `venv/`, `.governancekit-identity.json`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md`, `.windsurfrules`, `GEMINI.md`, `.github/copilot-instructions.md`, `.amazonq/rules/ai-agents.md`, `handoff.md`, `new-tag.sh`, `scripts/install-agents-kit.sh`, `scripts/agent-worktree.sh`, `.docs-migration-bak/`, `.gk/operator.json`, `.gk/secrets.json`, `.gk/context-telemetry.jsonl`, `.gk/overwritten/`, `.gk/pre-upgrade/`, `.gk/pre-migrate/`, `.gk/remove-agents-backup/`, `.gk/remove-agents-plan.json`, `.gk/context-proposal/`, `*.kit-new`, `*.pre-draft`, `.env`, `.env.*`, `.envrc`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, `.credentials/*`, `!.env.example`, `!.env.sample`, `!.env.template`, `!.env.dist`, `!.env-example`, `!.env.missing`, `!.credentials/.gitignore`, `!.credentials/.keep`, `!.credentials/README*`, `!.credentials/*.example`, `!.credentials/*.sample`, `!.credentials/*.template`, `!.credentials/*.dist`
 
 ## Entry Points
 
@@ -156,6 +156,7 @@ tests/
     test_dispatch_payload_engine_and_delivery.py  — "`AgentHub.dispatch_next` forwards engine/issue_ref/delivery to the executor."
     test_epics_issues.py  — "Epics and issues — issue #8."
     test_events.py  — "The mobile event stream, its polling fallback, and notification preferences — issue #13."
+    test_mcp_epics_issues.py  — "The `create_epic`/`list_epics`/`create_issue`/`list_issues` MCP tools -- issue #78."
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
     test_nodes.py  — "Bridge Node fleet visibility — issue #73 Stage 2."
@@ -569,8 +570,7 @@ tests/
 
 > Credential resolution for the `/agent/ws` handshake — issue #15.
 
-- **`TokenSource`** *(class)* — "How the executor presented its machine token."
-- `resolve_executor_token()` — "Pick the credential to verify and report where it came from."
+- `resolve_executor_token()` — "Return the credential to verify, or `None` when none was presented."
 
 ### `gateway/app/core/config.py`
 
@@ -668,7 +668,7 @@ tests/
 - `mcp_endpoint(request, authorization, session)` *(async function)*
 - `handle_task_ack(session, envelope)` *(async function)* — "Handles one `task.ack` from the `/agent/ws` message loop."
 - `handle_task_cancelled(session, envelope)` *(async function)* — "Handles one `task.cancelled` ack from the `/agent/ws` message loop."
-- `agent_ws(websocket, executor_id, token, x_executor_token)` *(async function)*
+- `agent_ws(websocket, executor_id, x_executor_token)` *(async function)*
 
 ### `gateway/app/mcp/server.py`
 
@@ -1615,6 +1615,26 @@ tests/
 - `test_epics_issues_and_conversations_all_resolve_to_their_project(api)` *(async function)* — "Every deliverable entity type must have a working project derivation."
 - `test_the_audit_index_exists_on_a_fresh_install_as_well_as_an_upgraded_one()` — "An index declared only in SQL is missing on every new database."
 - `test_the_poll_interval_is_floored_rather_than_honoured()` — "A zero interval is a busy loop against the pool every endpoint shares."
+
+### `tests/integration/test_mcp_epics_issues.py`
+
+> The `create_epic`/`list_epics`/`create_issue`/`list_issues` MCP tools -- issue #78.
+
+- **`DummyHub`** *(class)*
+  - `is_connected(self, executor_id)` *(method)*
+  - `dispatch_next(self, executor_id)` *(async method)*
+  - `send(self, executor_id, envelope)` *(async method)*
+- `users_file(tmp_path)`
+- `env(users_file, monkeypatch)` *(async function)* — "One database, two doors onto it: `handle_mcp_call` directly, and a REST"
+- `test_create_epic_two_issues_and_list_them(env)` *(async function)*
+- `test_retried_create_epic_with_same_key_returns_the_same_epic(env)` *(async function)*
+- `test_same_idempotency_key_with_a_different_body_is_a_conflict(env)` *(async function)*
+- `test_principal_without_project_access_gets_a_typed_error_not_an_empty_list(env)` *(async function)*
+- `test_principal_without_write_scope_gets_missing_scope(env)` *(async function)*
+- `test_create_issue_returns_an_issue_ref_matching_the_shared_pattern(env)` *(async function)*
+- `test_unknown_status_or_priority_is_a_typed_validation_error(env)` *(async function)*
+- `test_an_epic_id_from_another_project_is_unknown_epic(env)` *(async function)*
+- `test_rows_created_via_mcp_appear_unchanged_via_rest(env)` *(async function)*
 
 ### `tests/integration/test_mcp_reminders.py`
 
