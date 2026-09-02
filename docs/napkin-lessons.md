@@ -1268,3 +1268,25 @@ estrita colidem por construção. Ao usar `awt` num projeto novo, rodar a suíte
 **antes** de escrever qualquer linha de código — o primeiro `pytest` verde é o
 que separa "quebrei agora" de "nasceu quebrado". E o conflito é do kit, não do
 projeto: vale ticket lá, não `extra="ignore"` aqui.
+
+## 2026-09-01 — levantar quem já é dono antes de propor épica
+
+Eu tinha desenhado, em conversa, uma épica cobrindo "as duas admissões" — de nó
+e de projeto — porque as duas têm o mesmo formato ("o nó propõe, o operador
+decide, o servidor grava"). O operador respondeu que já havia coisa a respeito
+espalhada em outras issues. O levantamento (todas as issues, abertas e fechadas,
+mais `docs/issues/`) devolveu um resultado que mudou a proposta inteira: **três
+dos quatro temas já tinham dono — a própria #73**, cujas Stages 3 e 4 são
+exatamente descoberta/adoção e autorização por capacidade. Só o alistamento de
+nó não tinha dono em lugar nenhum.
+
+Tivesse eu escrito a épica larga, o resultado seria uma segunda estrela-guia
+competindo com a #73 sobre o mesmo terreno — e o custo não apareceria na hora,
+apareceria quando as duas divergissem.
+
+Lição: simetria de desenho ("essas duas coisas funcionam igual") é argumento
+para *reusar o mecanismo*, não para *juntar no mesmo documento de escopo*. Antes
+de propor épica nova, a pergunta barata é "quem já é dono de cada pedaço disto?",
+e ela se responde lendo as issues existentes, não a memória da conversa. O
+levantamento ainda pagou dois achados de brinde: uma issue aberta cujo código já
+estava entregue e outra com um passo de remoção que nunca aconteceu.

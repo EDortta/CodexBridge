@@ -1,8 +1,7 @@
-# Draft epic — Node lifecycle: enrollment, credentials and revocation
+# Epic #76 — Node lifecycle: enrollment, credentials and revocation
 
-**Not yet filed on GitHub.** The directory is named `draft-` on purpose; it gets
-renamed to its issue number once the issue exists, following the `063-`/`073-`
-convention.
+Filed 2026-09-01. Nothing implemented yet: the four questions at the end of
+`epic.md` are still open and answering them changes Stage 3.
 
 Scope decision (2026-09-01, with the operator): a **narrow** epic covering only
 whether a node is admitted to the fleet. Discovery, adoption and capability
