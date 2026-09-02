@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import statistics
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, func, null, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.models.entities import (
@@ -20,6 +21,7 @@ from gateway.app.models.entities import (
     ExecutorModel,
     IssueModel,
     MessageReceiptModel,
+    NotificationPreferenceModel,
     OAuthAccessTokenModel,
     OAuthAuthorizationCodeModel,
     OAuthRefreshTokenModel,
@@ -90,6 +92,12 @@ AUTH_ENTITY_TYPE = "auth"
 AUTH_SWEEPABLE_EVENT_TYPES = frozenset(
     {"auth.sign_in_failed", "auth.token_refreshed", "auth.signed_in"}
 )
+
+# `entity_type` of a notification-preference change (issue #13). Its `entity_id`
+# is a user id, not a project entity, so it is outside
+# `event_types.DELIVERABLE_ENTITY_TYPES` and can never reach the mobile event
+# stream — the same construction that keeps `auth` rows off it.
+NOTIFICATION_ENTITY_TYPE = "notification"
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -1594,6 +1602,270 @@ async def list_task_events_page(
     statement = statement.order_by(AuditEventModel.created_at.asc(), AuditEventModel.id.asc()).limit(limit + 1)
     result = await session.execute(statement)
     return list(result.scalars())
+
+
+# --------------------------------------------------------------------------
+# The mobile event stream (issue #13) — the same `audit_events` rows, derived
+# a project at a time. See gateway/app/services/event_types.py for which rows
+# become events and gateway/app/api/routes/events.py for the transport.
+# --------------------------------------------------------------------------
+
+
+def _event_project_expression():
+    """The project an audit row belongs to, derived from the entity it names.
+
+    `audit_events` has no `project_id` column and is not getting one: adding it
+    would need a backfill of every historical row and would leave two answers to
+    the same question, one of which can go stale. The four entity tables all
+    carry `project_id` already, so the derivation is a `CASE` over correlated
+    subqueries — one expression, used for both the SELECT list and the WHERE.
+
+    That reuse is the point. Authorization for this stream is "the caller may
+    see this project", and `docs/api/README.md` requires project scope be
+    enforced **on the query**: filtering after loading is how `hasMore` ends up
+    describing rows the caller may not see. An entity type not listed here
+    yields NULL and is refused by the `IS NOT NULL` guard in the query below —
+    fail-closed, so a future entity type is invisible until someone teaches this
+    function where its project lives.
+    """
+    return case(
+        (
+            AuditEventModel.entity_type == "task",
+            select(TaskModel.project_id).where(TaskModel.id == AuditEventModel.entity_id).scalar_subquery(),
+        ),
+        (
+            AuditEventModel.entity_type == "epic",
+            select(EpicModel.project_id).where(EpicModel.id == AuditEventModel.entity_id).scalar_subquery(),
+        ),
+        (
+            AuditEventModel.entity_type == "issue",
+            select(IssueModel.project_id).where(IssueModel.id == AuditEventModel.entity_id).scalar_subquery(),
+        ),
+        (
+            AuditEventModel.entity_type == "conversation",
+            select(ConversationModel.project_id)
+            .where(ConversationModel.id == AuditEventModel.entity_id)
+            .scalar_subquery(),
+        ),
+        else_=null(),
+    )
+
+
+async def list_mobile_events_page(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    entity_types: Sequence[str],
+    audit_event_types: Sequence[str],
+    after: int | None = None,
+    limit: int = 50,
+) -> list[tuple[AuditEventModel, str]]:
+    """Deliverable audit rows after `after`, oldest first, with their project.
+
+    Oldest first and keyed on the autoincrement `id`, which is what makes resume
+    exact: the client's last acknowledged id is the whole cursor, it survives a
+    reconnect with no server-side session, and `id > after` cannot deliver a row
+    twice or skip one. `created_at` is deliberately not part of the ordering —
+    two rows written in the same millisecond would tie, and a tie in a resume key
+    is a duplicate or a loss.
+
+    `project_ids=None` means an admin: no project restriction. An **empty list**
+    means a principal with no projects and must match nothing — collapsing the
+    two is the one-character mistake `docs/api/README.md` warns about, so it is
+    written as an explicit `is not None` rather than as a truthiness test.
+
+    Rows whose project cannot be derived are dropped for **every** caller,
+    admins included: an event that belongs to no project cannot be shown as
+    belonging to one, and delivering it would be the only path on this endpoint
+    that is not covered by a project check.
+
+    Over-fetches by one, same convention as every other collection here.
+    """
+    statement = select(AuditEventModel, _event_project_expression().label("project_id"))
+    statement = _restrict_to_visible_events(
+        statement,
+        project_ids=project_ids,
+        entity_types=entity_types,
+        audit_event_types=audit_event_types,
+    )
+    if after is not None:
+        statement = statement.where(AuditEventModel.id > after)
+    statement = statement.order_by(AuditEventModel.id.asc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return [(row[0], row[1]) for row in result.all()]
+
+
+def _restrict_to_visible_events(
+    statement,
+    *,
+    project_ids: list[str] | None,
+    entity_types: Sequence[str],
+    audit_event_types: Sequence[str],
+):
+    """Every guard that decides whether one audit row is visible to one caller.
+
+    Factored out so the page query and the *gap* queries below cannot answer
+    different questions about the same row. They did: `audit_cursor_status` and
+    `oldest_audit_event_id` were written against the whole table while the page
+    was correctly scoped, which made the `gap` block a one-bit oracle over rows
+    the caller may never see — a project-scoped token could watch the signal
+    flip and learn that *some* audit row had been written, including the
+    operator's sign-in, and binary-search `?after=` for the global newest id
+    (council round 1, the adversarial user). The fix is not "scope the two other
+    queries as well" but "there is one predicate, and everything uses it".
+    """
+    project_expression = _event_project_expression()
+    statement = (
+        statement.where(AuditEventModel.entity_type.in_(list(entity_types)))
+        .where(AuditEventModel.event_type.in_(list(audit_event_types)))
+        .where(project_expression.is_not(None))
+    )
+    if project_ids is not None:
+        statement = statement.where(project_expression.in_(project_ids))
+    return statement
+
+
+# What `audit_cursor_status` returns. Constants rather than bare strings: the
+# value reaches the client in a `stream.gap` frame, so a typo would be a
+# contract violation that nothing catches.
+CURSOR_OK = "ok"
+CURSOR_BEYOND_RETENTION = "beyond_retention"
+CURSOR_AHEAD = "cursor_ahead"
+
+
+async def audit_cursor_status(
+    session: AsyncSession,
+    after: int,
+    *,
+    project_ids: list[str] | None,
+    entity_types: Sequence[str],
+    audit_event_types: Sequence[str],
+) -> str:
+    """Whether resuming from `after` can be done without a silent gap.
+
+    Issue #13's acceptance criterion is that reconnection does not *silently*
+    lose events — not that no event is ever lost, which no retention policy can
+    promise. This is the signal that keeps the loss from being silent.
+
+    **Answered over the caller's own events, never the whole table.** The scope
+    arguments are not optional and there is no unscoped default, because the
+    unscoped version of this function was an information leak rather than a
+    looser answer: every caller's `gap` block moved whenever *any* audit row was
+    written anywhere in the system, so a project-scoped token could detect the
+    operator's sign-in, a revocation, or another tenant's activity — the exact
+    events this surface excludes by construction — and could binary-search
+    `?after=` for the global newest id (council round 1, the adversarial user).
+
+    Scoping it also makes the answer *more* correct, not less. The question a
+    resuming client is asking is "can my position still be continued from", and
+    its position is an id from this feed. An id from someone else's feed is not
+    a position this client can hold.
+
+    A resume cursor is always an id this gateway handed out, so the row it names
+    exists unless something removed it. Three cases:
+
+    - the row is still there and still visible, or `after` is 0 (start from the
+      beginning) — nothing was lost;
+    - the row is gone and this feed has moved past it — rows between the
+      client's position and the oldest surviving one were removed, so the client
+      must re-read rather than assume continuity (`beyond_retention`);
+    - `after` is beyond the newest id in this feed — the cursor came from
+      another deployment, or this database was restored from a backup older than
+      the client. Left unsignalled, the stream would simply never deliver
+      anything again, which is the same silence in the other direction
+      (`cursor_ahead`).
+
+    Note what this build's retention actually does:
+    `purge_expired_audit_events` deletes `entity_type == "auth"` rows and
+    nothing else, so **no domain event has ever been purged here** and
+    `beyond_retention` cannot be reached in production today. The check exists
+    so that a future retention policy over domain rows — an operator decision
+    this code does not make — cannot cause a silent loss the day it is enabled.
+    """
+    if after <= 0:
+        return CURSOR_OK
+    visible = _restrict_to_visible_events(
+        select(AuditEventModel.id),
+        project_ids=project_ids,
+        entity_types=entity_types,
+        audit_event_types=audit_event_types,
+    )
+    exists = await session.execute(visible.where(AuditEventModel.id == after).limit(1))
+    if exists.scalars().first() is not None:
+        return CURSOR_OK
+    newest = (await session.execute(select(func.max(visible.subquery().c.id)))).scalar()
+    if newest is None or after > newest:
+        return CURSOR_AHEAD
+    return CURSOR_BEYOND_RETENTION
+
+
+async def oldest_audit_event_id(
+    session: AsyncSession,
+    *,
+    project_ids: list[str] | None,
+    entity_types: Sequence[str],
+    audit_event_types: Sequence[str],
+) -> int | None:
+    """Lowest id still in **this caller's** feed, reported alongside a gap.
+
+    A client that learns it fell behind still has to know where to restart from;
+    "you lost some" with no position leaves it guessing. Scoped for the same
+    reason `audit_cursor_status` is: unscoped, this returned the global minimum
+    audit id to anyone holding a read token.
+    """
+    visible = _restrict_to_visible_events(
+        select(AuditEventModel.id),
+        project_ids=project_ids,
+        entity_types=entity_types,
+        audit_event_types=audit_event_types,
+    )
+    return (await session.execute(select(func.min(visible.subquery().c.id)))).scalar()
+
+
+# --------------------------------------------------------------------------
+# Notification preferences (issue #13) — recorded intent for a push transport
+# this build does not have. See gateway/app/api/routes/notifications.py.
+# --------------------------------------------------------------------------
+
+
+async def get_notification_preference(
+    session: AsyncSession, user_id: str
+) -> NotificationPreferenceModel | None:
+    return await session.get(NotificationPreferenceModel, user_id)
+
+
+async def set_notification_preference(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    event_types: list[str],
+    push_enabled: bool,
+) -> NotificationPreferenceModel:
+    """Replace one actor's preferences wholesale, creating the row if absent.
+
+    A full replacement rather than a merge: the resource is a single document
+    owned by one actor, `PUT` is what the contract publishes, and a partial
+    update would need a `PATCH` and an `If-Match` for a resource nothing else
+    can mutate. See `routes/notifications.py` for why there is no `ETag` here.
+    """
+    now = datetime.now(timezone.utc)
+    row = await session.get(NotificationPreferenceModel, user_id)
+    if row is None:
+        row = NotificationPreferenceModel(user_id=user_id, updated_at=now)
+        session.add(row)
+    row.event_types_json = json.dumps(sorted(set(event_types)), ensure_ascii=True)
+    row.push_enabled = push_enabled
+    row.updated_at = now
+    await record_event(
+        session,
+        NOTIFICATION_ENTITY_TYPE,
+        user_id,
+        "notification.preferences_updated",
+        {"event_type_count": len(set(event_types)), "push_enabled": push_enabled},
+    )
+    await session.commit()
+    await session.refresh(row)
+    return row
 
 
 # --------------------------------------------------------------------------

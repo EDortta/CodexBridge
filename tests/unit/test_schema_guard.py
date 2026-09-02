@@ -119,7 +119,7 @@ def test_required_tables_cannot_fire_at_boot_today() -> None:
     written for.
 
     A council round found `docs/api/README.md` promising the opposite for
-    migration 0008 ("fails at boot naming the file"). The prose is corrected;
+    migration 0010 ("fails at boot naming the file"). The prose is corrected;
     this test is what keeps it corrected. **It is not an endorsement.** The cost
     is real — a deployment that skips a migration silently runs the `create_all`
     schema, without the indexes and defaults the `.sql` carries and without a
@@ -157,6 +157,6 @@ def test_required_tables_cannot_fire_at_boot_today() -> None:
     assert create_all_at < check_schema_at, (
         "`check_schema` now runs before `create_all`, so REQUIRED_TABLES is a real "
         "boot gate. Put the promise back in docs/api/README.md §\"Deploy needs "
-        "migration 0008\", in scripts/install.sh, in deploy/README.md and in "
+        "migration 0010\", in scripts/install.sh, in deploy/README.md and in "
         "scripts/apply_migrations.py, and delete this test."
     )

@@ -62,6 +62,61 @@ def unauthenticated(message: str = TOKEN_REJECTED) -> ApiError:
     )
 
 
+async def principal_for_token(
+    session: AsyncSession, token: str
+) -> AuthenticatedPrincipal | None:
+    """The principal a bearer token resolves to right now, or None.
+
+    One function, two callers, on purpose. `current_principal` below authorizes
+    a single request; `gateway/app/api/routes/events.py` re-runs this on every
+    poll of a long-lived SSE stream, because a stream that authorized once at
+    `GET` time would keep delivering a project's events for as long as it stayed
+    open — through a revocation, an expiry, an account the operator disabled and
+    a project removed from `allowed_projects`. Both need the *same* answer, so
+    a second copy of these three checks is exactly the drift
+    `design-standards.md` §3 is about: the guard belongs next to the dangerous
+    thing, once.
+
+    Returns None for every failure rather than distinguishing them. The caller
+    decides what that means — a `401` for a request, an end-of-stream for a
+    stream — but not *why*, because unknown, expired, revoked and
+    account-disabled are indistinguishable to a caller by design (see
+    `unauthenticated` above).
+    """
+    item = await store.get_oauth_access_token(session, token)
+    if item is None:
+        # Covers unknown, expired and revoked alike: the store refuses all
+        # three, and telling them apart tells a probing caller whether a token
+        # was ever real.
+        return None
+
+    user = lookup_user(settings.user_registry_file, item.user_id)
+    if user is None or not user.enabled:
+        # 401, not 403, at the request caller. The operator disabled the account
+        # or removed it, so the credential is dead and the only recovery is to
+        # present another one — which is what 401 means and what the client's
+        # 401 branch does. A 403 here told the client "you are authenticated and
+        # not permitted", so it showed a permissions error and kept the dead
+        # session; and it made `/api/v1/auth/me` — the one endpoint whose
+        # purpose is reporting authorization — answer a status its contract does
+        # not declare.
+        #
+        # It also makes the rule the rest of this surface is documented by
+        # actually true: on `/api/v1`, `403` comes from `require_action` and
+        # from nowhere else.
+        return None
+
+    return AuthenticatedPrincipal(
+        user_id=user.user_id,
+        email=user.email,
+        roles=user.roles,
+        allowed_projects=user.allowed_projects,
+        scopes=json.loads(item.scopes_json or "[]"),
+        can_approve_sensitive=user.can_approve_sensitive,
+        auth_scheme="oauth",
+    )
+
+
 async def current_principal(
     request: Request,
     session: AsyncSession = Depends(get_session),
@@ -75,37 +130,9 @@ async def current_principal(
     if token is None:
         raise unauthenticated()
 
-    item = await store.get_oauth_access_token(session, token)
-    if item is None:
-        # Covers unknown, expired and revoked alike: the store refuses all
-        # three, and telling them apart tells a probing caller whether a token
-        # was ever real.
+    principal = await principal_for_token(session, token)
+    if principal is None:
         raise unauthenticated()
-
-    user = lookup_user(settings.user_registry_file, item.user_id)
-    if user is None or not user.enabled:
-        # 401, not 403. The operator disabled the account or removed it, so the
-        # credential is dead and the only recovery is to present another one —
-        # which is what 401 means and what the client's 401 branch does. A 403
-        # here told the client "you are authenticated and not permitted", so it
-        # showed a permissions error and kept the dead session; and it made
-        # `/api/v1/auth/me` — the one endpoint whose purpose is reporting
-        # authorization — answer a status its contract does not declare.
-        #
-        # It also makes the rule the rest of this surface is documented by
-        # actually true: on `/api/v1`, `403` comes from `require_action` and
-        # from nowhere else.
-        raise unauthenticated()
-
-    principal = AuthenticatedPrincipal(
-        user_id=user.user_id,
-        email=user.email,
-        roles=user.roles,
-        allowed_projects=user.allowed_projects,
-        scopes=json.loads(item.scopes_json or "[]"),
-        can_approve_sensitive=user.can_approve_sensitive,
-        auth_scheme="oauth",
-    )
     # Recorded for handlers and for anything that runs *after* authentication.
     #
     # NOT for the rate limiter, despite `client_key` preferring an actor bucket:

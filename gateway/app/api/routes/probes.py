@@ -73,7 +73,17 @@ version_router = APIRouter()
 # `POST .../{artifactId}/download-token`, `GET .../{artifactId}/download`,
 # `GET /api/v1/builds/android` and `GET .../{buildId}`. Six new endpoints and
 # their schemas, nothing existing changed, so a minor bump.
-API_CONTRACT_VERSION = "1.7.0"
+#
+# 1.7.0 -> 1.8.0: the mobile event stream (issue #13) — `GET /api/v1/events`,
+# `GET /api/v1/events/stream` and `GET`/`PUT
+# /api/v1/notifications/preferences`, plus the `MobileEvent` family of schemas.
+# Additive only, so a minor bump.
+#
+# **1.7.0 was reserved for issue #11 while both branches were open**, and that
+# is why this merge was a one-line text conflict instead of two different
+# 1.7.0 contracts racing to overwrite each other. Both landed; the numbering
+# above is the order they were reserved in, not the order they merged.
+API_CONTRACT_VERSION = "1.8.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a
@@ -100,7 +110,11 @@ CAPABILITIES = {
     "tokenRevocation": True,     # POST /api/v1/auth/revoke
     "effectivePermissions": True,  # GET /api/v1/auth/me
     "deviceAuthorization": False,  # RFC 8628; sign-in is what #4 delivered
-    "eventStream": False,        # issue #13
+    # GET /api/v1/events/stream (SSE) and GET /api/v1/events (the polling
+    # fallback). True because both routes are served — the flag is about the
+    # transport existing, not about push notifications, which are a different
+    # thing and still absent (see `routes/notifications.py`).
+    "eventStream": True,         # issue #13
     # GET /api/v1/artifacts, GET /api/v1/builds/android, and the
     # mint-then-stream download flow under /api/v1/artifacts/{id} (issue #11).
     # True because the endpoints are served, not because artifacts exist: this

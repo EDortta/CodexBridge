@@ -13,6 +13,7 @@ one at a time. A general "the docs are true" test is not a thing that exists.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -390,4 +391,104 @@ def test_the_installation_guide_names_every_setting_security_md_calls_mandatory(
     assert "CODEX_BRIDGE_ARTIFACTS_ROOT" in installation, (
         "docs/security.md calls CODEX_BRIDGE_ARTIFACTS_ROOT mandatory for a deployment "
         "and docs/installation.md never names it"
+    )
+
+
+def test_no_document_names_a_capability_flag_the_probe_does_not_report() -> None:
+    """A `false` flag a client can read is the point; a *missing* key is not one.
+
+    Issue #13 shipped three artifacts asserting `GET /api/version` reports
+    `pushNotifications: false` — the model, the route module and the migration.
+    It reports no such key, so a client branching on
+    `capabilities.pushNotifications === false` reads `undefined` and takes the
+    wrong branch for the one capability the delivery went out of its way to
+    describe as absent (council round 1, both the claim auditor and the second
+    caller, independently).
+
+    Scanned across the trees a client author actually reads. The check is
+    "named as a capability", not "mentioned": the real name for this signal,
+    `pushDeliveryAvailable`, lives in the preferences body and is not a
+    `/api/version` flag at all.
+    """
+    from gateway.app.api.routes.probes import CAPABILITIES
+
+    pattern = re.compile(r"`?GET /api/version`?[^\n]{0,200}?`(\w+)`\s*:\s*(?:true|false)")
+    offenders: list[str] = []
+    for tree in ("gateway", "migrations", "docs"):
+        for path in sorted((REPO_ROOT / tree).rglob("*")):
+            if path.suffix not in {".py", ".sql", ".md", ".yaml"} or not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            for match in pattern.finditer(" ".join(text.split())):
+                if match.group(1) not in CAPABILITIES:
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}: {match.group(1)}")
+
+    assert not offenders, (
+        "these claim GET /api/version reports a capability flag it does not have: "
+        f"{offenders}. Either add the flag to probes.CAPABILITIES (only if a "
+        "served endpoint honours it) or stop naming it."
+    )
+
+
+def test_the_codemap_names_the_canonical_checkout_not_a_worktree() -> None:
+    """`governancekit map` stamps the root it was run from, and agents run in worktrees.
+
+    Issue #13 was developed in `CodexBridge--gh-13` and committed a map whose
+    `Root:`/`Refresh:` lines pointed at that throwaway directory, so anyone on
+    `development` following the document's own refresh command would target a
+    path that does not exist on their machine (council round 1, the claim
+    auditor). The map's *content* is identical either way; only the provenance
+    header is wrong, which is what makes it easy to ship.
+    """
+    header = " ".join(CODEMAP.read_text(encoding="utf-8").split()[:60])
+    stray = re.findall(r"/[\w./-]*CodexBridge--[\w.-]+", header)
+    assert not stray, (
+        f"docs/codemap.md names a worktree as the project root: {stray}. "
+        "Regenerate against the canonical checkout, or correct the header."
+    )
+
+
+def test_the_audit_payload_writer_count_is_the_real_one() -> None:
+    """Five files tell a reader how many writers can put a key in an audit payload.
+
+    That number is the whole premise of issue #13's whitelist: a reader auditing
+    what may leak enumerates the writers. The delivery said "eleven" in five
+    places while there were 31 — so an auditor following the prose would stop
+    after roughly a third of them (council round 1, the claim auditor).
+    """
+    import ast
+
+    spelled = {11: "eleven", 31: "thirty-one", 35: "thirty-five"}
+    count = 0
+    for path in (REPO_ROOT / "gateway").rglob("*.py"):
+        if path.name == "audit.py":
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if name == "record_event":
+                count += 1
+
+    truth = spelled.get(count)
+    assert truth is not None, (
+        f"there are now {count} record_event call sites and this test has no word "
+        f"for it; add one to `spelled` and update the prose that names the number"
+    )
+    wrong = sorted(
+        str(path.relative_to(REPO_ROOT))
+        for tree in ("gateway", "docs", "tests")
+        for path in (REPO_ROOT / tree).rglob("*")
+        if path.is_file()
+        and path.suffix in {".py", ".md"}
+        and any(
+            f"{word} call sites" in " ".join(path.read_text(encoding="utf-8").split())
+            for word in spelled.values()
+            if word != truth
+        )
+    )
+    assert not wrong, (
+        f"there are {count} ({truth}) record_event call sites; these still name a "
+        f"different number: {wrong}"
     )

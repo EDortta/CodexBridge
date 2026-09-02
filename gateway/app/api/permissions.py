@@ -51,6 +51,12 @@ ISSUES_WRITE_SCOPE = "codexbridge.issues.write"
 # CANCEL_SCOPE: writing a project plan and starting a discussion about it are
 # different capabilities an operator may grant separately.
 CONVERSATIONS_WRITE_SCOPE = "codexbridge.conversations.write"
+# Changing one's own notification-subscription preferences (issue #13). Distinct
+# from every scope above for the same reason they are distinct from each other:
+# an operator may want a phone that can watch the event stream (READ_SCOPE)
+# without that phone being able to rewrite what the account gets notified about.
+# Reading the preferences needs only READ_SCOPE; this scope guards the write.
+NOTIFICATIONS_MANAGE_SCOPE = "codexbridge.notifications.manage"
 
 READ = "read"
 OPERATIONAL = "operational"
@@ -276,6 +282,28 @@ CONVERSATIONS_POST_MESSAGE = Action(
     summary="Post a message to a conversation.",
 )
 
+EVENTS_READ = Action(
+    name="events.read",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="Read the event backlog and open the live event stream, within the actor's projects.",
+)
+
+NOTIFICATIONS_READ = Action(
+    name="notifications.read",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="Read this actor's own notification-subscription preferences.",
+)
+
+NOTIFICATIONS_MANAGE = Action(
+    name="notifications.manage",
+    category=OPERATIONAL,
+    scope=NOTIFICATIONS_MANAGE_SCOPE,
+    summary="Change this actor's own notification-subscription preferences.",
+)
+
+
 # Order is the reported order. Grouped by class, read first, so a client that
 # renders the list without sorting produces something sensible.
 CATALOGUE: tuple[Action, ...] = (
@@ -291,6 +319,8 @@ CATALOGUE: tuple[Action, ...] = (
     CONVERSATIONS_READ,
     ARTIFACTS_READ,
     ARTIFACTS_DOWNLOAD,
+    EVENTS_READ,
+    NOTIFICATIONS_READ,
     SESSIONS_STOP,
     SESSIONS_PAUSE,
     SESSIONS_RESUME,
@@ -302,6 +332,7 @@ CATALOGUE: tuple[Action, ...] = (
     EPICS_LINK_ISSUE,
     CONVERSATIONS_CREATE,
     CONVERSATIONS_POST_MESSAGE,
+    NOTIFICATIONS_MANAGE,
     SESSIONS_READ_ALL_PROJECTS,
     DECISIONS_READ,
     DECISIONS_DECIDE,

@@ -32,8 +32,10 @@ from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import decisions as decisions_routes
 from gateway.app.api.routes import epics as epics_routes
+from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import issues as issues_routes
 from gateway.app.api.routes import missions as missions_routes
+from gateway.app.api.routes import notifications as notifications_routes
 from gateway.app.api.routes import projects as projects_routes
 from gateway.app.api.routes import sessions as sessions_routes
 from gateway.app.api.setup import install_api_conventions
@@ -166,6 +168,8 @@ async def api(users_file, monkeypatch):
     app.include_router(issues_routes.router)
     app.include_router(conversations_routes.router)
     app.include_router(artifacts_routes.router)
+    app.include_router(events_routes.router)
+    app.include_router(notifications_routes.router)
 
     async def override():
         async with factory() as s:
@@ -1351,6 +1355,18 @@ ENDPOINT_FOR_ACTION = {
     # exists behind that id (nothing in this build produces one).
     "artifacts.read": ("GET", "/api/v1/artifacts"),
     "artifacts.download": ("POST", "/api/v1/artifacts/{id}/download-token"),
+    # The backlog endpoint, never `/events/stream`: this loop issues a plain
+    # request and reads the status, and an SSE body does not end until the
+    # server closes it, so pointing the parity check at the stream would hang
+    # the suite for `event_stream_max_duration_seconds`. Both are guarded by
+    # the same `events.read` action, which is what is being checked here.
+    "events.read": ("GET", "/api/v1/events"),
+    "notifications.read": ("GET", "/api/v1/notifications/preferences"),
+    # No body sent, on purpose. `require_action` is a sub-dependency and runs
+    # before the request body is validated, so a caller lacking the scope gets
+    # the 403 this loop looks for; one that has it gets a 422 for the missing
+    # body, which is a non-403 and is exactly what the loop asserts.
+    "notifications.manage": ("PUT", "/api/v1/notifications/preferences"),
 }
 
 # Actions with no endpoint of their own, each naming the test that covers it

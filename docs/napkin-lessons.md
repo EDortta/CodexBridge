@@ -1450,3 +1450,32 @@ o argumento mais forte que este projeto já teve a favor da segunda rodada:
 `.docs/agents/council.md` chama duas rodadas de hipótese com n=1, e desta vez a
 rodada 2 encontrou a falha de segurança mais séria de toda a entrega.
 Registro completo em `docs/issues/011-artifacts-downloads-apk/RESUME.md`.
+
+## 2026-08-26 — council on gh-13 (mobile event stream), Squad E
+
+Two rounds against an SSE stream over `audit_events`. Branch
+`feature/gh-13/mobile-event-stream`.
+
+- Round 1 — raised: 11 · survived §2: 11 · became tests: 11 · questions: 0
+- Round 2 — raised: 7 · survived §2: 7 · became tests: 1 · questions: 2
+
+Lessons:
+
+- A per-actor slot ceiling that the deployment wires from settings was tested
+  only on a hand-built `StreamSlots(4, per_actor=2)`, while the `api` fixture
+  replaced the module-level object with `StreamSlots(limit)` — dropping
+  `per_actor`. So the guard that actually runs had no test: removing
+  `settings.event_stream_max_per_actor` from the construction left the whole
+  suite green. Pin the wired object, not just the class. Round 2 closed it with a
+  module-level assertion that the live `stream_slots.per_actor` equals the
+  configured value (and that the two config numbers differ, or the assertion
+  could not tell a dropped argument from the default).
+- Rescoping a "gap"/"oldest id" signal from the whole log to the caller's own
+  feed silently invalidated the published contract text ("beyond anything this
+  log has ever held … came from a different deployment"): a client simply new to
+  a quiet project now hits that reason on every connect. When you narrow what a
+  signal means, the OpenAPI/README sentence describing it is part of the change.
+- `redact` is a pattern list, not a closed set; whitelisting a payload key does
+  not make it safe unless the key is a closed vocabulary OR goes through
+  redaction+truncation. `actorId` was whitelisted with neither — latent only
+  because every live writer happens to pass a server-side id.

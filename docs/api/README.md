@@ -1235,7 +1235,7 @@ query, never to the loaded rows, and an artifact in a project the caller cannot
 see answers a `404` that is byte-identical to the answer for an id that does
 not exist.
 
-### Deploy needs migration 0008
+### Deploy needs migration 0010
 
 `migrations/0010_artifacts.sql` creates `artifacts`, `android_builds` and
 `artifact_download_tokens`, plus the three indexes the catalogue's ordering and
@@ -1252,12 +1252,223 @@ pins it so this paragraph cannot quietly become false again.
 
 What that costs, concretely: a deployment that skips the migration runs on the
 `create_all` schema instead of the shipped one — **no indexes**, a `content_type`
-column without its default, and no `schema_migrations` row for 0008, so a later
+column without its default, and no `schema_migrations` row for 0010, so a later
 migration's bookkeeping starts from a wrong premise. Nothing warns. Whether
 `check_schema` should move ahead of `create_all` (or `create_all` stop covering
 migration-owned tables) is a change to how every migration in this project is
 gated, not something issue #11 decides on the way past — it is flagged for the
 operator in `docs/issues/011-artifacts-downloads-apk/RESUME.md`.
+
+## Events and notifications (issue #13)
+
+`GET /api/v1/events/stream` (Server-Sent Events), `GET /api/v1/events` (the
+same events as an ordinary paged read), and `GET`/`PUT
+/api/v1/notifications/preferences`.
+
+### Why SSE, and why the polling endpoint is not a consolation prize
+
+SSE rather than WebSocket for three reasons, none of them "we had no
+WebSocket" — the gateway already speaks one at `/agent/ws`:
+
+- **Authentication.** Everything on this contract authenticates with
+  `Authorization: Bearer`. A browser or mobile WebSocket cannot set that
+  header on the handshake, so a WebSocket stream would need a second
+  authentication scheme: a token in the URL (forbidden — see
+  `.docs/agents/security-standards.md`) or a bespoke post-handshake auth
+  frame. SSE rides the scheme that already exists.
+- **Resume is in the transport.** `Last-Event-ID` is part of SSE. Issue #13's
+  "resume from the last acknowledged event" is the mechanism SSE was designed
+  around, with no application protocol on top.
+- **One direction is all this needs.** Nothing here asks the client to send
+  anything on the channel.
+
+`GET /api/v1/events` delivers the *same* events with the *same* ids. A client
+on a network that kills long-lived connections, or one in a background state
+where the platform will not hold a socket open, polls it and loses nothing.
+Both transports are first-class, and a client may move between them mid-stream
+because the position means the same thing on both.
+
+### The resume position is a public integer, not a cursor
+
+Every other collection here pages with an opaque signed cursor. This one does
+not, and that is deliberate rather than an oversight: the position is
+`Last-Event-ID`, which SSE puts on the wire and the client sends back
+verbatim. Wrapping the same position in an opaque cursor for the polling
+endpoint would publish two names for one place and make the two transports
+incompatible — a client could not hand a stream position to the fallback. The
+same reasoning `GET /api/v1/sessions/{sessionId}/logs` already applies to an
+append-only log.
+
+The id is monotonic but **not contiguous**: the underlying log also holds
+records that are never delivered as events. A skipped number is not a lost
+event. Loss is reported explicitly, and only explicitly — see below.
+
+`page.nextAfter` is the last id the page **loaded**, not the last id it
+returned. With a `type` filter the two differ, and reporting the last returned
+id would make the next request re-scan rows the filter already rejected —
+forever, when nothing in the tail matches.
+
+### No silent loss, in both directions
+
+Resume is `id > position`, so an event cannot be delivered twice or skipped
+while its record exists. The only way to lose one is for the record itself to
+be gone, and that is announced rather than papered over: the stream emits a
+`stream.gap` frame **before** delivering anything, and `GET /api/v1/events`
+returns a `gap` object beside its items. Delivering first and mentioning the
+gap afterwards would let a client act on a partial view believing it was
+continuous.
+
+Two reasons, and the second one matters as much as the first:
+
+- `beyond_retention` — the position's record is gone and the log moved past
+  it. `oldestAvailableId` says where to restart, because "you lost some" with
+  no position leaves a client guessing.
+- `cursor_ahead` — the position is beyond anything this log has ever held: a
+  position from another deployment, or a database restored from a backup older
+  than the client. Unsignalled, the stream would simply never deliver again,
+  which is the same silence in the other direction and much harder to diagnose
+  from a phone.
+
+Note what this build's retention actually does:
+`store.purge_expired_audit_events` deletes authentication rows and nothing
+else, so no domain event has ever been purged here and `beyond_retention`
+cannot be reached today. The signal exists so that a future retention policy
+over domain rows — an operator's decision, not this code's — cannot cause a
+silent loss the day it is switched on.
+
+### Authorization is by project, and it is re-checked while the stream runs
+
+A stream opened at 09:00 and still open at 17:00 authorized once, and
+everything after that was delivered on an eight-hour-old decision. This one
+re-resolves the bearer token on **every poll**: a revoked token, an expired
+token, a disabled account and a project removed from the actor's
+`allowedProjects` all take effect within one poll interval. The first three end
+the stream with `stream.closed` and `reason: unauthenticated`; the fourth
+simply stops delivering that project. **A client must not treat an open
+connection as proof it is still authorized.**
+
+Project scope is enforced on the query, like everywhere else here, so a page is
+never a filtered-down view of rows the caller was allowed to load. `?project=`
+only ever *narrows*: naming a project outside `allowedProjects` matches
+nothing.
+
+An event whose project cannot be derived is delivered to **nobody**,
+administrators included. `audit_events` has no project column — a row's project
+comes from the entity it names — and an event that belongs to no project cannot
+honestly be shown as belonging to one. Fail closed: an entity type nothing
+teaches the derivation about is invisible until someone does.
+
+### Authentication and security events are not on this surface at all
+
+Sign-in, failed sign-in and credential revocation are recorded in the same
+audit log these events are derived from. They are **excluded by construction**,
+not by a filter someone has to remember: they carry a user id where a project
+would be, so they are outside the set of entity types this surface can deliver.
+Streaming them would tell any token holder — including one belonging to a
+different person — when the operator signs in. Notification-preference changes
+are excluded the same way.
+
+### The summary is a whitelist; the stored payload never ships
+
+The internal audit payload is written by thirty-five call sites that were never
+audited for what they may contain: `actor_email`, `requested_by_email`,
+free-text `reason` and `error` strings from an executor, `context` blobs.
+§"Fields that must never ship" applies to every byte of it and no existing
+sanitizer covers a response body.
+
+So it is never passed through. Each event type names the handful of payload
+keys it may read, free text goes through the same `redact` the session-log
+endpoint uses and is truncated to a notification line, and a key nobody
+whitelisted does not leave the process. Adding a field to an audit payload
+therefore cannot leak it — the default is exclusion. Treat `summary` as a
+notification line, never as data: fetch the entity for authoritative state.
+
+### One change is one event, not three
+
+A session, a mission and a decision are three vocabularies over the same
+underlying row (§"Missions (issue #7)"). This surface does not triple every
+event to match. It emits one, with `entity.kind` naming the vocabulary that
+fits what happened — `decision` for the approval lifecycle, `session` for the
+run's own — and the id is the same id, so `GET /api/v1/sessions/{id}` and
+`GET /api/v1/missions/{id}` both accept it.
+
+One audit record forks on its content: a submission held for approval is a
+`decision.requested`, and every other submission is a `session.created`. Both
+are the same recorded row, so the fork lives in one place rather than in a
+second writer nobody would remember to call.
+
+### `MobileEventType` is closed, and already declares what #11 will emit
+
+A client may switch over it exhaustively, which makes adding a value a
+breaking change under §"What is a breaking change". `artifact.created`,
+`artifact.updated` and `androidBuild.status_changed` are therefore declared
+**now**, by a build that produces none of them — there is no artifact or
+Android build record until issue #11. Declaring them costs a client nothing
+(they never arrive) and saves a `v2` when they do. A `?type=` filter naming one
+is accepted and matches nothing, rather than answering `400`; rejecting it
+would make the declared values unusable, which is the opposite of why they were
+declared.
+
+### Notification preferences are a hook, not a filter
+
+`GET`/`PUT /api/v1/notifications/preferences` is one document per actor,
+always the caller's own — there is no `userId` parameter and no administrator
+override, because a preference document is personal data and an endpoint that
+could read another account's would be a disclosure with no product behind it.
+
+**There is no push transport in this build.** `pushDeliveryAvailable` is
+`false` and nothing reads these rows to decide delivery. They are stored so the
+choice survives a reinstall and so a later push integration has something to
+read.
+
+**They do not filter `GET /api/v1/events/stream`.** A client that opened the
+stream asked for the stream; withholding events from it because of a preference
+set on another device is how a phone silently misses the decision its operator
+was waiting for — and the failure would be indistinguishable from a quiet
+system. Narrow a live connection with that endpoint's `?type=` instead, which
+is per-connection state and cannot change underneath it.
+
+**A session that predates the scope grant keeps a token that cannot write.** A
+principal's scopes are snapshotted into the token row at sign-in, and
+`POST /api/v1/auth/refresh` rotates with `granted & user.scopes &
+server_allowlist` — an intersection, so it can only ever narrow. Adding
+`codexbridge.notifications.manage` to an account therefore does **not** reach a
+phone that is already signed in: it keeps answering `403` on this endpoint,
+through every refresh, until the absolute session lifetime expires or the user
+signs in again. That is the deliberate behaviour of a rotation that never
+escalates — a stolen refresh token must not be able to widen itself — and the
+cost is stated here rather than discovered. An operator granting a new scope to
+an existing user should expect to tell them to sign in again; a client seeing
+`403` on an action `GET /api/v1/auth/me` also reports as not allowed should
+offer re-authentication, not an error.
+
+`PUT` is a whole-document replacement, so it is idempotent by construction:
+there is no `Idempotency-Key` (nothing to duplicate) and no `ETag`/`If-Match`
+(the only writer of a row is the actor it belongs to, so there is no concurrent
+third party for an optimistic check to protect against — the same reasoning
+§"No `revision`, no `ETag`, no `If-Match`" gives for conversations). Reading
+needs only `codexbridge.read`; writing needs
+`codexbridge.notifications.manage`, separate on purpose so an operator can
+grant a phone the stream without granting it the ability to rewrite what the
+account is notified about.
+
+### Limits, and what the rate limiter does not bound
+
+The limiter counts requests per window. One accepted request to
+`/events/stream` becomes a connection held open for minutes that takes a
+database session on every poll, so the endpoint that is cheapest per request is
+the one that can exhaust the pool the rest of the API shares. The gateway
+therefore bounds how many streams it holds open at once and answers `503` with
+`Retry-After` at that ceiling — refusing rather than queueing, because a
+refused client reconnects with its `Last-Event-ID` and loses nothing while a
+queued one holds the connection it was refused for. Each stream's lifetime is
+bounded too, and ends with `stream.closed` and `reason: max_duration`; every
+ending is a reconnect, and every reconnect is exact.
+
+`?type=` is validated before the first byte. Once a `text/event-stream` body
+has started there is no status code left to change, and a client that
+misspelled a filter would otherwise see an open, empty, permanently silent
+connection instead of a `400`.
 
 ---
 

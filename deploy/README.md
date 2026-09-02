@@ -47,7 +47,7 @@ anonymous caller collapses into one rate-limit bucket.
   The gateway refuses to start when a migration adds a *column* it has not seen
   (`gateway/app/db/schema_guard.py`), and the unit restarts every 5s, so
   skipping the step can turn an upgrade into a crash loop. A migration that only
-  adds *tables* — 0006, 0007 and 0008 — fails **silently**: `startup` runs
+  adds *tables* — 0006, 0007, 0009, 0010 and 0011 — fails **silently**: `startup` runs
   `Base.metadata.create_all` before `check_schema`, so the gateway creates them
   itself and serves on a schema without the `.sql`'s indexes and defaults, with
   no `schema_migrations` row. Applying it stays an operator decision:

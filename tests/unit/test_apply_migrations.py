@@ -96,6 +96,21 @@ def legacy_db(tmp_path: Path) -> Path:
         ");"
         "insert into projects (id, name, path) values"
         "  ('codexbridge', 'CodexBridge', '/srv/projects/codexbridge');"
+        # 0001 created this and 0011 indexes it. Every migration after the
+        # adoption point runs against whatever `--mark-applied 0001_init.sql`
+        # says is already there, so a table a later migration touches has to be
+        # in this fixture or the runner is being tested against a schema no
+        # adopted deployment has — the same reason the two OAuth tables above
+        # are here. No row: 0011 adds an index, and what an index does to
+        # existing data is nothing.
+        "create table audit_events ("
+        "  id integer primary key autoincrement,"
+        "  entity_type varchar(64) not null,"
+        "  entity_id varchar(128) not null,"
+        "  event_type varchar(128) not null,"
+        "  payload_json text not null,"
+        "  created_at timestamp with time zone not null"
+        ");"
     )
     connection.commit()
     connection.close()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from gateway.app.db.base import Base
@@ -501,6 +501,18 @@ class TaskLogModel(Base):
 
 
 class AuditEventModel(Base):
+    # Declared in the model as well as in `migrations/0011_event_subscriptions.sql`
+    # so a **fresh** install gets it: `main.py` bootstraps a new database with
+    # `Base.metadata.create_all`, which knows nothing about the migrations
+    # directory, so an index that lived only in SQL would exist on upgraded
+    # deployments and be missing on new ones — the harder of the two to notice,
+    # because it is the one nobody ran a migration for (council round 1, the
+    # second caller). `create_all(checkfirst=True)` does not add an index to a
+    # table that already exists, which is exactly why 0009 has to carry it too.
+    __table_args__ = (
+        Index("audit_events_entity_type_id_idx", "entity_type", "id"),
+    )
+
     __tablename__ = "audit_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -509,6 +521,41 @@ class AuditEventModel(Base):
     event_type: Mapped[str] = mapped_column(String(128))
     payload_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class NotificationPreferenceModel(Base):
+    """Which events one actor wants to be notified about — issue #13.
+
+    Recorded intent, not a delivery mechanism. This build has no push transport —
+    reported to the client as `pushDeliveryAvailable: false` in the preferences
+    body, not by `GET /api/version`, whose `capabilities` map has no push key —
+    and these rows do
+    **not** filter `GET /api/v1/events/stream`: a client that subscribed to the
+    stream asked for the stream, and silently withholding events from it because
+    of a preference set on another device is how a mobile client misses a
+    decision it was waiting for. See `gateway/app/api/routes/notifications.py`.
+
+    One row per actor, keyed by `user_id` — the id from `users.json`, never an
+    email. There is no `revision`/`ETag`: the only writer of a row is the actor
+    it belongs to, through a `PUT` that replaces the document wholesale, so
+    there is no concurrent third party for an optimistic check to protect
+    against (`ConversationModel` is this schema's other revision-less table, for
+    the same kind of reason).
+    """
+
+    __tablename__ = "notification_preferences"
+
+    user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    # JSON list of `event_types.ALL_EVENT_TYPES` members, validated at the route
+    # before it is written: an unvalidated list here would be a store of
+    # arbitrary caller text echoed back to that caller later.
+    event_types_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    # No `server_default`: `"0"` renders as a quoted literal that Postgres
+    # refuses for a boolean column, and every other boolean in this schema
+    # (`ExecutorModel.enabled`, `TaskModel.run_when_available`) sets its default
+    # in Python and in the migration rather than through SQLAlchemy's DDL.
+    push_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class MessageReceiptModel(Base):

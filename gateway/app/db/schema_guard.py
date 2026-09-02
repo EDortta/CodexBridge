@@ -57,6 +57,10 @@ REQUIRED_TABLES: dict[str, str] = {
     "artifacts": "0010_artifacts.sql",
     "android_builds": "0010_artifacts.sql",
     "artifact_download_tokens": "0010_artifacts.sql",
+    # Issue #13's event stream adds no table of its own — it reads `audit_events`,
+    # which 0001 already created. This is the notification-preferences table, the
+    # one thing that issue does persist.
+    "notification_preferences": "0011_event_subscriptions.sql",
 }
 
 # READ THIS BEFORE TRUSTING THE TABLE ABOVE.

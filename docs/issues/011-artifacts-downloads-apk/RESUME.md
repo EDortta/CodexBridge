@@ -13,7 +13,7 @@ the council and are deliberately **not** decided here.
 1. **`schema_guard.REQUIRED_TABLES` is documentation, not a boot gate.**
    `gateway/app/main.py:startup` runs `Base.metadata.create_all` one statement
    before `check_schema`, and every table it demands is declared on `Base` — so
-   a gateway started against a database that never ran 0006, 0007 or 0008
+   a gateway started against a database that never ran 0006, 0007, 0009, 0010 or 0011
    creates the tables itself and starts clean. What it then runs is the
    `create_all` schema, **not** the shipped one: no indexes, no `content_type`
    default, and no `schema_migrations` row, so the next migration's bookkeeping
@@ -144,7 +144,7 @@ review, it is not default-allow" was a human promise until this delivery added
 the first `/api/v1` route that authenticates with a credential of its own.
 
 Questions left open after round 1 (5): nginx buffering on a real APK; whether
-0008 is exercised on PostgreSQL anywhere; whether the two 0008 indexes should
+0010 is exercised on PostgreSQL anywhere; whether the two 0010 indexes should
 also be declared on the models; that the expired-token sweep only fires on mint;
 and whether bare SHA-256 is the intended storage for a high-entropy bearer
 (it matches `create_oauth_access_token`, so yes — now written down in
@@ -160,7 +160,7 @@ re-probed and still holding. Classification per `.docs/agents/council.md` §4:
 
 | # | what the round-1 fix broke | closed by |
 |---|---|---|
-| 1 | **the by-actor revocation reached across grants.** `/auth/revoke` deliberately acts on a refresh token it has already classified as dead; both `UPDATE`s are no-ops then, and the new `DELETE` was the one statement that still hit something — so an *unauthenticated* replay of a long-dead token destroyed a **live** grant's download credential, repeatably. Same widening let a ChatGPT sign-out abort the phone's APK transfer | `artifact_download_tokens.grant_id` (0008, undeployed, so free) + revocation scoped to `(user_id, grant_id)` + `test_auth.py::test_a_replayed_dead_refresh_token_cannot_kill_a_live_grants_download`, `::test_a_grantless_sign_out_does_not_abort_the_phones_download` |
+| 1 | **the by-actor revocation reached across grants.** `/auth/revoke` deliberately acts on a refresh token it has already classified as dead; both `UPDATE`s are no-ops then, and the new `DELETE` was the one statement that still hit something — so an *unauthenticated* replay of a long-dead token destroyed a **live** grant's download credential, repeatably. Same widening let a ChatGPT sign-out abort the phone's APK transfer | `artifact_download_tokens.grant_id` (0010, undeployed, so free) + revocation scoped to `(user_id, grant_id)` + `test_auth.py::test_a_replayed_dead_refresh_token_cannot_kill_a_live_grants_download`, `::test_a_grantless_sign_out_does_not_abort_the_phones_download` |
 | 2 | the new `UNGUARDED_API_ROUTES` gate detected **authentication**, not authorization: a route with only `Depends(current_principal)` passed, and so did a route with no auth at all whose dependency happened to be named `guard` | `require_action` tags its closure `guarded_action`; the gate reads that. `/auth/me`'s exemption became load-bearing, and `::test_every_exemption_is_load_bearing` now fails if any entry is inert |
 | 3 | the 19-digit `Range` bound dropped legal zero-padded ranges (`bytes=000…01-2`), silently re-sending the whole file with `200` — and the comment called the bound lossless | widened to 255 digits + `test_artifacts.py::test_a_zero_padded_range_is_still_a_range` |
 | 4 | the corrected docstring said "All five live in `test_artifacts.py`" while one lives in `test_auth.py` | corrected, with the reason it lives there |
@@ -212,6 +212,6 @@ and each is here because a council finding required it, not as a tidy-up:
   route inventory can tell authorization from authentication. One attribute, no
   behaviour change.
 - **Five deploy/ops documents corrected** about what `schema_guard` guarantees.
-  Pre-existing and false for 0006 and 0007 as much as for 0008; correcting only
+  Pre-existing and false for 0006 and 0007 as much as for 0010; correcting only
   #11's sentence would have left the same wrong belief in the files an operator
   actually reads.
