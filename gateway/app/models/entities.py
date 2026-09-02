@@ -271,6 +271,18 @@ class EpicModel(Base):
     # TaskModel.revision: the ETag optimistic-concurrency check compares
     # against this, not against a timestamp.
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    # WK-20260902-issue-materialize / issue #78, Commit 1. Set only by
+    # `store.apply_epic_materialization`, once the executor confirms it wrote
+    # this epic's markdown -- never guessed or defaulted by the gateway,
+    # which does not know the project's real filesystem layout
+    # (`docs/architecture.md`). `materialized_path` is relative to the
+    # project root, as the executor reported it.
+    # `materialized_revision` is a COPY of `revision` as of that publish, not
+    # the current value -- comparing the two at read time is what lets an
+    # operator distinguish "never published" (`materialized_path IS NULL`)
+    # from "published, N edits ago".
+    materialized_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    materialized_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class IssueModel(Base):
@@ -301,6 +313,11 @@ class IssueModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    # WK-20260902-issue-materialize / issue #78, Commit 1. Same meaning as
+    # `EpicModel.materialized_path`/`materialized_revision` above -- see that
+    # pair's comment for why these are not `provider`/`external_id`.
+    materialized_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    materialized_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class ConversationModel(Base):

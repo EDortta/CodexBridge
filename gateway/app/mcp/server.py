@@ -707,6 +707,11 @@ async def handle_mcp_call(
             # current revision to fill `expected_revision` with, the same way
             # `ETag` lets a REST caller fill `If-Match`.
             "revision": epic.revision,
+            # Additive, WK-20260902-issue-materialize (issue #78, Commit 1):
+            # null until `publish_epic_to_repo` succeeds -- lets the operator
+            # tell "drafted, not in git yet" apart from "published".
+            "materialized_path": epic.materialized_path,
+            "materialized_revision": epic.materialized_revision,
         }
         if claim is not None:
             await complete_idempotent(endpoint, idempotency_key, claim, 201, payload, request_fingerprint)
@@ -729,6 +734,8 @@ async def handle_mcp_call(
                     "description": epic.description,
                     "status": epic.status,
                     "revision": epic.revision,
+                    "materialized_path": epic.materialized_path,
+                    "materialized_revision": epic.materialized_revision,
                 }
                 for epic in rows
             ],
@@ -775,6 +782,8 @@ async def handle_mcp_call(
             "description": updated.description,
             "status": updated.status,
             "revision": updated.revision,
+            "materialized_path": updated.materialized_path,
+            "materialized_revision": updated.materialized_revision,
         }
         result = _text_result(f"Epic {updated.id} updated.", payload)
     elif tool_name == "create_issue":
@@ -850,6 +859,9 @@ async def handle_mcp_call(
             # Additive since A1, same reason as create_epic's: `update_issue`
             # and `move_issue_to_epic` need it for `expected_revision`.
             "revision": issue.revision,
+            # Additive, WK-20260902-issue-materialize (issue #78, Commit 1).
+            "materialized_path": issue.materialized_path,
+            "materialized_revision": issue.materialized_revision,
         }
         if claim is not None:
             await complete_idempotent(endpoint, idempotency_key, claim, 201, payload, request_fingerprint)
@@ -886,6 +898,8 @@ async def handle_mcp_call(
                     "dependencies": json.loads(issue.dependencies_json or "[]"),
                     "blocked_reason": issue.blocked_reason,
                     "revision": issue.revision,
+                    "materialized_path": issue.materialized_path,
+                    "materialized_revision": issue.materialized_revision,
                 }
                 for issue in rows
             ],
@@ -935,6 +949,8 @@ async def handle_mcp_call(
             "dependencies": json.loads(updated.dependencies_json or "[]"),
             "blocked_reason": updated.blocked_reason,
             "revision": updated.revision,
+            "materialized_path": updated.materialized_path,
+            "materialized_revision": updated.materialized_revision,
         }
         result = _text_result(f"Issue {updated.id} updated.", payload)
     elif tool_name == "move_issue_to_epic":
@@ -992,6 +1008,8 @@ async def handle_mcp_call(
             "project_id": updated.project_id,
             "epic_id": updated.epic_id,
             "revision": updated.revision,
+            "materialized_path": updated.materialized_path,
+            "materialized_revision": updated.materialized_revision,
         }
         if claim is not None:
             await complete_idempotent(endpoint, idempotency_key, claim, 200, payload, request_fingerprint)
