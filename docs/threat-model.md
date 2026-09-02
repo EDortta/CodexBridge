@@ -94,10 +94,15 @@ não existe.
   test_the_receiving_branch_writes_only_discovered_resources`). Um nó
   comprometido que relata candidatos fabricados só polui a fila de adoção —
   não tem, por construção, nenhum caminho para conceder capacidade a nada
-* controle: `resource_key` (o path absoluto do candidato) nunca sai por
-  nenhuma rota REST hoje — não há rota nesta PR — e quando a rota de adoção
-  existir, cai na mesma regra de `local_path`
-  (`docs/api/README.md`, "Fields that must never ship")
+* controle: o path absoluto do candidato (`DiscoveredResourceModel.
+  resource_path` desde `migrations/0013_discovery_resource_key_hash.sql`;
+  antes disso vivia em `resource_key`) só sai por uma rota REST: `GET
+  /api/v1/nodes/{nodeId}/discovered-resources` e as respostas de
+  `adopt`/`deny` — a mesma regra de `local_path`
+  (`docs/api/README.md`, "Fields that must never ship"), gated pelo mesmo
+  escopo administrativo de `nodes.read`. `resource_key` propriamente dito
+  deixou de ser o dado sensível: é `hash_resource_key(path)`, sem relação
+  reversível com o path, e não aparece em DTO nenhum
 * controle: o mesmo guard de identidade do `hello`/`heartbeat`
   (`envelope.executor_id` reivindicado vs. autenticado no handshake) já cobre
   `discovery.report` por estar antes de qualquer branch no laço de
@@ -117,6 +122,56 @@ não existe.
   árvore que o operador não controla totalmente relata o que existir nela —
   a mitigação é a mesma de sempre: escolher a raiz com cuidado, não confiar
   cegamente no que ela aponta
+
+### Adoção de descobertas pelo painel (WK-20260902-gh73-discovery-adoption, issue #73 Stage 3, metade de adoção)
+
+A metade que fecha o ciclo aberto pela seção anterior: `discovered_resources`
+passa a poder virar `ProjectModel`, `WorkspaceBindingModel`,
+`ScmAssociationModel` e `project_authorizations` — só por este caminho, nunca
+pelo caminho do nó.
+
+* controle: **um nó não alcança `project_authorizations` por construção,
+  mesmo com as rotas de adoção existindo.** `store.adopt_discovered_resource`
+  e `store.deny_discovered_resource` são as ÚNICAS funções que escrevem
+  nessas quatro tabelas a partir de uma linha de `discovered_resources`, e
+  ambas exigem `permissions.NODES_DISCOVERIES_DECIDE`
+  (`codexbridge.admin`). `gateway/app/api/auth.py:current_principal` — o
+  único jeito de uma requisição REST virar um `AuthenticatedPrincipal` —
+  resolve exclusivamente um token OAuth (`store.get_oauth_access_token`); o
+  `machine_token` do executor autentica só o WebSocket
+  (`gateway/app/main.py:agent_ws`), checado ali mesmo, e nunca produz um
+  `AuthenticatedPrincipal`. Não existe caminho de código da credencial de um
+  nó conectado até `adopt`/`deny` (testado diretamente:
+  `tests/integration/test_discovery_routes.py::
+  test_a_principal_without_the_administrative_scope_cannot_adopt`,
+  `tests/unit/test_discovery_store.py::
+  test_a_matching_auto_authorize_root_grants_nothing_from_a_report_alone` —
+  este último com uma raiz `auto_authorize` de verdade configurada, provando
+  que a configuração por si só não basta sem a decisão humana)
+* controle: `AUTO_AUTHORIZABLE_CAPABILITIES` (`read`/`test`) é validado no
+  parse de `DiscoveryRoot`, antes de qualquer nó conectar — `modify`/
+  `deliver` nunca são obteníveis por `auto_authorize`, só por
+  `grantCapabilities` explícito no corpo da requisição, atribuído a
+  `operator:<user_id>`
+* controle: `adopt`/`deny` só agem sobre um candidato em estado
+  `discovered`/`stale` — um já decidido responde `409`, o que também é o que
+  impede uma segunda chamada de duplicar `WorkspaceBindingModel`/
+  `ScmAssociationModel`
+* controle: a regra "DENIED nunca é tocado por observação" (seção anterior)
+  continua valendo depois de decidido — nada nesta PR toca
+  `record_discovery_report`'s tratamento de `DENIED`, e há teste direto
+  (`tests/integration/test_discovery_routes.py::
+  test_a_denied_resource_is_not_touched_by_a_later_report`)
+* controle: `ProjectAuthorizationModel` permite só uma linha não revogada por
+  `(node_id, project_id)` — uma concessão de raiz e uma concessão explícita
+  do operador na mesma chamada de adoção são mescladas na mesma linha
+  (`granted_by` vira um conjunto `;`-separado de origens), nunca duas linhas
+  competindo pelo índice único
+* risco aceito: `resourcePath`/`rootPath` (paths absolutos) saem por
+  `GET /api/v1/nodes/{nodeId}/discovered-resources` e pelas respostas de
+  `adopt`/`deny` — exceção deliberada e estreita à regra "nenhuma resposta
+  expõe path de filesystem", gated pelo mesmo escopo administrativo de
+  `nodes.read`. Ver `docs/api/README.md`, "Fields that must never ship"
 
 ### Execução de comandos arbitrários
 

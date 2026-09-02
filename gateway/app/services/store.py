@@ -24,8 +24,10 @@ from gateway.app.models.entities import (
     OAuthRefreshTokenModel,
     ProjectAuthorizationModel,
     ProjectModel,
+    ScmAssociationModel,
     TaskLogModel,
     TaskModel,
+    WorkspaceBindingModel,
 )
 from gateway.app.services.audit import record_event
 from gateway.app.services.conversation_types import (
@@ -33,6 +35,10 @@ from gateway.app.services.conversation_types import (
     MAX_ATTACHMENTS_PER_MESSAGE,
     MAX_MESSAGE_BODY_LENGTH,
     ConversationPlanningError,
+)
+from gateway.app.services.discovery_types import (
+    DECIDABLE_DISCOVERY_STATES,
+    DiscoveryAdoptionError,
 )
 from gateway.app.services.issue_types import (
     DEFAULT_EPIC_STATUS,
@@ -46,10 +52,13 @@ from gateway.app.services.issue_types import (
 from shared.policy import evaluate_task_policy
 from shared.protocol import (
     ApprovalDecision,
+    BindingState,
+    Capability,
     DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
     DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
     DiscoveredState,
     DiscoveryReport,
+    DiscoveryRoot,
     ExecutorRegistration,
     NodeAnnouncement,
     PolicyLevel,
@@ -59,7 +68,7 @@ from shared.protocol import (
     TaskMode,
     TaskState,
 )
-from shared.security import hash_token
+from shared.security import hash_resource_key, hash_token
 
 
 # `entity_type` of every row the credential lifecycle writes, and the only rows
@@ -609,24 +618,34 @@ async def record_discovery_report(
 
     Reconciliation, scoped to `(node.id, "project", report.root_path)` --
     everything this node has ever reported for THIS root, never another root
-    or another node's rows:
+    or another node's rows. Matched by `resource_path` (the candidate's raw
+    path), never by the `resource_key` column: since
+    `migrations/0013_discovery_resource_key_hash.sql`, `resource_key` is
+    `hash_resource_key(resource_path)` -- a fixed-width lookup key, not
+    identity itself. Matching on the hash would work too (it is
+    deterministic), but matching on the path is what lets a pre-0013 row --
+    whose `resource_key` the migration deliberately left as the old raw path,
+    see that file's own comment -- still be found and self-healed the first
+    time its node reports it again, rather than read as "new" and duplicated:
 
-    * a `resource_key` not seen before is INSERTed with
-      `state=DISCOVERED`, `first_seen_at=last_seen_at=now`;
-    * a `resource_key` already on file has its `evidence_json` and
-      `last_seen_at` refreshed, and its `state` is left exactly as it is --
-      a repeated observation is not a new operator decision, so an `ADOPTED`
-      or `AUTHORIZED` row must not regress to `DISCOVERED` just because the
-      node reconnected and reported the same directory again
-      (`docs/control-plane.md`);
+    * a `resource_path` not seen before is INSERTed with `state=DISCOVERED`,
+      `first_seen_at=last_seen_at=now`, `resource_key=hash_resource_key(path)`;
+    * a `resource_path` already on file has its `evidence_json`,
+      `last_seen_at` and `resource_key` refreshed (the last one is a no-op for
+      an already-migrated row and a repair for one that is not), and its
+      `state` is left exactly as it is -- a repeated observation is not a new
+      operator decision, so an `ADOPTED` or `AUTHORIZED` row must not regress
+      to `DISCOVERED` just because the node reconnected and reported the same
+      directory again (`docs/control-plane.md`);
     * a row for THIS root that is NOT in the current report, and whose state
       is not `DENIED`, becomes `STALE` -- last observed, not currently seen;
     * `DENIED` is a standing operator decision and is never written to by
       observation, in either direction: a denied candidate does not regress
       to the adoption queue on reconnect (`docs/control-plane.md`: "candidato
       recusado volta à fila de adoção a cada reconexão" is exactly the bug
-      this refusal prevents), and it does not have its evidence refreshed
-      either -- the row simply stops moving once an operator has decided;
+      this refusal prevents), and it does not have its evidence (or
+      `resource_key`) refreshed either -- the row simply stops moving once an
+      operator has decided;
     * a `STALE` row that reappears in a report does not default back to
       `DISCOVERED` if the operator's earlier decision on it is still on
       file -- see `_revive_stale_discovery_row`.
@@ -652,17 +671,17 @@ async def record_discovery_report(
             )
         ).scalars()
     )
-    by_key = {row.resource_key: row for row in existing}
-    reported_keys: set[str] = set()
+    by_path = {row.resource_path: row for row in existing if row.resource_path is not None}
+    reported_paths: set[str] = set()
 
     for candidate in report.candidates:
-        reported_keys.add(candidate.resource_key)
-        row = by_key.get(candidate.resource_key)
+        reported_paths.add(candidate.resource_key)
+        row = by_path.get(candidate.resource_key)
         if row is not None and row.state == DiscoveredState.DENIED.value:
             # A denial is the operator's decision, not a fact the node can
             # overwrite by continuing to see the directory. Skipped entirely
-            # -- not even evidence/last_seen_at move -- so a denied row stops
-            # changing the moment it is denied.
+            # -- not even evidence/last_seen_at/resource_key move -- so a
+            # denied row stops changing the moment it is denied.
             continue
 
         evidence = json.dumps(
@@ -682,7 +701,8 @@ async def record_discovery_report(
                     id=str(uuid4()),
                     node_id=node.id,
                     kind="project",
-                    resource_key=candidate.resource_key,
+                    resource_key=hash_resource_key(candidate.resource_key),
+                    resource_path=candidate.resource_key,
                     evidence_json=evidence,
                     state=DiscoveredState.DISCOVERED.value,
                     root_path=report.root_path,
@@ -694,13 +714,17 @@ async def record_discovery_report(
 
         row.evidence_json = evidence
         row.last_seen_at = now
+        # Self-heals a pre-0013 row (whose `resource_key` the migration left
+        # as the raw path) the moment its node reports it again -- a no-op
+        # assignment for a row already on the hash.
+        row.resource_key = hash_resource_key(candidate.resource_key)
         if row.state == DiscoveredState.STALE.value:
             await _revive_stale_discovery_row(session, row)
         # Any other state (DISCOVERED/ADOPTED/AUTHORIZED) stays exactly as it
         # is -- see this function's own docstring.
 
     for row in existing:
-        if row.resource_key in reported_keys:
+        if row.resource_path in reported_paths:
             continue
         if row.state == DiscoveredState.DENIED.value:
             continue
@@ -715,12 +739,11 @@ async def _revive_stale_discovery_row(session: AsyncSession, row: DiscoveredReso
     Not unconditionally `DISCOVERED`: if the operator had already adopted or
     authorized this resource before the node stopped reporting it, that
     decision must survive the gap, not be forgotten because the row briefly
-    went `STALE`. `row.project_id` is set by the adoption work that follows
-    this PR, never by anything in this file -- so this function's first
-    branch (`DISCOVERED`) is the only one reachable from code that exists
-    today. The rest is written now because the row it operates on already
-    exists today, and a row this function would get wrong later is a bug
-    nobody would think to test until it reappeared.
+    went `STALE`. `row.project_id` is set by `adopt_discovered_resource`
+    below, never by `record_discovery_report` or anything else this function
+    is reached from -- reporting a directory again cannot, by itself, make
+    this function's second branch (an active authorization) reachable; that
+    still requires the human adoption path to have run first.
     """
     if row.project_id is None:
         row.state = DiscoveredState.DISCOVERED.value
@@ -741,6 +764,387 @@ async def _revive_stale_discovery_row(session: AsyncSession, row: DiscoveredReso
     row.state = (
         DiscoveredState.AUTHORIZED.value if authorization is not None else DiscoveredState.ADOPTED.value
     )
+
+
+# --------------------------------------------------------------------------
+# Adoption: the node proposes (above), a human decides (below)
+# --------------------------------------------------------------------------
+#
+# Issue #73 Stage 3, adoption half (WK-20260902-gh73-discovery-adoption).
+# `record_discovery_report` above writes only `discovered_resources` -- by
+# construction, per its own docstring. Everything below is the other half:
+# the only code in this module that may turn a `discovered_resources` row
+# into a `ProjectModel`, a `WorkspaceBindingModel`, a `ScmAssociationModel`,
+# or a `ProjectAuthorizationModel`. Both functions are called exclusively
+# from `gateway/app/api/routes/discovery.py`'s `adopt`/`deny` routes, which
+# require `permissions.NODES_DISCOVERIES_DECIDE` -- an administrative scope
+# that only `gateway/app/api/auth.py:current_principal` can grant, and that
+# function resolves ONLY an OAuth access token (`store.get_oauth_access_token`).
+# The executor WebSocket (`gateway/app/main.py:agent_ws`) authenticates with a
+# `machine_token` instead, checked in `main.py` directly and never turned
+# into an `AuthenticatedPrincipal` -- there is no code path from a connected
+# node's credential to either function below. Issue #73: "a node cannot grant
+# itself project authorization merely by reporting a discovery" -- this is
+# where a human does, and only a human can reach it
+# (`tests/unit/test_discovery_store.py::
+# test_a_matching_auto_authorize_root_grants_nothing_from_a_report_alone`,
+# `tests/integration/test_discovery_routes.py::
+# test_a_principal_without_the_administrative_scope_cannot_adopt`).
+
+
+async def list_discovered_resources_page(
+    session: AsyncSession,
+    node_id: str,
+    *,
+    state: str | None = None,
+    after: str | None = None,
+    limit: int = 50,
+) -> list[DiscoveredResourceModel]:
+    """One node's discovered candidates, ordered by id, over-fetched by one.
+
+    Cursor-paginated -- unlike `list_nodes`, whose own docstring argues the
+    fleet is small and operator-curated. That argument does not extend here:
+    a single real operator root has reported 247 candidates in one scan
+    (`docs/control-plane.md`), which is exactly the case `list_nodes` does
+    not have to handle and this one must.
+
+    `id` (a uuid4 assigned at insert) is the cursor key for the same reason
+    `list_projects_page` cursors on `ProjectModel.id`: it is unique and
+    stable. `last_seen_at` was considered and rejected -- it moves every time
+    a node rescans, which would let a page boundary drift out from under a
+    client mid-list, the same hazard that ordering choice avoids elsewhere in
+    this module.
+    """
+    statement = select(DiscoveredResourceModel).where(DiscoveredResourceModel.node_id == node_id)
+    if state is not None:
+        statement = statement.where(DiscoveredResourceModel.state == state)
+    if after is not None:
+        statement = statement.where(DiscoveredResourceModel.id > after)
+    statement = statement.order_by(DiscoveredResourceModel.id.asc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
+async def get_discovered_resource(session: AsyncSession, resource_id: str) -> DiscoveredResourceModel | None:
+    return await session.get(DiscoveredResourceModel, resource_id)
+
+
+async def _matching_discovery_root(
+    session: AsyncSession, node_id: str, root_path: str | None
+) -> DiscoveryRoot | None:
+    """The operator's `DiscoveryRoot` entry for `root_path`, if this node's
+    executor registration names one.
+
+    Matched by exact string equality, never resolved -- `DiscoveryRoot`'s own
+    docstring: the gateway cannot see the node's disk, so it has no path to
+    canonicalize against. `None` covers every reason there is nothing to
+    grant: no executor bound to this node, no `discovery_roots` entry at all,
+    or an entry whose `path` string does not literally match `root_path`.
+    """
+    if root_path is None:
+        return None
+    executor = (
+        (await session.execute(select(ExecutorModel).where(ExecutorModel.node_id == node_id)))
+        .scalars()
+        .first()
+    )
+    if executor is None:
+        return None
+    registration = ExecutorRegistration.model_validate(json.loads(executor.metadata_json))
+    for root in registration.discovery_roots:
+        if root.path == root_path:
+            return root
+    return None
+
+
+async def _grant_project_authorization(
+    session: AsyncSession,
+    *,
+    node_id: str,
+    project_id: str,
+    capabilities: list[Capability],
+    origin: str,
+    now: datetime,
+) -> None:
+    """Merge `capabilities`, from `origin`, into the standing authorization
+    row for `(node_id, project_id)`.
+
+    `project_authorizations_node_project_idx` allows exactly one non-revoked
+    row per `(node_id, project_id)` -- so a discovery root's `auto_authorize`
+    and an operator's explicit `grant_capabilities`, both applying in the
+    same `adopt_discovered_resource` call, cannot become two rows; they merge
+    into one. `granted_by` is a `;`-joined set of origins for exactly that
+    reason: it is the only place provenance lives, and a single string
+    column must not silently lose one origin because the other also applied
+    in the same call (`docs/control-plane.md`: "granted_by distingue
+    root-config:<path> de operator:<user_id>" -- distinguishes, not
+    replaces). Capabilities only ever grow here; nothing in this function
+    revokes -- revocation has no caller in this PR.
+    """
+    if not capabilities:
+        return
+    existing = (
+        (
+            await session.execute(
+                select(ProjectAuthorizationModel).where(
+                    ProjectAuthorizationModel.node_id == node_id,
+                    ProjectAuthorizationModel.project_id == project_id,
+                    ProjectAuthorizationModel.revoked_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    wanted = {capability.value for capability in capabilities}
+    if existing is None:
+        session.add(
+            ProjectAuthorizationModel(
+                id=str(uuid4()),
+                node_id=node_id,
+                project_id=project_id,
+                capabilities_json=json.dumps(sorted(wanted)),
+                granted_by=origin,
+                granted_at=now,
+            )
+        )
+        return
+    current = set(json.loads(existing.capabilities_json or "[]"))
+    existing.capabilities_json = json.dumps(sorted(current | wanted))
+    origins = set(existing.granted_by.split(";")) if existing.granted_by else set()
+    origins.add(origin)
+    existing.granted_by = ";".join(sorted(origins))
+
+
+async def adopt_discovered_resource(
+    session: AsyncSession,
+    resource_id: str,
+    *,
+    project_id: str | None,
+    new_project_id: str | None,
+    new_project_name: str | None,
+    grant_capabilities: list[Capability],
+    actor_user_id: str,
+    now: datetime | None = None,
+) -> DiscoveredResourceModel:
+    """Adopt one discovered candidate: bind it to a project and, when either
+
+    a matching `auto_authorize` discovery root or an explicit
+    `grant_capabilities` applies, grant capability too.
+
+    Exactly one of `project_id` (reuse an existing project) or
+    `new_project_id`/`new_project_name` (create one) must be given -- the
+    route layer's request model enforces "one of `project_id` or
+    `new_project`", so by the time this runs the pair is either both `None`
+    or both set. Re-checked here anyway (`DiscoveryAdoptionError`) because
+    the guard belongs on the operation, not the caller
+    (`gateway/app/services/issue_types.py:IssuePlanningError`'s own
+    docstring makes the same argument).
+
+    Only `row.state in DECIDABLE_DISCOVERY_STATES` (`DISCOVERED`/`STALE`) may
+    be adopted -- an already `ADOPTED`/`AUTHORIZED`/`DENIED` row is a
+    standing decision, and adopting it again would either silently duplicate
+    the `WorkspaceBindingModel`/`ScmAssociationModel` it already produced or
+    silently overwrite a `DENIED` an operator chose deliberately. Calling
+    this twice on the same row raises `ValueError("discovered_resource_not_
+    decidable")` on the second call, which is what actually keeps a
+    double-adopt from duplicating anything -- not a defensive check inside
+    the write itself.
+
+    Reusing `project_id` for a project this node has already bound (a second
+    candidate adopted into a project the first one already created here, or
+    literally the same candidate's earlier successful adoption) updates the
+    existing `WorkspaceBindingModel`/`ScmAssociationModel`/
+    `ProjectAuthorizationModel` rows rather than inserting siblings --
+    required by the unique indexes those tables already carry
+    (`workspace_bindings_node_project_idx`, `scm_associations_project_remote_
+    idx`, `project_authorizations_node_project_idx`), not merely convenient.
+
+    `ProjectModel.path`, for a NEWLY created project, is set to the
+    candidate's own `resource_path`: the field is deprecated as authoritative
+    the moment a `WorkspaceBindingModel` exists (`docs/control-plane.md`,
+    "O que a 0009 deliberadamente não faz"), but it is `NOT NULL` and a
+    project created by adoption has no `registry.json` entry to have set it
+    instead -- leaving it empty would be a gratuitous difference from every
+    project this codebase has created so far, for no reader's benefit.
+    """
+    now = now or datetime.now(timezone.utc)
+    row = await session.get(DiscoveredResourceModel, resource_id)
+    if row is None:
+        raise ValueError("discovered_resource_not_found")
+    if row.state not in DECIDABLE_DISCOVERY_STATES:
+        raise ValueError("discovered_resource_not_decidable")
+    if (project_id is None) == (new_project_id is None):
+        raise DiscoveryAdoptionError(
+            "project_id",
+            "exactly_one_required",
+            "Provide exactly one of project_id or new_project.",
+        )
+
+    if project_id is not None:
+        project = await session.get(ProjectModel, project_id)
+        if project is None:
+            raise DiscoveryAdoptionError(
+                "project_id", "not_found", f"No such project: {project_id!r}."
+            )
+    else:
+        conflict = await session.get(ProjectModel, new_project_id)
+        if conflict is not None:
+            raise DiscoveryAdoptionError(
+                "new_project.project_id",
+                "already_exists",
+                f"Project {new_project_id!r} already exists; pass project_id to reuse it.",
+            )
+        project = ProjectModel(
+            id=new_project_id,
+            name=new_project_name or new_project_id,
+            path=row.resource_path or "",
+            enabled=True,
+            config_json="{}",
+        )
+        session.add(project)
+
+    evidence = json.loads(row.evidence_json or "{}")
+    remote_url = evidence.get("remote_url")
+
+    binding = (
+        (
+            await session.execute(
+                select(WorkspaceBindingModel).where(
+                    WorkspaceBindingModel.node_id == row.node_id,
+                    WorkspaceBindingModel.project_id == project.id,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if binding is None:
+        session.add(
+            WorkspaceBindingModel(
+                id=str(uuid4()),
+                node_id=row.node_id,
+                project_id=project.id,
+                local_path=row.resource_path or "",
+                head=evidence.get("head"),
+                dirty=evidence.get("dirty"),
+                state=BindingState.ACTIVE.value,
+                last_scan_at=row.last_seen_at,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    else:
+        binding.local_path = row.resource_path or binding.local_path
+        binding.head = evidence.get("head")
+        binding.dirty = evidence.get("dirty")
+        binding.state = BindingState.ACTIVE.value
+        binding.last_scan_at = row.last_seen_at
+        binding.updated_at = now
+
+    if remote_url:
+        association = (
+            (
+                await session.execute(
+                    select(ScmAssociationModel).where(
+                        ScmAssociationModel.project_id == project.id,
+                        ScmAssociationModel.remote_url == remote_url,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if association is None:
+            session.add(
+                ScmAssociationModel(
+                    id=str(uuid4()),
+                    project_id=project.id,
+                    provider="github",
+                    remote_url=remote_url,
+                    confidence="observed",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+    matched_root = await _matching_discovery_root(session, row.node_id, row.root_path)
+    if matched_root is not None and matched_root.auto_authorize:
+        await _grant_project_authorization(
+            session,
+            node_id=row.node_id,
+            project_id=project.id,
+            capabilities=matched_root.auto_authorize,
+            origin=f"root-config:{matched_root.path}",
+            now=now,
+        )
+    if grant_capabilities:
+        await _grant_project_authorization(
+            session,
+            node_id=row.node_id,
+            project_id=project.id,
+            capabilities=grant_capabilities,
+            origin=f"operator:{actor_user_id}",
+            now=now,
+        )
+
+    authorized = (
+        (
+            await session.execute(
+                select(ProjectAuthorizationModel).where(
+                    ProjectAuthorizationModel.node_id == row.node_id,
+                    ProjectAuthorizationModel.project_id == project.id,
+                    ProjectAuthorizationModel.revoked_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    row.project_id = project.id
+    row.state = DiscoveredState.AUTHORIZED.value if authorized is not None else DiscoveredState.ADOPTED.value
+    row.decided_by = f"operator:{actor_user_id}"
+    row.decided_at = now
+
+    await record_event(
+        session,
+        "discovered_resource",
+        row.id,
+        "discovery.adopted",
+        {"actor_id": actor_user_id, "project_id": project.id, "node_id": row.node_id},
+    )
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def deny_discovered_resource(
+    session: AsyncSession,
+    resource_id: str,
+    *,
+    actor_user_id: str,
+    now: datetime | None = None,
+) -> DiscoveredResourceModel:
+    """Refuse one discovered candidate. See `DECIDABLE_DISCOVERY_STATES` --
+
+    only a `DISCOVERED`/`STALE` row may be denied; an already-decided row
+    (including an already-`DENIED` one) is a conflict, not a silent no-op.
+    """
+    now = now or datetime.now(timezone.utc)
+    row = await session.get(DiscoveredResourceModel, resource_id)
+    if row is None:
+        raise ValueError("discovered_resource_not_found")
+    if row.state not in DECIDABLE_DISCOVERY_STATES:
+        raise ValueError("discovered_resource_not_decidable")
+    row.state = DiscoveredState.DENIED.value
+    row.decided_by = f"operator:{actor_user_id}"
+    row.decided_at = now
+    await record_event(
+        session, "discovered_resource", row.id, "discovery.denied", {"actor_id": actor_user_id}
+    )
+    await session.commit()
+    await session.refresh(row)
+    return row
 
 
 async def list_nodes(session: AsyncSession) -> list[tuple[NodeModel, ExecutorModel | None]]:

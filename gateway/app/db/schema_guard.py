@@ -77,6 +77,14 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     "executors": {
         "node_id": "0009_control_plane.sql",
     },
+    # Without this, `record_discovery_report` and the adoption routes both
+    # select a column the ORM model declares (`DiscoveredResourceModel.
+    # resource_path`) that a pre-0013 database does not have -- a 500 on the
+    # first discovery report or adoption call, not a startup failure that
+    # names the fix.
+    "discovered_resources": {
+        "resource_path": "0013_discovery_resource_key_hash.sql",
+    },
 }
 
 

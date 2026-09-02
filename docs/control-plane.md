@@ -279,6 +279,32 @@ aqui e em `docs/api/README.md` ("Fields that must never ship") e
 `discovered_resources` numa rota reintroduz o vazamento que `local_path` já
 evitou uma vez.
 
+**Atualização (WK-20260902-gh73-discovery-adoption, `migrations/
+0013_discovery_resource_key_hash.sql`).** O parágrafo acima descreve a coluna
+como a PR de relatório a deixou — e é exatamente aí que mora um defeito que
+essa PR encontrou e não teve escopo para consertar: `resource_key` é
+`varchar(255)`, dimensionado quando a coluna ainda era pensada como um id
+curto sugerido, mas passou a receber o path inteiro (até 2048 caracteres,
+`DiscoveredCandidate.resource_key`). O SQLite nunca impôs essa largura (é
+afinidade de tipo, não restrição), mas `aiomysql` é dependência declarada — e
+lá a mesma escrita é `Data too long for column`.
+
+Alargar a coluna não seria o conserto: ela ancora o índice único composto
+`(node_id, kind, resource_key)`, e o limite de chave de índice do MySQL
+(3072 bytes, ~767 caracteres em `utf8mb4`) é quase certamente o que os 255
+originais protegiam — alargar para 2048 trocaria uma falha silenciosa por
+outra no mesmo alvo. A forma escolhida: `resource_key` vira
+`shared.security.hash_resource_key(path)` — sha256 hex, sempre 64
+caracteres, folgado tanto na coluna quanto no limite de índice do MySQL — e
+o path de verdade passa a viver em `resource_path`, coluna nova, sem índice,
+na mesma largura de 2048 que o protocolo já permitia. `resource_path`, não
+`resource_key`, é agora o dado sensível desta seção; `resource_key` é só
+uma chave de busca interna, sem relação reversível com o path, e não sai em
+DTO nenhum. Ver o comentário da própria migração para o porquê de o backfill
+de linhas existentes copiar o path para `resource_path` sem tentar
+recalcular o hash em SQL portável — e `store.record_discovery_report`'s
+docstring para como uma linha pré-0013 se autorrepara na próxima observação.
+
 Deliberadamente **não** é `suggested_project_id`: `shared.project_discovery.
 suggest_project_id` só garante unicidade dentro da varredura de **uma** raiz
 (seu `taken` é reiniciado a cada chamada); duas raízes varridas de forma
@@ -328,3 +354,79 @@ branch que recebe `discovery.report` no gateway chama **só**
 `workspace_bindings`. Isso é o que torna "o nó propõe, o painel adota"
 verdade por construção: o caminho que recebe uma descoberta não tem, no
 código, nenhum jeito de chegar a uma tabela de autorização.
+
+## Stage 3 — a metade de adoção (issue #73, WK-20260902-gh73-discovery-adoption)
+
+A seção anterior descreveu a PR que fez o nó propor. Esta é a PR seguinte que
+ela previa: `GET /api/v1/nodes/{nodeId}/discovered-resources`,
+`POST /api/v1/discovered-resources/{resourceId}/adopt` e
+`POST .../{resourceId}/deny` — o único caminho, em todo o código, de uma
+linha de `discovered_resources` para `projects`, `workspace_bindings`,
+`scm_associations` ou `project_authorizations`.
+
+### O invariante não muda de lado — só ganha uma porta
+
+`store.record_discovery_report` continua escrevendo só em
+`discovered_resources`, inalterado nesta PR além do ajuste de
+`resource_key`/`resource_path` (seção acima). `store.
+adopt_discovered_resource` e `store.deny_discovered_resource` são as únicas
+funções novas com acesso de escrita às outras quatro tabelas, e as duas só
+são alcançáveis por `gateway/app/api/routes/discovery.py`, atrás de
+`permissions.NODES_DISCOVERIES_DECIDE` — uma ação administrativa que exige
+`AuthenticatedPrincipal`, e `current_principal` só produz um a partir de um
+token OAuth. O `machine_token` do executor autentica exclusivamente o
+WebSocket (`gateway/app/main.py:agent_ws`) e nunca vira um principal REST —
+não há, por construção, nenhuma sequência de chamadas que leve da conexão de
+um nó até `adopt`/`deny`. É isso que mantém "um nó não se autoriza sozinho"
+verdadeiro depois desta PR existir, não apenas antes dela: o teste que prova
+isso é `tests/unit/test_discovery_store.py::
+test_a_matching_auto_authorize_root_grants_nothing_from_a_report_alone`, que
+roda com uma raiz `auto_authorize` de verdade configurada e mostra que
+`record_discovery_report` sozinho não a usa — só `adopt_discovered_resource`
+usa, e só um humano chega lá.
+
+### `adopt`: cria ou reusa projeto, e a concessão automática tem teto
+
+Corpo `{projectId?, newProject?: {projectId, name}, grantCapabilities?}` —
+exatamente um de `projectId`/`newProject`. Cria (ou reusa)
+`ProjectModel`, cria/atualiza `WorkspaceBindingModel` com `local_path` =
+`resource_path` do candidato, cria `ScmAssociationModel` com
+`confidence="observed"` quando a evidência do candidato carrega
+`remote_url`, e move `discovered_resources.state` para `adopted` ou
+`authorized`.
+
+A concessão automática (a partir de `ExecutorRegistration.discovery_roots` —
+a lista do operador do registro, não a do nó; ver a seção "Duas listas de
+raízes" acima) entra em jogo quando `root_path` da linha casa, por igualdade
+de string, uma entrada com `auto_authorize`: essa concessão é
+gravada com `granted_by="root-config:<path>"`. Um `grantCapabilities`
+explícito no corpo é gravado com `granted_by="operator:<user_id>"`. As duas
+podem valer na mesma chamada de adoção — `project_authorizations_node_
+project_idx` permite só uma linha não revogada por `(node_id, project_id)`,
+então as duas origens se fundem numa linha só (`capabilities_json` vira a
+união, `granted_by` vira um conjunto `;`-separado de origens) em vez de
+competir pelo índice único. `AUTO_AUTHORIZABLE_CAPABILITIES` continua
+limitando `auto_authorize` a `read`/`test`, validado no parse de
+`DiscoveryRoot` — antes de qualquer nó conectar, muito antes de qualquer
+adoção. `modify`/`deliver` só chegam a uma linha de autorização por
+`grantCapabilities`, nomeando um operador.
+
+### `deny`: um sexto estado não nasce por acidente
+
+Move `state` para `denied`, grava `decided_by`/`decided_at`. "Ignorar" fica
+sendo filtro de UI sobre `discovered`/`stale` — `shared.protocol.
+DiscoveredState` continua com cinco valores, e nenhuma rota desta PR grava um
+sexto. A regra que a Stage 1 nomeou e a PR de relatório implementou —
+`DENIED` nunca regride por observação — continua valendo depois desta PR:
+`adopt`/`deny` só agem sobre uma linha em `discovered`/`stale`
+(`DECIDABLE_DISCOVERY_STATES`), e uma linha já `denied` responde `409` em vez
+de ser tocada de novo.
+
+### Por que `409`, não sobrescrita silenciosa
+
+`adopt`/`deny` só decidem uma linha `discovered`/`stale`. Uma linha já
+`adopted`/`authorized`/`denied` é uma decisão já tomada — decidi-la de novo
+responde `409 conflict`. Isso não é um defensive check em cima da escrita: é
+o que impede uma segunda chamada de `adopt` de duplicar o
+`WorkspaceBindingModel`/`ScmAssociationModel` que a primeira já produziu —
+a segunda chamada nunca chega à escrita.

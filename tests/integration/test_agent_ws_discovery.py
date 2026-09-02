@@ -145,7 +145,12 @@ async def test_a_discovery_report_is_recorded_for_the_authenticated_node(wired) 
 
     rows = await _discovered_rows(wired, VICTIM)
     assert len(rows) == 1
-    assert rows[0].resource_key == "/root/hub"
+    # `resource_key` is a fixed-width hash from `migrations/0013_discovery_
+    # resource_key_hash.sql` on -- `resource_path` is where the real path lives.
+    from shared.security import hash_resource_key
+
+    assert rows[0].resource_path == "/root/hub"
+    assert rows[0].resource_key == hash_resource_key("/root/hub")
     assert rows[0].root_path == "/root"
 
 

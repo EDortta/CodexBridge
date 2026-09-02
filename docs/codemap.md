@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-gh73-discovery-report`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-gh73-discovery-report map`
+> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-gh73-discovery-adoption`
+> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-gh73-discovery-adoption map`
 
 ## Summary
 
-- 135 file(s) · 1290 symbol(s) indexed
-- Languages: config (2), python (131), shell (2)
+- 138 file(s) · 1335 symbol(s) indexed
+- Languages: config (2), python (134), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -70,6 +70,7 @@ gateway/
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
         conversations.py  — "Conversations and contextual messaging — issue #10."
         decisions.py  — "Operational decisions: sensitive tasks held for a human to resolve — issue #6."
+        discovery.py  — "Discovered resources: the panel's half of "the node proposes, the panel adopts"."
         epics.py  — "Epics — issue #8."
         issues.py  — "Issues — issue #8."
         missions.py  — "Missions: the mission-control view of the same run Sessions exposes — issue #7."
@@ -103,6 +104,7 @@ gateway/
       agent_hub.py
       audit.py
       conversation_types.py  — "Closed vocabulary for conversation context references, and their error."
+      discovery_types.py  — "Closed vocabulary for adopting a `discovered_resources` row, and its error."
       email_templates.py  — "Branded HTML for every CodexBridge transactional email."
       google_calendar.py  — "A Google Calendar client for reminders, built to be tested without ever"
       issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
@@ -141,6 +143,7 @@ tests/
     test_codex_runner_real_process.py  — "CodexRunner against a REAL `codex` subprocess — not the fake used everywhere else."
     test_conversations.py  — "Conversations and contextual messaging — issue #10."
     test_decisions.py  — "Operational decisions — issue #6."
+    test_discovery_routes.py  — "Discovered-resource adoption routes — issue #73 Stage 3 adoption half."
     test_dispatch_payload_engine_and_delivery.py  — "`AgentHub.dispatch_next` forwards engine/issue_ref/delivery to the executor."
     test_epics_issues.py  — "Epics and issues — issue #8."
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
@@ -427,6 +430,16 @@ tests/
 - `reject_decision(decision_id, body, response, if_match, idempotency_key, principal, session)` *(async function)*
 - `request_decision_revision(decision_id, body, response, if_match, idempotency_key, principal, session)` *(async function)*
 
+### `gateway/app/api/routes/discovery.py`
+
+> Discovered resources: the panel's half of "the node proposes, the panel adopts".
+
+- **`NewProjectSpec`** *(class)*
+- **`AdoptDiscoveredResourceRequest`** *(class)*
+- `list_discovered_resources(node_id, response, state, cursor, limit, principal, session)` *(async function)* — "One node's discovered candidates, cursor-paginated, newest-id last."
+- `adopt_discovered_resource(resource_id, payload, response, idempotency_key, principal, session)` *(async function)* — "Bind a discovered candidate to a project (existing or new)."
+- `deny_discovered_resource(resource_id, response, idempotency_key, principal, session)` *(async function)* — "Refuse a discovered candidate. "Ignore" is a UI filter over `DISCOVERED`/"
+
 ### `gateway/app/api/routes/epics.py`
 
 > Epics — issue #8.
@@ -673,6 +686,13 @@ tests/
 - **`ConversationPlanningError`** *(class)* — "A create input that fails validation inside the store itself."
   - `__init__(self, field, code, message)` *(method)*
 
+### `gateway/app/services/discovery_types.py`
+
+> Closed vocabulary for adopting a `discovered_resources` row, and its error.
+
+- **`DiscoveryAdoptionError`** *(class)* — "An adopt/deny input that fails validation inside the store itself."
+  - `__init__(self, field, code, message)` *(method)*
+
 ### `gateway/app/services/email_templates.py`
 
 > Branded HTML for every CodexBridge transactional email.
@@ -734,6 +754,10 @@ tests/
 - `ensure_node_for_executor(session, executor)` *(async function)* — "The Bridge Node bound to `executor`, creating and binding one if needed."
 - `record_node_announcement(session, executor, announcement)` *(async function)* — "Persist a HELLO's `NodeAnnouncement` onto the node bound to `executor`."
 - `record_discovery_report(session, executor, report)` *(async function)* — "Persist one root's `DiscoveryReport` into `discovered_resources` -- and nothing else."
+- `list_discovered_resources_page(session, node_id)` *(async function)* — "One node's discovered candidates, ordered by id, over-fetched by one."
+- `get_discovered_resource(session, resource_id)` *(async function)*
+- `adopt_discovered_resource(session, resource_id)` *(async function)* — "Adopt one discovered candidate: bind it to a project and, when either"
+- `deny_discovered_resource(session, resource_id)` *(async function)* — "Refuse one discovered candidate. See `DECIDABLE_DISCOVERY_STATES` --"
 - `list_nodes(session)` *(async function)* — "Every Bridge Node, ordered by id, paired with the executor bound to it."
 - `get_node(session, node_id)` *(async function)* — "One Bridge Node and its bound executor, or None if the node does not exist."
 - `next_dispatchable_task(session, executor_id)` *(async function)*
@@ -864,6 +888,7 @@ tests/
 
 - `secure_compare(left, right)`
 - `hash_token(token)`
+- `hash_resource_key(value)` — "A fixed-width (64 hex chars), indexable stand-in for an unbounded string."
 - `sanitize_log_line(line)`
 - `ensure_within_root(root, target)`
 - `filtered_environment(allowed_keys)`
@@ -1200,6 +1225,41 @@ tests/
 - `test_request_revision_requires_a_non_empty_reason(api)` *(async function)*
 - `test_request_revision_is_a_distinct_outcome_from_reject(api)` *(async function)*
 - `test_request_revision_on_a_resolved_decision_is_a_conflict(api)` *(async function)*
+
+### `tests/integration/test_discovery_routes.py`
+
+> Discovered-resource adoption routes — issue #73 Stage 3 adoption half.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)*
+- `auth(token)`
+- `seed_resource(factory)` *(async function)*
+- `test_list_requires_a_token(api)` *(async function)*
+- `test_list_without_the_admin_scope_is_forbidden(api)` *(async function)*
+- `test_list_with_the_admin_scope_is_allowed(api)` *(async function)* — "Positive control for the previous two: the scope alone is sufficient."
+- `test_a_principal_without_the_administrative_scope_cannot_adopt(api)` *(async function)*
+- `test_a_principal_with_the_administrative_scope_can_adopt(api)` *(async function)* — "Positive control for the previous test."
+- `test_a_token_with_no_scopes_cannot_deny(api)` *(async function)*
+- `test_an_unknown_node_id_is_not_found(api)` *(async function)*
+- `test_an_invalid_state_filter_is_rejected(api)` *(async function)*
+- `test_the_state_filter_narrows_the_list(api)` *(async function)*
+- `test_a_resource_from_a_different_node_is_not_listed(api)` *(async function)*
+- `test_pagination_covers_more_candidates_than_one_page(api)` *(async function)* — "The real-world case this PR names: 247 candidates from one root."
+- `test_the_dto_carries_the_sensitive_path_fields(api)` *(async function)* — "This IS the pre-registered exception (`docs/control-plane.md`,"
+- `test_adopting_with_a_new_project_creates_project_binding_and_moves_state(api)` *(async function)*
+- `test_adopting_without_a_remote_url_creates_no_scm_association(api)` *(async function)* — "Positive control for the previous test's association assertion."
+- `test_adopting_into_an_existing_project_reuses_it(api)` *(async function)*
+- `test_adopting_twice_does_not_duplicate_the_binding(api)` *(async function)*
+- `test_adopt_requires_exactly_one_of_project_id_or_new_project(api)` *(async function)*
+- `test_adopting_an_unknown_resource_is_not_found(api)` *(async function)*
+- `test_a_matching_auto_authorize_root_grants_read_on_adoption(api)` *(async function)* — "`E1`'s registration grants `read` for exactly `/root` (see the `api` fixture)."
+- `test_a_non_matching_root_grants_nothing(api)` *(async function)* — "Positive control: a candidate under a root E1 never registered grants nothing automatically."
+- `test_operator_grant_capabilities_can_include_modify_and_deliver(api)` *(async function)*
+- `test_root_config_and_operator_grants_coexist_in_one_call(api)` *(async function)* — "Both origins apply in the same adopt call -- `/root` auto-grants `read`,"
+- `test_auto_authorize_can_never_grant_modify_or_deliver(api)` *(async function)* — "A malicious/misconfigured root cannot smuggle `modify`/`deliver` in --"
+- `test_denying_moves_state_and_records_the_actor(api)` *(async function)*
+- `test_denying_twice_is_a_conflict(api)` *(async function)*
+- `test_a_denied_resource_is_not_touched_by_a_later_report(api)` *(async function)* — "The rule `docs/control-plane.md` names survives this PR: DENIED is"
 
 ### `tests/integration/test_dispatch_payload_engine_and_delivery.py`
 
@@ -1795,6 +1855,9 @@ tests/
 - `test_stale_row_reappearing_with_active_authorization_reverts_to_authorized(db_session)` *(async function)*
 - `test_stale_row_reappearing_with_only_a_revoked_authorization_reverts_to_adopted(db_session)` *(async function)* — "The negative half of the pair above: a REVOKED authorization must not"
 - `test_record_discovery_report_never_writes_authorization_or_projects(db_session)` *(async function)* — "The property that makes "the node proposes, the panel adopts" true by"
+- `test_a_matching_auto_authorize_root_grants_nothing_from_a_report_alone(db_session)` *(async function)* — "The invariant this PR must not break: a node cannot authorize itself."
+- `test_resource_key_is_a_fixed_width_hash_and_resource_path_carries_the_real_path(db_session)` *(async function)* — "The defect this PR fixes: a MySQL `varchar(255)` cannot hold every"
+- `test_a_pre_migration_row_self_heals_its_resource_key_on_next_report(db_session)` *(async function)* — "A row written before 0013 has `resource_key` = the raw path (the"
 - `test_a_large_report_does_not_cost_one_round_trip_per_candidate(db_session)` *(async function)* — "247 candidates -- the real root that motivated this work, rounded up"
 
 ### `tests/unit/test_email_templates.py`

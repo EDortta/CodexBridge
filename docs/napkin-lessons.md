@@ -1330,3 +1330,35 @@ repositório inteiro e não têm como respeitar uma divisão de escopo que exist
 no prompt. Ou se dá um worktree por agente, ou se proíbe explicitamente esses
 comandos no prompt e se verifica mutação copiando o arquivo (`cp` e restaura),
 que foi como a prova acabou sendo feita aqui.
+
+## 2026-09-02 — uma coluna dimensionada para um propósito, reaproveitada para outro, sem revisitar a largura
+
+`discovered_resources.resource_key` nasceu em `0009_control_plane.sql` como
+`varchar(255)`, pensada como um id curto sugerido. A PR seguinte (Stage 3,
+relatório) reaproveitou a mesma coluna para guardar o path absoluto do
+candidato — até 2048 caracteres, o próprio limite que o protocolo já
+declarava em `DiscoveredCandidate.resource_key`. Ninguém voltou a olhar a
+largura da coluna quando o significado do campo mudou. O SQLite não acusou
+nada: é afinidade de tipo, não restrição, então qualquer string cabe. O
+projeto declara `aiomysql` como dependência — MySQL é alvo suportado — e lá
+a mesma escrita seria `Data too long for column`, sem que nenhum teste local
+(rodado só contra SQLite) jamais visse isso.
+
+Lição: quando o *significado* de uma coluna muda — de "id curto sugerido"
+para "path de filesystem" — a largura declarada é parte do contrato que
+mudou junto, não um detalhe que sobrevive por acidente. Perguntar "isso
+ainda cabe no que declarei?" é parte de mudar o significado, não um passo
+opcional depois. E testar só contra o motor mais permissivo (aqui, SQLite)
+esconde exatamente esse tipo de defeito: a suíte fica verde enquanto o
+contrato declarado (múltiplos motores de banco suportados) já está quebrado
+para um deles. Quem generaliza o uso de uma coluna existente deve verificar
+a largura contra TODOS os motores declarados como alvo, não só contra o que
+os testes locais usam.
+
+O conserto (`migrations/0013_discovery_resource_key_hash.sql`) não alargou a
+coluna — alargar teria estourado o limite de chave do índice único composto
+que essa mesma coluna ancora, trocando uma falha silenciosa por outra no
+mesmo alvo. A saída foi separar "chave de busca" (hash de largura fixa) de
+"dado real" (path, em coluna nova, sem índice) — quando um valor precisa
+simultaneamente indexar barato E carregar um dado de tamanho não controlado,
+essas são duas responsabilidades, não uma.

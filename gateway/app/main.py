@@ -15,6 +15,7 @@ from gateway.app.api.rate_limit import RateLimitDependency, client_key
 from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import decisions, missions, nodes as nodes_routes, probes, projects, sessions
 from gateway.app.api.routes import conversations as conversations_routes
+from gateway.app.api.routes import discovery as discovery_routes
 from gateway.app.api.routes import epics as epics_routes
 from gateway.app.api.routes import issues as issues_routes
 from gateway.app.api.setup import install_api_conventions
@@ -150,6 +151,11 @@ app.include_router(conversations_routes.router, dependencies=[Depends(RateLimitD
 # the fleet-wide `permissions.NODES_READ` action rather than the
 # project-scoped `visible_projects` pattern the routers above use.
 app.include_router(nodes_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# Discovered-resource adoption (issue #73, Stage 3 adoption half). Same
+# limiter, same administrative/fleet-wide posture as nodes.router above --
+# guarded by `NODES_DISCOVERIES_READ`/`NODES_DISCOVERIES_DECIDE`.
+app.include_router(discovery_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:

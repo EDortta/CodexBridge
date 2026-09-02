@@ -157,6 +157,26 @@ class DiscoveredResourceModel(Base):
     deliberately NOT a foreign key: a candidate exists precisely before there
     is a `projects` row to point at. `kind` leaves room for the
     processes/services #73 anticipates without a schema change.
+
+    `resource_key`/`resource_path` split (WK-20260902-gh73-discovery-adoption,
+    `migrations/0013_discovery_resource_key_hash.sql`). Issue #73 Stage 3
+    wrote the candidate's absolute path straight into `resource_key`, a
+    `varchar(255)` that also anchors the composite unique index `(node_id,
+    kind, resource_key)`. SQLite never enforced that width; MySQL -- a
+    declared target via `aiomysql` -- does, so a path near the protocol's own
+    2048-character limit was one `codex exec` scan away from an insert
+    failure nobody had hit yet. See `shared.security.hash_resource_key`'s
+    docstring for why widening the column was rejected in favor of hashing.
+
+    `resource_key` is now `hash_resource_key(path)` -- 64 hex characters,
+    comfortably inside both the column and the MySQL index-key limit that
+    likely sized the original 255. `resource_path` carries the real path, at
+    the same 2048-character width `DiscoveredCandidate.resource_key` already
+    allows, unindexed. It joins `root_path` in the same sensitive-data
+    category `docs/control-plane.md` documents for `WorkspaceBindingModel.
+    local_path`: operator-surface-only, never `ProjectStatus`/`Session`/
+    `Mission`/any MCP tool (`docs/api/README.md`, "Fields that must never
+    ship").
     """
 
     __tablename__ = "discovered_resources"
@@ -169,6 +189,7 @@ class DiscoveredResourceModel(Base):
     evidence_json: Mapped[str] = mapped_column(Text, default="{}")
     state: Mapped[str] = mapped_column(String(32), default="discovered")
     root_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    resource_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     decided_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
