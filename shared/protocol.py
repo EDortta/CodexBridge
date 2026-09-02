@@ -501,15 +501,20 @@ class ForgeOperationRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_kind_requires_its_fields(self) -> "ForgeOperationRequest":
-        """Recusa no parse é melhor que erro no executor.
+        """Refusing at parse time beats failing on the executor.
 
         `issue_comment`/`issue_close` name an existing issue; without
         `issue_number` there is nothing to comment on or close.
         `issue_open` creates one; without `title` there is nothing to open.
+        `issue_comment` additionally needs a non-empty `body`: `gh issue
+        comment` requires one, and an empty comment is an approved SENSITIVE
+        write that publishes nothing -- a human decision spent on a no-op.
         """
         if self.kind in (ForgeOperationKind.ISSUE_COMMENT, ForgeOperationKind.ISSUE_CLOSE):
             if self.issue_number is None:
                 raise ValueError(f"{self.kind.value} requires issue_number")
+        if self.kind is ForgeOperationKind.ISSUE_COMMENT and not self.body:
+            raise ValueError("issue_comment requires a non-empty body")
         if self.kind is ForgeOperationKind.ISSUE_OPEN:
             if not self.title:
                 raise ValueError("issue_open requires title")

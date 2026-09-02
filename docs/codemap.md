@@ -5,7 +5,7 @@
 
 ## Summary
 
-- 127 file(s) · 1195 symbol(s) indexed
+- 127 file(s) · 1196 symbol(s) indexed
 - Languages: config (2), python (123), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -1684,6 +1684,7 @@ tests/
 - `test_repo_identity_pattern_rejects_dangerous_or_malformed_identities(value)` — "Mirrors the role `_REMOTE_NAME_PATTERN` plays for git remotes."
 - `test_forge_operation_request_refuses_a_bad_repo_identity_at_parse()`
 - `test_issue_comment_without_issue_number_is_refused_at_parse()`
+- `test_issue_comment_without_a_body_is_refused_at_parse(body)` — "An empty comment is a human decision spent on a no-op."
 - `test_issue_close_without_issue_number_is_refused_at_parse()`
 - `test_issue_open_without_title_is_refused_at_parse()`
 - `test_issue_list_requires_neither_title_nor_issue_number()`

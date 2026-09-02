@@ -57,7 +57,7 @@ _STATE_VALUES = (None, "open", "closed", "all")
 # for every request pydantic happens to accept including malformed ones".
 _REQUIRED_FIELD_OVERRIDES: dict[ForgeOperationKind, dict[str, tuple]] = {
     ForgeOperationKind.ISSUE_OPEN: {"title": ("x", "T" * 256)},
-    ForgeOperationKind.ISSUE_COMMENT: {"issue_number": (1, 999_999_999)},
+    ForgeOperationKind.ISSUE_COMMENT: {"issue_number": (1, 999_999_999), "body": ("b", "b" * 100)},
     ForgeOperationKind.ISSUE_CLOSE: {"issue_number": (1, 999_999_999)},
 }
 
@@ -85,7 +85,8 @@ def test_every_write_kind_is_sensitive_across_every_plausible_field_combination(
         overrides = _REQUIRED_FIELD_OVERRIDES.get(kind, {})
         title_values = overrides.get("title", _TITLE_VALUES)
         issue_number_values = overrides.get("issue_number", _ISSUE_NUMBER_VALUES)
-        combos = list(itertools.product(title_values, _BODY_VALUES, issue_number_values, _STATE_VALUES))
+        body_values = overrides.get("body", _BODY_VALUES)
+        combos = list(itertools.product(title_values, body_values, issue_number_values, _STATE_VALUES))
         expected += len(combos)
         for title, body, issue_number, state in combos:
             request = ForgeOperationRequest(
@@ -153,6 +154,24 @@ def test_issue_comment_without_issue_number_is_refused_at_parse() -> None:
     with pytest.raises(ValidationError) as excinfo:
         ForgeOperationRequest(kind=ForgeOperationKind.ISSUE_COMMENT, repo_identity="owner/repo", body="hi")
     assert "issue_number" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("body", [None, ""])
+def test_issue_comment_without_a_body_is_refused_at_parse(body: str | None) -> None:
+    """An empty comment is a human decision spent on a no-op.
+
+    `gh issue comment` requires a body, and a forge write is SENSITIVE: it
+    costs an operator an approval. Approving one that publishes nothing is
+    the one outcome worth refusing before it reaches the gate.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        ForgeOperationRequest(
+            kind=ForgeOperationKind.ISSUE_COMMENT,
+            repo_identity="owner/repo",
+            issue_number=7,
+            body=body,
+        )
+    assert "body" in str(excinfo.value)
 
 
 def test_issue_close_without_issue_number_is_refused_at_parse() -> None:
