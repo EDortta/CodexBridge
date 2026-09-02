@@ -2,8 +2,13 @@
 
 - work_id: WK-20260826-gh11-artifacts
 - data: 2026-08-26
-- branch: `feature/gh-11/artifacts-downloads-apk-metadata` (worktree
-  `~/Sync/Projects/AI/CodexBridge--gh-11`; **not pushed, no PR**)
+- branch: `feature/gh-11/artifacts-downloads-apk-metadata`
+- status: **merged** via **PR #61** (2026-09-02), on `main`, contract `1.7.0`
+  published under `contract/1.7.0/`. Not deployed.
+- **the migration was renumbered on merge**: `0008_artifacts.sql` ->
+  **`0010_artifacts.sql`**. 0008 and 0009 were taken on `development` by the
+  time this landed, and git reports no conflict for two added files with
+  different names — so nothing flagged it. Every reference moved with it.
 
 ## Next Step (DO THIS FIRST)
 

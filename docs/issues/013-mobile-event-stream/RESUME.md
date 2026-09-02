@@ -4,6 +4,34 @@
 - data: 2026-08-26
 - branch: `feature/gh-13/mobile-event-stream`
 - contract: 1.8.0 (`probes.API_CONTRACT_VERSION` matched)
+- status: **merged** via **PR #62** (2026-09-02), on `main`, `contract/1.8.0/`
+  published. Not deployed.
+- **the migration was renumbered on merge**: `0009_event_subscriptions.sql` ->
+  **`0011_event_subscriptions.sql`**. 0009 had been taken by #73's control plane,
+  and two added files with different names is not a merge conflict, so nothing
+  reported it.
+
+## Next Step (DO THIS FIRST)
+
+One **operator decision**, opened by the merge and deliberately not made in it.
+
+`gateway/app/services/event_types.py:NOT_DELIVERED` is new. This issue's guard
+(`test_every_audited_domain_event_type_is_translated`) fails on any
+`record_event` under a deliverable entity with no mobile mapping, and two
+writers already on `development` had none — `task.push_preauthorized` and
+`task.notification_failed`. Neither was visible from this branch or from
+`development` alone; they only met on merge day.
+
+Both are now **excluded on purpose**, with the reason written next to them: the
+first is already delivered as `decision.resolved` by the same call, and the
+second is an SMTP failure, which is an operator concern with an operator's
+channel. That is a judgement call about what the mobile client is owed.
+
+**If the client should hear either of them**, the answer is not an edit to that
+dict: it is a new `MobileEventType`, which `docs/api/README.md` counts as a
+breaking change, so it is a contract bump and a client migration. The guard also
+now fails on an exemption whose writer has disappeared, so the dict cannot rot
+quietly.
 
 ## What shipped
 

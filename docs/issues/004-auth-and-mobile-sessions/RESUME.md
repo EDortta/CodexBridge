@@ -3,13 +3,15 @@
 - work_id: WK-20260813-mobile-auth
 - data: 2026-08-13
 - branch: `feature/gh-4/define-authentication-authorization-and-mobile-s`
+- status: **merged** — the review fixes landed via **PR #59** (2026-09-02) and
+  are on `main`. Nothing is deployed.
 
 ## Next Step (DO THIS FIRST)
 
 ~~Adversarial review of this delivery~~ — **DONE 2026-08-26** (Squad E,
 WK-20260826-gh4-adversarial-review, branch
-`feature/gh-4/adversarial-review-fixes`, PR pending). See "Adversarial review
-2026-08-26" below. What remains is the **operator's**: the escalated findings in
+`feature/gh-4/adversarial-review-fixes`, **merged as PR #59**). See "Adversarial
+review 2026-08-26" below. What remains is the **operator's**: the escalated findings in
 `docs/security.md` ("Revisão adversarial da issue #4 — decisões pendentes do
 operador"), chiefly **S1** (a narrowed OAuth delegation still confers admin,
 ship-blocking) and the **rotation-race theft-policy** direction conflict.
