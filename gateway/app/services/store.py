@@ -22,6 +22,7 @@ from gateway.app.models.entities import (
     OAuthAuthorizationCodeModel,
     OAuthRefreshTokenModel,
     ProjectModel,
+    ScmAssociationModel,
     TaskLogModel,
     TaskModel,
 )
@@ -50,6 +51,7 @@ from shared.protocol import (
     ForgeOperationRequest,
     PolicyLevel,
     ProjectRegistration,
+    REPO_IDENTITY_PATTERN,
     STOPPABLE_TASK_STATES,
     SubmitTaskRequest,
     TaskMode,
@@ -704,6 +706,7 @@ async def decide_forge_operation(
     row.state = _FORGE_DECISION_TO_STATE[decision]
     if row.state != "approved":
         row.resolved_at = datetime.now(timezone.utc)
+    row.revision += 1
     await record_event(
         session,
         "forge_operation",
@@ -733,6 +736,7 @@ async def mark_forge_operation_dispatched(session: AsyncSession, operation_id: s
     if row.state != "approved":
         raise ValueError("forge_operation_not_approved")
     row.state = "dispatched"
+    row.revision += 1
     await record_event(
         session,
         "forge_operation",
@@ -760,12 +764,112 @@ async def resolve_forge_operation(session: AsyncSession, operation_id: str, outc
     row.result_json = json.dumps(outcome, ensure_ascii=True)
     row.state = "completed" if outcome.get("outcome") == "succeeded" else "failed"
     row.resolved_at = datetime.now(timezone.utc)
+    row.revision += 1
     await record_event(
         session,
         "forge_operation",
         row.id,
         "forge_operation.result",
         {"state": row.state, "outcome": outcome.get("outcome"), "reason": outcome.get("reason")},
+    )
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+# --------------------------------------------------------------------------
+# Forge binding -- issue #79/#80, WK-20260902-forge-binding (PR B4)
+#
+# The write side of `gateway/app/services/forge_routing.py`'s
+# `project_forge_binding`. Kept in `store.py` rather than in
+# `forge_routing.py` itself, the same separation this file already keeps for
+# every other domain: `forge_routing.project_forge_binding` is the single
+# READ that decides routing, and every WRITE to the entity it reads goes
+# through this module, like `create_task`/`decide_task_approval` do for
+# `TaskModel`.
+# --------------------------------------------------------------------------
+
+
+async def upsert_scm_association(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    repo_identity: str,
+    confirm: bool = False,
+    provider: str = "github",
+) -> ScmAssociationModel:
+    """Declares (or re-declares, or confirms) a project's forge binding.
+
+    One row per `(project_id, provider)` (`scm_associations_project_provider_idx`,
+    `migrations/0013_forge_binding.sql`) -- a second call for a project
+    already bound UPDATES that row rather than creating a second one, so
+    `forge_routing.project_forge_binding` never has to pick among several.
+
+    `confidence` only ever reads `confirmed` when `confirm=True` is passed
+    THIS call, by this operator, right now -- never inferred from a prior
+    call, from `repo_identity` staying the same across calls, or from any
+    other signal. Re-declaring a DIFFERENT `repo_identity` over an already
+    `confirmed` row drops it back to `declared`: a confirmation is a claim
+    about the repository named at confirmation time, and it does not carry
+    over to a different one the operator did not confirm. See
+    `ScmAssociationModel`'s own docstring for the fuller reasoning against
+    ever promoting `confidence` automatically.
+    """
+    project = await session.get(ProjectModel, project_id)
+    if project is None or not project.enabled:
+        raise ValueError("unknown_project")
+    if not REPO_IDENTITY_PATTERN.match(repo_identity):
+        raise ValueError("invalid_repo_identity")
+
+    result = await session.execute(
+        select(ScmAssociationModel).where(
+            ScmAssociationModel.project_id == project_id,
+            ScmAssociationModel.provider == provider,
+        )
+    )
+    row = result.scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    # `remote_url` is `scm_associations`'s pre-#79 not-null column
+    # (`migrations/0009_control_plane.sql`), from when this table's only
+    # planned writer was a future automatic discovery scan that would have
+    # observed a real URL first and derived `repo_identity` from it. This
+    # PR's writer runs the other direction -- an operator names
+    # `repo_identity` directly -- so the canonical GitHub HTTPS form is
+    # derived here to satisfy the column, not read from anywhere.
+    canonical_remote_url = f"https://github.com/{repo_identity}.git"
+    confidence = "declared"
+    if row is None:
+        row = ScmAssociationModel(
+            id=str(uuid4()),
+            project_id=project_id,
+            provider=provider,
+            remote_url=canonical_remote_url,
+            repo_identity=repo_identity,
+            confidence="confirmed" if confirm else confidence,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(row)
+    else:
+        if confirm:
+            confidence = "confirmed"
+        elif row.repo_identity == repo_identity:
+            # Re-declaring the SAME repo_identity without confirming does not
+            # downgrade an already-confirmed row -- only a *different*
+            # repo_identity does (this function's own docstring). Repeating
+            # the identical call an operator already confirmed is not new
+            # information.
+            confidence = row.confidence
+        row.remote_url = canonical_remote_url
+        row.repo_identity = repo_identity
+        row.confidence = confidence
+        row.updated_at = now
+    await record_event(
+        session,
+        "scm_association",
+        row.id if row.id else project_id,
+        "scm_association.declared",
+        {"project_id": project_id, "provider": provider, "repo_identity": repo_identity, "confidence": row.confidence},
     )
     await session.commit()
     await session.refresh(row)

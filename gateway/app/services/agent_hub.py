@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from gateway.app.models.entities import ExecutorModel
 from gateway.app.services import store
+from gateway.app.services.forge_routing import project_forge_binding
 from shared.protocol import (
     AgentEnvelope,
     AgentMessageType,
@@ -135,6 +136,26 @@ class AgentHub:
             }
             if task.delivery_json:
                 payload["delivery"] = json.loads(task.delivery_json)
+            # WK-20260902-forge-binding, issue #79/#80 (PR B4). `gh:N` was
+            # refused unconditionally before this PR
+            # (`agent.codex_bridge_agent.instructions.resolve_issue_text`).
+            # A bound project's `gh:N` is now resolved on the executor via a
+            # READ forge operation (`ForgeOperationKind.ISSUE_VIEW`) instead
+            # of a file read -- but the executor never learns a project's
+            # real path OR its forge binding on its own
+            # (`docs/architecture.md`), so the gateway hands over the
+            # DECLARED `repo_identity` here, at dispatch time, the one place
+            # a task's full payload is already assembled per-executor. The
+            # executor still confirms it against the real remote before
+            # ever calling `gh` (`forge.github._confirm_repo_identity_live`)
+            # -- this is the declared half of that split, not a shortcut
+            # around it. Only computed for a `gh:` reference: every other
+            # `issue_ref` shape resolves without ever touching the forge, so
+            # the extra query below would be pure overhead for them.
+            if task.issue_ref and task.issue_ref.startswith("gh:"):
+                binding = await project_forge_binding(session, task.project_id)
+                if binding is not None:
+                    payload["forge_repo_identity"] = binding.repo_identity
             return payload
 
     async def dispatch_available(self, executor_id: str) -> None:

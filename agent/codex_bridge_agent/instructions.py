@@ -65,12 +65,23 @@ def _number_candidates(number: str) -> set[str]:
 def resolve_issue_text(project_root: Path, issue_ref: str) -> str:
     """Returns the raw text of the issue `issue_ref` names, or raises
 
-    `IssueResolutionError`. `local:<id>` and `gh:<n>` never reach here in a
-    correctly-behaving gateway (the gateway resolves `local:` itself, and
-    `gh:` is rejected there too -- GitHub issue ingestion has no owner in
-    this codebase, council finding F18) -- both are still handled explicitly
-    here as a defensive backstop, never as an assumption about caller
-    behavior.
+    `IssueResolutionError`. This function is FILE resolution only --
+    `docs:NNN`/bare-`NNN` under `project_root/docs/issues/`. `local:<id>`
+    never reaches here in a correctly-behaving gateway (the gateway resolves
+    it itself); `gh:<n>` never reaches here EITHER, but for a different
+    reason than it used to (council finding F18 originally: "GitHub issue
+    ingestion has no owner in this codebase"). WK-20260902-forge-binding
+    (issue #79/#80, PR B4) gave it an owner -- a bound project's `gh:N` is
+    now resolved by `AgentService._handle_dispatch` calling the forge module
+    directly (`ForgeOperationKind.ISSUE_VIEW`), a network read this
+    file-only function has no way to perform. An UNBOUND project's `gh:N`
+    still ends up refused with the exact same `issue_source_unsupported`
+    this function raises below -- `_handle_dispatch` raises it itself,
+    without ever calling this function, when the envelope carries no
+    `forge_repo_identity`. Both `local:` and `gh:` are still matched and
+    refused here anyway, as a defensive backstop for any OTHER caller this
+    module gains later, never as an assumption about `_handle_dispatch`'s
+    own behavior.
     """
     if _GH_ISSUE_PATTERN.match(issue_ref) or _LOCAL_ISSUE_PATTERN.match(issue_ref):
         raise IssueResolutionError("issue_source_unsupported")
