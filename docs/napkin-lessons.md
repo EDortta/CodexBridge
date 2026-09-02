@@ -1268,3 +1268,26 @@ estrita colidem por construção. Ao usar `awt` num projeto novo, rodar a suíte
 **antes** de escrever qualquer linha de código — o primeiro `pytest` verde é o
 que separa "quebrei agora" de "nasceu quebrado". E o conflito é do kit, não do
 projeto: vale ticket lá, não `extra="ignore"` aqui.
+
+## 2026-09-01 — fato verdadeiro sobre o codigo, conclusao falsa sobre o sistema
+
+Verifiquei que o CodexBridge nao tem nenhuma integracao com o GitHub: as issues
+sao do proprio gateway (`provider = "local"`), `gh:N` e recusado com
+`issue_source_unsupported`, e nenhuma das 14 ferramentas MCP escreve uma issue.
+Tudo isso e verdade. Dai eu concluí que o operador nao consegue criar issues no
+GitHub conversando com o CodexBridge — e ele conseguia, todo dia.
+
+O erro: **o sistema que o operador usa e maior que o repositorio que eu li.** A
+conversa acontece no ChatGPT, que tem as proprias ferramentas — no caso, o
+conector de GitHub. Eu tratei "o codigo nao faz X" como "X nao acontece", quando
+a pergunta certa era "quem mais esta nessa conversa?".
+
+Licao: antes de afirmar que uma capacidade nao existe, listar todos os atores do
+caminho, nao so o que esta versionado neste repositorio. Um agente, um conector
+do host, uma credencial que ja mora na maquina — cada um pode fornecer o que o
+codigo nao fornece. E, quando a afirmacao contraria a experiencia direta do
+operador, a experiencia dele e o dado; a minha leitura e a hipotese.
+
+Efeito colateral util: a leitura correta (composicao — o conector planeja no
+forge, o CodexBridge executa na maquina) e um argumento melhor do que o que eu
+tinha antes, e virou a folha 3 da landing.

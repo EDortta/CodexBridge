@@ -502,6 +502,44 @@ a.link:focus-visible, a:focus-visible{ outline: 2.5px solid var(--red); outline-
   .lang-tabs button{ padding: 13px 10px 7px; font-size: 12px; }
 }
 @media print{ .lang-tabs{ display: none; } }
+
+/* the spine of the whole thing, said once, on the cover */
+.spine{
+  font-family: var(--hand);
+  font-size: 25px;
+  line-height: 1.35;
+  color: var(--ink);
+  margin: 18px 0 6px;
+}
+.spine span{ color: var(--red); }
+
+/* who frida and devel3 actually are */
+.legend{
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--pencil);
+  margin: 2px 0 0;
+  padding-left: 2px;
+}
+
+/* the three prices the cloud shape charges */
+.costs{ margin: 18px 0 0; padding-left: 22px; }
+.costs li{ font-size: 15.5px; line-height: 1.5; margin-bottom: 10px; }
+.costs li::marker{ font-family: var(--hand); color: var(--red); }
+
+/* honest two columns: what this reaches, what the cloud does better */
+.versus{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 26px 40px;
+  margin: 26px 0 6px;
+}
+.versus h3{ font-size: 22px; margin-bottom: 8px; }
+.versus .mine h3{ color: var(--green); }
+.versus .theirs h3{ color: var(--pencil); }
+.versus p{ font-size: 15.2px; line-height: 1.5; margin: 0 0 10px; }
+.versus .theirs{ color: var(--pencil); }
+.versus .theirs b{ color: var(--ink); font-weight: 500; }
 </style>
 
 <body>
@@ -524,6 +562,7 @@ a.link:focus-visible, a:focus-visible{ outline: 2.5px solid var(--red); outline-
         A governed bridge between a conversation and a repository
         <span class="hl">it is not allowed to break.</span>
       </p>
+      <p class="spine" data-i18n="p1.spine">The agent goes to the code.<br /><span>The code goes nowhere.</span></p>
       <p data-i18n="p1.b1">
         I wanted to say <em>“go resolve issue #68 in that project”</em> to a chat window and have it happen on
         the machine that actually holds the repository. Every easy version of that is a bad idea: a public SSH
@@ -636,7 +675,7 @@ a.link:focus-visible, a:focus-visible{ outline: 2.5px solid var(--red); outline-
             <text class="t-sub"  x="756" y="112" data-i18n="sv.mob.1">approve</text>
             <text class="t-sub"  x="756" y="130" data-i18n="sv.mob.2">follow</text>
             <text class="t-sub"  x="756" y="148" data-i18n="sv.mob.3">unblock</text>
-            <text class="t-sub"  x="756" y="166" data-i18n="sv.mob.4">from a bus</text>
+            <text class="t-sub"  x="756" y="166" data-i18n="sv.mob.4">not at a desk</text>
 
             <text class="t-title" x="714" y="424" style="font-size:15px" data-i18n="sv.repos">your repos</text>
 
@@ -672,6 +711,7 @@ a.link:focus-visible, a:focus-visible{ outline: 2.5px solid var(--red); outline-
           </g>
         </svg>
       </div>
+      <p class="legend" data-i18n="p2.legend">frida and devel3 are just the names of my two machines: one exposed to the internet, one that holds the code.</p>
     </div>
 
     <div class="col">
@@ -697,14 +737,77 @@ a.link:focus-visible, a:focus-visible{ outline: 2.5px solid var(--red); outline-
       </p>
       <p class="note" data-i18n="p2.n2">
         Two gates, not one. Learning that they were two — and that closing only the near one felt like
-        finishing — cost me a week. Page 5.
+        finishing — cost me a week. Page 7.
       </p>
     </aside>
   </div>
 </section>
 
-<!-- ══════════ 3 · four repos ══════════ -->
+<!-- ══════════ 3 · why not the cloud ══════════ -->
 <section class="page" data-page="3">
+  <div class="margin-rule"></div>
+  <div class="inner">
+    <div class="col">
+      <h2 data-i18n="pc.h2">“Why not just use the cloud?”</h2>
+      <p class="lede" data-i18n="pc.lede">Because a cloud agent needs your code to come to it. This one goes to where your code already is.</p>
+
+      <p data-i18n="pc.b1">
+        Every cloud coding agent has the same shape: you hand it a hosted repository, it clones into a sandbox
+        of its own, it hands you back a pull request. The shape works. It charges three things.
+      </p>
+      <ol class="costs">
+        <li data-i18n="pc.c1"><b>The code has to be reachable by them, and it is copied to them.</b> Pushed to a host they can see, an app authorized, the work running on someone else's machine.</li>
+        <li data-i18n="pc.c2"><b>The agent only ever sees the repository.</b> Not the staging database, not the VPN, not the licensed toolchain, not the branch you never pushed.</li>
+        <li data-i18n="pc.c3"><b>You get their agent and their model</b>, and that choice changes underneath you.</li>
+      </ol>
+      <p data-i18n="pc.b2">CodexBridge inverts the first one. The other two fall out of it.</p>
+    </div>
+
+    <div class="wide">
+      <div class="versus">
+        <div class="mine">
+          <h3 data-i18n="pc.m.h">What this reaches</h3>
+          <p data-i18n="pc.m.p1">The machine where the code already sits — with its database, its VPN, its licensed toolchain, its half-finished branch. The agent arrives; the code stays put.</p>
+          <p data-i18n="pc.m.p2">And the folder in <span class="mono">~/Projects/something</span> that you never pushed anywhere. No cloud agent can touch that one. It is not a policy question: that folder does not exist for them.</p>
+        </div>
+        <div class="theirs">
+          <h3 data-i18n="pc.t.h">What the cloud does better</h3>
+          <p data-i18n="pc.t.p1"><b>Nothing to keep alive.</b> No host of yours, no executor to restart, no machine that has to be awake at 3am.</p>
+          <p data-i18n="pc.t.p2"><b>Elastic compute.</b> Ten agents at once without anything of yours getting hot.</p>
+          <p data-i18n="pc.t.p3"><b>And this shape is not exclusive.</b> A self-hosted runner is the same idea behind a checkbox. The difference is that here it is the whole product, with the refusals built into the path — not a setting.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <h3 data-i18n="pc.comp.h">They are not competing. I run both.</h3>
+      <p data-i18n="pc.comp.p">
+        In my own use, two tools sit in one conversation. ChatGPT's GitHub connector does the planning, where
+        the code is hosted. CodexBridge does the execution, where the code actually lives. Neither had to absorb
+        the other, and I never had to choose.
+      </p>
+      <p data-i18n="pc.folder">
+        <span class="hl">The folder decides.</span> Bound to a forge, with the credential on that machine, and the
+        issues live in the forge. Not bound, and they live in CodexBridge. Same sentence from the chat either way —
+        that second half is designed and written down, not built: <span class="mono">#78, #79, #80</span>.
+      </p>
+    </div>
+
+    <aside class="side">
+      <p class="note" data-i18n="pc.n1">
+        <span class="arrow-note">↖</span>
+        The honest column had to be on this sheet. A page that only lists what it wins at is an advertisement,
+        and you already know how to read one.
+      </p>
+      <p class="note pencil" data-i18n="pc.n2">
+        The local folder is the small example, and it is the one that convinces. Everyone has one.
+      </p>
+    </aside>
+  </div>
+</section>
+
+<!-- ══════════ 4 · four repos ══════════ -->
+<section class="page" data-page="4">
   <div class="margin-rule"></div>
   <div class="inner">
     <div class="col">
@@ -775,8 +878,8 @@ a.link:focus-visible, a:focus-visible{ outline: 2.5px solid var(--red); outline-
   </div>
 </section>
 
-<!-- ══════════ 4 · what runs / what is pencil ══════════ -->
-<section class="page" data-page="4">
+<!-- ══════════ 5 · what runs / what is pencil ══════════ -->
+<section class="page" data-page="5">
   <div class="margin-rule"></div>
   <div class="inner">
     <div class="col">
@@ -808,6 +911,7 @@ a.link:focus-visible, a:focus-visible{ outline: 2.5px solid var(--red); outline-
             <li data-i18n="p4.p3"><b>A second runner.</b> Claude Code beside Codex, behind one provider interface <span class="mono">(#64)</span>.</li>
             <li data-i18n="p4.p4"><b>The mobile client against a live gateway.</b> Today it is wired to the contract artifact, not to a deployed host.</li>
             <li data-i18n="p4.p5"><b>One adversarial-review finding is still open</b> and marked ship-blocking. It is written into <span class="mono">docs/security.md</span> and it is not merged. It is not fixed by being unmentioned.</li>
+            <li data-i18n="p4.p7"><b>Planning from the chat.</b> Epics and issues live in the gateway and reach the mobile client, but no MCP tool writes them, so “open an epic for X” has no handler yet <span class="mono">(#78)</span>. Letting a folder bound to a forge keep its issues there instead is designed and not built <span class="mono">(#79, #80)</span>.</li>
             <li data-i18n="p4.p6"><b>Nothing here deploys itself.</b> That one is not a gap — an agent pushed to production once, unasked, and deploy has been a human gate ever since.</li>
           </ul>
         </div>
@@ -827,8 +931,8 @@ a.link:focus-visible, a:focus-visible{ outline: 2.5px solid var(--red); outline-
   </div>
 </section>
 
-<!-- ══════════ 5 · where it goes ══════════ -->
-<section class="page" data-page="5">
+<!-- ══════════ 6 · where it goes ══════════ -->
+<section class="page" data-page="6">
   <div class="margin-rule"></div>
   <div class="inner">
     <div class="col">
@@ -884,8 +988,8 @@ a.link:focus-visible, a:focus-visible{ outline: 2.5px solid var(--red); outline-
   </div>
 </section>
 
-<!-- ══════════ 6 · method ══════════ -->
-<section class="page" data-page="6">
+<!-- ══════════ 7 · method ══════════ -->
+<section class="page" data-page="7">
   <div class="margin-rule"></div>
   <div class="inner">
     <div class="col">
@@ -951,7 +1055,7 @@ a.link:focus-visible, a:focus-visible{ outline: 2.5px solid var(--red); outline-
     <aside class="side">
       <p class="note" data-i18n="p6.n1">
         <span class="arrow-note">↙</span>
-        If you are reading this to find out how seriously I take AI in development: the answer is on page 4,
+        If you are reading this to find out how seriously I take AI in development: the answer is on page 5,
         in the right-hand column.
       </p>
       <p class="note pencil" data-i18n="p6.n2">
@@ -998,7 +1102,7 @@ var T = {
     'p2.b1':   'ChatGPT talks only to the gateway, and only about <code>project_id</code>. It cannot name a directory, so it cannot ask for one it was never given. The executor opens a reverse <code>wss</code> connection outward and waits; work comes back down that same socket. Then the executor resolves the real path and checks it against its own allowlist before <code>codex exec</code> runs — a second gate, on a second host, that the first one cannot talk its way past.',
     'p2.b2':   'Intent is classified before it runs: <code>read</code>, <code>controlled_write</code>, or <code>sensitive</code>. Anything that smells like <code>deploy</code>, <code>migration</code>, <code>push</code> or <code>rm -rf</code> is promoted to <code>sensitive</code> and stops for a human.',
     'p2.n1':   '<span class="arrow-note">↖</span> This is the drawing I redo every time someone asks “but how does the AI reach your code?”. It is now in the repository so I stop redrawing it.',
-    'p2.n2':   'Two gates, not one. Learning that they were two — and that closing only the near one felt like finishing — cost me a week. Page 5.',
+    'p2.n2':   'Two gates, not one. Learning that they were two — and that closing only the near one felt like finishing — cost me a week. Page 7.',
 
     'sv.chat.t': 'ChatGPT · operator',
     'sv.chat.s': 'asks in words, never a path',
@@ -1013,7 +1117,7 @@ var T = {
     'sv.mob.1':  'approve',
     'sv.mob.2':  'follow',
     'sv.mob.3':  'unblock',
-    'sv.mob.4':  'from a bus',
+    'sv.mob.4':  'not at a desk',
     'sv.repos':  'your repos',
     'sv.e1a':    'project_id',
     'sv.e1b':    '+ intent',
@@ -1108,8 +1212,33 @@ var T = {
     'p6.r6.h':  'No agent, in any of these repositories, deploys anything. Implementing an issue never includes shipping it.',
     'p6.lesson':'“When a request for automatic access to X crosses more than one process and host, each with its own decision point, fixing the one that is easiest to reach — usually the nearest — and stopping there gives the impression of a complete delivery without delivering the result that was asked for. Trace the whole path first, then say out loud which part is closed and which is not.”',
     'p6.b1':    'That is one entry out of many, and it is the reason this page has a column called “still in pencil”. A tool that dispatches an AI agent into a repository is only worth building if the person running it is honest about what it cannot do yet.',
-    'p6.n1':    '<span class="arrow-note">↙</span> If you are reading this to find out how seriously I take AI in development: the answer is on page 4, in the right-hand column.',
+    'p6.n1':    '<span class="arrow-note">↙</span> If you are reading this to find out how seriously I take AI in development: the answer is on page 5, in the right-hand column.',
     'p6.n2':    'This page is a draft too. It will be wrong the week after you read it, and that is the intended failure mode.',
+
+    'p1.spine':  'The agent goes to the code.<br /><span>The code goes nowhere.</span>',
+    'p2.legend': 'frida and devel3 are just the names of my two machines: one exposed to the internet, one that holds the code.',
+
+    'pc.h2':     '“Why not just use the cloud?”',
+    'pc.lede':   'Because a cloud agent needs your code to come to it. This one goes to where your code already is.',
+    'pc.b1':     'Every cloud coding agent has the same shape: you hand it a hosted repository, it clones into a sandbox of its own, it hands you back a pull request. The shape works. It charges three things.',
+    'pc.c1':     '<b>The code has to be reachable by them, and it is copied to them.</b> Pushed to a host they can see, an app authorized, the work running on someone else\'s machine.',
+    'pc.c2':     '<b>The agent only ever sees the repository.</b> Not the staging database, not the VPN, not the licensed toolchain, not the branch you never pushed.',
+    'pc.c3':     '<b>You get their agent and their model</b>, and that choice changes underneath you.',
+    'pc.b2':     'CodexBridge inverts the first one. The other two fall out of it.',
+    'pc.m.h':    'What this reaches',
+    'pc.m.p1':   'The machine where the code already sits — with its database, its VPN, its licensed toolchain, its half-finished branch. The agent arrives; the code stays put.',
+    'pc.m.p2':   'And the folder in <span class="mono">~/Projects/something</span> that you never pushed anywhere. No cloud agent can touch that one. It is not a policy question: that folder does not exist for them.',
+    'pc.t.h':    'What the cloud does better',
+    'pc.t.p1':   '<b>Nothing to keep alive.</b> No host of yours, no executor to restart, no machine that has to be awake at 3am.',
+    'pc.t.p2':   '<b>Elastic compute.</b> Ten agents at once without anything of yours getting hot.',
+    'pc.t.p3':   '<b>And this shape is not exclusive.</b> A self-hosted runner is the same idea behind a checkbox. The difference is that here it is the whole product, with the refusals built into the path — not a setting.',
+    'pc.comp.h': 'They are not competing. I run both.',
+    'pc.comp.p': 'In my own use, two tools sit in one conversation. ChatGPT\'s GitHub connector does the planning, where the code is hosted. CodexBridge does the execution, where the code actually lives. Neither had to absorb the other, and I never had to choose.',
+    'pc.folder': '<span class="hl">The folder decides.</span> Bound to a forge, with the credential on that machine, and the issues live in the forge. Not bound, and they live in CodexBridge. Same sentence from the chat either way — that second half is designed and written down, not built: <span class="mono">#78, #79, #80</span>.',
+    'pc.n1':     '<span class="arrow-note">↖</span> The honest column had to be on this sheet. A page that only lists what it wins at is an advertisement, and you already know how to read one.',
+    'pc.n2':     'The local folder is the small example, and it is the one that convinces. Everyone has one.',
+
+    'p4.p7':     '<b>Planning from the chat.</b> Epics and issues live in the gateway and reach the mobile client, but no MCP tool writes them, so “open an epic for X” has no handler yet <span class="mono">(#78)</span>. Letting a folder bound to a forge keep its issues there instead is designed and not built <span class="mono">(#79, #80)</span>.',
 
     'ui.colophon': 'CodexBridge — working notebook · single static file · last revised 2026-09-01'
   },
@@ -1120,25 +1249,25 @@ var T = {
 
     'p1.eyebrow': 'caderno de trabalho · não é página de produto',
     'p1.struck':  'um executor remoto de <span class="mono">codex exec</span>',
-    'p1.lede':    'Uma ponte governada entre uma conversa e um repositório <span class="hl">que ela não tem permissão de quebrar.</span>',
-    'p1.b1':      'Eu queria dizer <em>“vá resolver a issue #68 naquele projeto”</em> para uma janela de chat e ver isso acontecer na máquina que de fato guarda o repositório. Toda versão fácil disso é uma má ideia: uma porta SSH pública, um executor que aceita qualquer caminho de arquivo, um único token que alcança tudo.',
-    'p1.b2':      'Então a parte interessante do CodexBridge nunca foi a execução. Foram as recusas. Esta página é o caderno: o que roda hoje, o que ainda está a lápis, e para onde isso vai.',
+    'p1.lede':    'Uma ponte governada entre uma conversa e um repositório — <span class="hl">e ela não tem permissão de quebrar esse repositório.</span>',
+    'p1.b1':      'Eu queria falar com uma janela de chat — <em>“resolve a issue #68 naquele projeto”</em> — e ver aquilo acontecer na máquina que guarda o repositório de verdade. Toda versão fácil disso é má ideia: porta SSH aberta para a internet, executor que aceita qualquer caminho de arquivo, um token só alcançando tudo.',
+    'p1.b2':      'A parte interessante do CodexBridge nunca foi a execução. Foram as recusas. Esta página é o caderno: o que roda hoje, o que ainda está a lápis, para onde vai.',
     'p1.k1':      'autor <b>Esteban D. Dortta</b>',
     'p1.k2':      'primeiro commit <b>2026-07-28</b>',
     'p1.k3':      'repositórios <b>4</b>',
     'p1.k4':      'testes <b class="yes">670 verdes</b>',
     'p1.k5':      'estado <b class="no">funciona · inacabado</b>',
     'p1.stamp':   'ainda é rascunho — essa é a parte honesta',
-    'p1.n1':      '<span class="arrow-note">↙</span> Leia como rascunho, porque é. Quatro repositórios, cinco semanas, uma discussão sobre quem pode tocar em quê.',
+    'p1.n1':      '<span class="arrow-note">↙</span> Leia como rascunho, porque é rascunho. Quatro repositórios, cinco semanas, e uma discussão só: quem pode tocar em quê.',
     'p1.n2':      'A linha riscada era o escopo original. Deixou de ser verdade lá pela terceira semana.',
 
     'p2.h2':   'O rascunho',
     'p2.lede': 'Uma regra sustenta o desenho inteiro: o gateway nunca disca para o executor.',
     'p2.aria': 'O ChatGPT envia uma tarefa com um id de projeto ao gateway via MCP; o executor disca para fora até o gateway por um websocket reverso e recebe tarefas pelo mesmo socket; o executor roda codex exec dentro de repositórios da allowlist; o CodexBridgeMobile lê o gateway por REST e SSE.',
-    'p2.b1':   'O ChatGPT fala apenas com o gateway, e apenas sobre <code>project_id</code>. Ele não consegue nomear um diretório, logo não consegue pedir um que nunca lhe foi dado. O executor abre uma conexão <code>wss</code> reversa para fora e espera; o trabalho volta por esse mesmo socket. Aí o executor resolve o caminho real e o confere contra a própria allowlist antes de <code>codex exec</code> rodar — um segundo portão, em um segundo host, pelo qual o primeiro não consegue passar na conversa.',
-    'p2.b2':   'A intenção é classificada antes de rodar: <code>read</code>, <code>controlled_write</code> ou <code>sensitive</code>. Qualquer coisa com cheiro de <code>deploy</code>, <code>migration</code>, <code>push</code> ou <code>rm -rf</code> é promovida a <code>sensitive</code> e para, esperando um humano.',
+    'p2.b1':   'O ChatGPT só fala com o gateway, e só sobre <code>project_id</code>. Não sabe nomear um diretório, então não pede um diretório que nunca lhe deram. O executor abre uma conexão <code>wss</code> reversa para fora e fica esperando; o trabalho desce por esse mesmo socket. Antes de <code>codex exec</code> rodar, o executor resolve o caminho real e confere contra a allowlist dele — segundo portão, segundo host, e o primeiro não passa nele conversando.',
+    'p2.b2':   'A intenção é classificada antes de rodar: <code>read</code>, <code>controlled_write</code> ou <code>sensitive</code>. O que tem cheiro de <code>deploy</code>, <code>migration</code>, <code>push</code> ou <code>rm -rf</code> sobe para <code>sensitive</code> e para, esperando gente.',
     'p2.n1':   '<span class="arrow-note">↖</span> Este é o desenho que eu refaço toda vez que alguém pergunta “mas como a IA chega no seu código?”. Agora está no repositório, para eu parar de redesenhá-lo.',
-    'p2.n2':   'Dois portões, não um. Descobrir que eram dois — e que fechar só o mais próximo parecia ter terminado — me custou uma semana. Página 5.',
+    'p2.n2':   'Dois portões, não um. Descobrir que eram dois — e que fechar só o mais perto dava sensação de trabalho pronto — me custou uma semana. Página 7.',
 
     'sv.chat.t': 'ChatGPT · operador',
     'sv.chat.s': 'pede em palavras, não caminhos',
@@ -1153,7 +1282,7 @@ var T = {
     'sv.mob.1':  'aprovar',
     'sv.mob.2':  'acompanhar',
     'sv.mob.3':  'desbloquear',
-    'sv.mob.4':  'do ônibus',
+    'sv.mob.4':  'longe da mesa',
     'sv.repos':  'seus repos',
     'sv.e1a':    'project_id',
     'sv.e1b':    '+ intenção',
@@ -1179,7 +1308,7 @@ var T = {
     'sv.r3d':    'contra um host real',
 
     'p3.h2':      'Quatro repositórios, um hábito',
-    'p3.lede':    'A ponte é a parte visível. Os outros três são a razão de eu confiar nela o bastante para deixá-la rodando.',
+    'p3.lede':    'A ponte é a parte visível. Os outros três são o motivo de eu confiar nela o bastante para deixar rodando.',
     'p3.c1.tag':  'a ponte',
     'p3.c1.p':    'Gateway FastAPI mais um executor de canal reverso. Fila de tarefas persistente que sobrevive a um restart, logs incrementais, cancelamento, git diff do que o agente de fato mudou.',
     'p3.c1.f':    'Python · 14 tools MCP · 670 testes · 94 commits',
@@ -1192,11 +1321,11 @@ var T = {
     'p3.c4.tag':  'a aplicação da regra',
     'p3.c4.p':    'O mesmo contrato, tornado executável: checagens do doctor, retomada de sessão, start-work, validação, session-close, e orçamentos de contexto que falham em voz alta em vez de truncar um contrato em silêncio.',
     'p3.c4.f':    'CLI · servidor MCP · hooks de CI · evidência de auditoria',
-    'p3.b1':      'Escrito assim parece arrumado. Não é: o kit existe porque eu reexplicava os mesmos limites a um agente novo toda manhã, e perdia a discussão de um jeito diferente a cada vez. <span class="hl">Governança aqui não é papelada — é a memória que o agente não tem.</span>',
+    'p3.b1':      'Escrito assim parece arrumado. Não é. O kit existe porque eu reexplicava os mesmos limites a um agente novo toda manhã, e perdia a discussão de um jeito diferente a cada vez. <span class="hl">Governança aqui não é papelada — é a memória que o agente não tem.</span>',
     'p3.n1':      'Os mesmos quatro arquivos chegam em todo projeto: <span class="mono">AGENTS.md</span>, <span class="mono">software-overview.md</span>, <span class="mono">limits.md</span>, <span class="mono">project-rules.md</span>. Só o último é meu para editar.',
 
     'p4.h2':     'O que roda, e o que ainda está a lápis',
-    'p4.lede':   'Uma demo esconde esta coluna. Um caderno não consegue.',
+    'p4.lede':   'Demo esconde esta coluna. Caderno não esconde.',
     'p4.runs.h': 'Roda hoje',
     'p4.r1':     '<b>Endpoint MCP sobre HTTPS</b> com 14 tools — submeter, acompanhar, ler logs, cancelar, aprovar, retomar uma sessão.',
     'p4.r2':     '<b>Canal <span class="mono">wss</span> reverso</b>: o executor disca para fora, o gateway nunca disca para dentro.',
@@ -1213,11 +1342,11 @@ var T = {
     'p4.p4':     '<b>O cliente móvel contra um gateway real.</b> Hoje ele está ligado ao artefato de contrato, não a um host implantado.',
     'p4.p5':     '<b>Um achado de revisão adversarial continua aberto</b> e marcado como bloqueante. Está escrito em <span class="mono">docs/security.md</span> e não está mergeado. Não se corrige por não ser mencionado.',
     'p4.p6':     '<b>Nada aqui faz deploy de si mesmo.</b> Esse não é um buraco — um agente empurrou para produção uma vez, sem ser pedido, e deploy é portão humano desde então.',
-    'p4.n1':     '<span class="arrow-note">↖</span> Doze branches estão abertos agora, cinco deles esperando minha revisão, não mais código. Revisar é a parte lenta. Deve ser.',
+    'p4.n1':     '<span class="arrow-note">↖</span> Doze branches abertos agora, cinco esperando revisão minha e não mais código. Revisar é a parte lenta. Tem que ser.',
     'p4.n2':     '“Funciona” quer dizer: tem teste, sobreviveu a um restart, e eu o vi falhar de propósito.',
 
     'p5.h2':    'Para onde isso vai',
-    'p5.lede':  'Cada passo existe porque o anterior acabou se revelando pequeno demais.',
+    'p5.lede':  'Cada passo existe porque o anterior acabou pequeno demais.',
     'p5.s1.t':  'Um contrato antes de uma API',
     'p5.s1.r':  'épico #1 — em andamento',
     'p5.s1.p':  'Um contrato versionado e publicado contra o qual o cliente móvel é construído, com um portão de compatibilidade na CI. Cinco pull requests abertos; as versões do contrato colidem de propósito, para que a ordem de merge seja uma decisão e não um acidente.',
@@ -1233,7 +1362,7 @@ var T = {
     'p5.n1':    '<span class="arrow-note">↖</span> Os números são issues reais do repositório. Se um passo aqui não tem uma issue atrás dele, ainda não pertence a esta página.',
 
     'p6.h2':    'Como eu de fato trabalho com agentes',
-    'p6.lede':  'Eu uso IA para a maior parte do código destes repositórios. Essa é a metade fácil. <span class="hl">A metade que deu trabalho foi aprender onde não acreditar nela.</span>',
+    'p6.lede':  'Uso IA para a maior parte do código destes repositórios. Essa é a metade fácil. <span class="hl">A metade difícil foi aprender onde não acreditar nela.</span>',
     'p6.r1.w':  'Contrato primeiro',
     'p6.r1.h':  'A fronteira é escrita e publicada antes do código que precisa respeitá-la. Uma API que o cliente adivinhou é um bug com data marcada.',
     'p6.r2.w':  'Concílios adversariais',
@@ -1248,8 +1377,33 @@ var T = {
     'p6.r6.h':  'Nenhum agente, em nenhum destes repositórios, faz deploy de nada. Implementar uma issue nunca inclui publicá-la.',
     'p6.lesson':'“Quando um pedido de acesso automático a X atravessa mais de um processo e host, cada um com seu próprio ponto de decisão, corrigir o mais fácil de alcançar — em geral o mais próximo — e parar ali dá a impressão de uma entrega completa sem entregar o resultado que foi pedido. Trace o caminho inteiro primeiro, depois diga em voz alta qual parte está fechada e qual não está.”',
     'p6.b1':    'Essa é uma entrada entre muitas, e é a razão de esta página ter uma coluna chamada “ainda a lápis”. Uma ferramenta que despacha um agente de IA para dentro de um repositório só vale ser construída se quem a opera for honesto sobre o que ela ainda não faz.',
-    'p6.n1':    '<span class="arrow-note">↙</span> Se você está lendo isto para descobrir quão a sério eu levo IA no desenvolvimento: a resposta está na página 4, na coluna da direita.',
+    'p6.n1':    '<span class="arrow-note">↙</span> Se você está lendo isto para saber quão a sério eu levo IA no desenvolvimento: a resposta está na página 5, na coluna da direita.',
     'p6.n2':    'Esta página também é um rascunho. Vai estar errada na semana seguinte à sua leitura, e esse é o modo de falha pretendido.',
+
+    'p1.spine':  'O agente vai até o código.<br /><span>O código não vai a lugar nenhum.</span>',
+    'p2.legend': 'frida e devel3 são só os nomes das minhas duas máquinas: uma exposta à internet, outra onde o código mora.',
+
+    'pc.h2':     '“Por que não usar a nuvem?”',
+    'pc.lede':   'Porque o agente em nuvem precisa que o seu código vá até ele. Este vai até onde o seu código já está.',
+    'pc.b1':     'Todo agente de código em nuvem tem o mesmo formato: você entrega um repositório hospedado, ele clona para um sandbox dele, devolve um pull request. O formato funciona. Ele cobra três coisas.',
+    'pc.c1':     '<b>O código precisa ser alcançável por eles, e é copiado para eles.</b> Empurrado para um host que eles enxergam, um app autorizado, o trabalho rodando na máquina de outra pessoa.',
+    'pc.c2':     '<b>O agente só enxerga o repositório.</b> Não enxerga o banco de staging, nem a VPN, nem o toolchain licenciado, nem a branch que você nunca empurrou.',
+    'pc.c3':     '<b>Você fica com o agente e o modelo deles</b>, e essa escolha muda debaixo de você.',
+    'pc.b2':     'O CodexBridge inverte a primeira. As outras duas caem de graça.',
+    'pc.m.h':    'O que este alcança',
+    'pc.m.p1':   'A máquina onde o código já está — com o banco dela, a VPN dela, o toolchain licenciado, a branch pela metade. O agente chega; o código fica onde estava.',
+    'pc.m.p2':   'E a pasta em <span class=\'mono\'>~/Projects/alguma-coisa</span> que você nunca empurrou para lugar nenhum. Nenhum agente em nuvem toca nela. Não é questão de política: aquela pasta não existe para eles.',
+    'pc.t.h':    'O que a nuvem faz melhor',
+    'pc.t.p1':   '<b>Nada para manter de pé.</b> Nenhum host seu, nenhum executor para reiniciar, nenhuma máquina que precise estar acordada às três da manhã.',
+    'pc.t.p2':   '<b>Compute elástica.</b> Dez agentes ao mesmo tempo sem nada seu esquentar.',
+    'pc.t.p3':   '<b>E este formato não é exclusivo.</b> Um runner self-hosted é a mesma ideia atrás de uma caixinha marcada. A diferença é que aqui ele é o produto inteiro, com as recusas no meio do caminho — não uma configuração.',
+    'pc.comp.h': 'Não competem. Eu uso os dois.',
+    'pc.comp.p': 'No meu uso, duas ferramentas ficam na mesma conversa. O conector de GitHub do ChatGPT faz o planejamento, onde o código está hospedado. O CodexBridge faz a execução, onde o código de fato mora. Nenhum precisou engolir o outro, e eu nunca precisei escolher.',
+    'pc.folder': '<span class=\'hl\'>A pasta decide.</span> Ligada a um forge, com a credencial naquela máquina, e as issues moram no forge. Sem ligação, moram no CodexBridge. A frase no chat é a mesma nos dois casos — e essa segunda metade está desenhada e escrita, não construída: <span class=\'mono\'>#78, #79, #80</span>.',
+    'pc.n1':     '<span class=\'arrow-note\'>↖</span> A coluna honesta tinha que estar nesta folha. Página que só lista onde ganha é anúncio, e você já sabe ler anúncio.',
+    'pc.n2':     'A pasta local é o exemplo pequeno, e é o que convence. Todo mundo tem uma.',
+
+    'p4.p7':     '<b>Planejar pelo chat.</b> Épicas e issues moram no gateway e chegam no cliente móvel, mas nenhuma ferramenta MCP escreve nelas — então “abre uma épica para X” ainda não tem quem atenda <span class=\'mono\'>(#78)</span>. Deixar uma pasta ligada a um forge guardar as issues lá está desenhado e não construído <span class=\'mono\'>(#79, #80)</span>.',
 
     'ui.colophon': 'CodexBridge — caderno de trabalho · arquivo estático único · última revisão 2026-09-01'
   },
@@ -1260,25 +1414,25 @@ var T = {
 
     'p1.eyebrow': 'cuaderno de trabajo · no es una página de producto',
     'p1.struck':  'un ejecutor remoto de <span class="mono">codex exec</span>',
-    'p1.lede':    'Un puente gobernado entre una conversación y un repositorio <span class="hl">que no tiene permiso de romper.</span>',
-    'p1.b1':      'Quería decir <em>“andá a resolver la issue #68 en ese proyecto”</em> a una ventana de chat y que eso ocurriera en la máquina que realmente tiene el repositorio. Toda versión fácil de eso es una mala idea: un puerto SSH público, un ejecutor que acepta cualquier ruta del sistema de archivos, un único token que llega a todo.',
-    'p1.b2':      'Así que la parte interesante de CodexBridge nunca fue la ejecución. Fueron las negativas. Esta página es el cuaderno: qué funciona hoy, qué sigue a lápiz, y hacia dónde va.',
+    'p1.lede':    'Un puente gobernado entre una conversación y un repositorio — <span class="hl">y no tiene permiso de romperlo.</span>',
+    'p1.b1':      'Quería hablarle a una ventana de chat — <em>“resolvé la issue #68 en ese proyecto”</em> — y que eso pasara en la máquina que tiene el repositorio de verdad. Toda versión fácil de eso es mala idea: puerto SSH abierto a internet, ejecutor que acepta cualquier ruta, un solo token llegando a todo.',
+    'p1.b2':      'La parte interesante de CodexBridge nunca fue la ejecución. Fueron las negativas. Esta página es el cuaderno: qué funciona hoy, qué sigue a lápiz, hacia dónde va.',
     'p1.k1':      'autor <b>Esteban D. Dortta</b>',
     'p1.k2':      'primer commit <b>2026-07-28</b>',
     'p1.k3':      'repositorios <b>4</b>',
     'p1.k4':      'pruebas <b class="yes">670 en verde</b>',
     'p1.k5':      'estado <b class="no">funciona · inacabado</b>',
     'p1.stamp':   'todavía es un borrador — esa es la parte honesta',
-    'p1.n1':      '<span class="arrow-note">↙</span> Leélo como borrador, porque lo es. Cuatro repositorios, cinco semanas, una discusión sobre quién puede tocar qué.',
+    'p1.n1':      '<span class="arrow-note">↙</span> Leélo como borrador, porque es un borrador. Cuatro repositorios, cinco semanas, y una sola discusión: quién puede tocar qué.',
     'p1.n2':      'La línea tachada era el alcance original. Dejó de ser cierta cerca de la tercera semana.',
 
     'p2.h2':   'El croquis',
     'p2.lede': 'Una regla sostiene todo el diseño: el gateway nunca marca hacia el ejecutor.',
     'p2.aria': 'ChatGPT envía una tarea con un id de proyecto al gateway por MCP; el ejecutor marca hacia afuera al gateway por un websocket inverso y recibe tareas por el mismo socket; el ejecutor corre codex exec dentro de repositorios de la allowlist; CodexBridgeMobile lee el gateway por REST y SSE.',
-    'p2.b1':   'ChatGPT habla solo con el gateway, y solo sobre <code>project_id</code>. No puede nombrar un directorio, así que no puede pedir uno que nunca le dieron. El ejecutor abre una conexión <code>wss</code> inversa hacia afuera y espera; el trabajo vuelve por ese mismo socket. Después el ejecutor resuelve la ruta real y la contrasta con su propia allowlist antes de que corra <code>codex exec</code> — una segunda puerta, en un segundo host, que la primera no puede sortear conversando.',
-    'p2.b2':   'La intención se clasifica antes de correr: <code>read</code>, <code>controlled_write</code> o <code>sensitive</code>. Cualquier cosa con olor a <code>deploy</code>, <code>migration</code>, <code>push</code> o <code>rm -rf</code> se promueve a <code>sensitive</code> y se detiene a esperar a una persona.',
+    'p2.b1':   'ChatGPT habla solo con el gateway, y solo sobre <code>project_id</code>. No sabe nombrar un directorio, así que no pide uno que nunca le dieron. El ejecutor abre una conexión <code>wss</code> inversa hacia afuera y se queda esperando; el trabajo baja por ese mismo socket. Antes de que corra <code>codex exec</code>, el ejecutor resuelve la ruta real y la contrasta con su propia allowlist — segunda puerta, segundo host, y la primera no la sortea conversando.',
+    'p2.b2':   'La intención se clasifica antes de correr: <code>read</code>, <code>controlled_write</code> o <code>sensitive</code>. Lo que huele a <code>deploy</code>, <code>migration</code>, <code>push</code> o <code>rm -rf</code> sube a <code>sensitive</code> y se detiene a esperar gente.',
     'p2.n1':   '<span class="arrow-note">↖</span> Este es el dibujo que rehago cada vez que alguien pregunta “¿pero cómo llega la IA a tu código?”. Ahora está en el repositorio, para dejar de redibujarlo.',
-    'p2.n2':   'Dos puertas, no una. Darme cuenta de que eran dos — y de que cerrar solo la cercana se sentía como terminar — me costó una semana. Página 5.',
+    'p2.n2':   'Dos puertas, no una. Darme cuenta de que eran dos — y de que cerrar solo la cercana daba sensación de trabajo terminado — me costó una semana. Página 7.',
 
     'sv.chat.t': 'ChatGPT · operador',
     'sv.chat.s': 'pide en palabras, nunca rutas',
@@ -1293,7 +1447,7 @@ var T = {
     'sv.mob.1':  'aprobar',
     'sv.mob.2':  'seguir',
     'sv.mob.3':  'desbloquear',
-    'sv.mob.4':  'desde el bus',
+    'sv.mob.4':  'lejos de la mesa',
     'sv.repos':  'tus repos',
     'sv.e1a':    'project_id',
     'sv.e1b':    '+ intención',
@@ -1319,7 +1473,7 @@ var T = {
     'sv.r3d':    'contra un host real',
 
     'p3.h2':      'Cuatro repositorios, un hábito',
-    'p3.lede':    'El puente es el visible. Los otros tres son la razón por la que confío lo suficiente como para dejarlo corriendo.',
+    'p3.lede':    'El puente es el visible. Los otros tres son el motivo por el que confío lo suficiente para dejarlo corriendo.',
     'p3.c1.tag':  'el puente',
     'p3.c1.p':    'Gateway FastAPI más un ejecutor de canal inverso. Cola de tareas persistente que sobrevive a un reinicio, logs incrementales, cancelación, git diff de lo que el agente realmente cambió.',
     'p3.c1.f':    'Python · 14 tools MCP · 670 pruebas · 94 commits',
@@ -1336,7 +1490,7 @@ var T = {
     'p3.n1':      'Los mismos cuatro archivos llegan a todo proyecto: <span class="mono">AGENTS.md</span>, <span class="mono">software-overview.md</span>, <span class="mono">limits.md</span>, <span class="mono">project-rules.md</span>. Solo el último es mío para editar.',
 
     'p4.h2':     'Qué funciona, y qué sigue a lápiz',
-    'p4.lede':   'Una demo esconde esta columna. Un cuaderno no puede.',
+    'p4.lede':   'Una demo esconde esta columna. Un cuaderno no la esconde.',
     'p4.runs.h': 'Funciona hoy',
     'p4.r1':     '<b>Endpoint MCP sobre HTTPS</b> con 14 tools — enviar, seguir, leer logs, cancelar, aprobar, retomar una sesión.',
     'p4.r2':     '<b>Canal <span class="mono">wss</span> inverso</b>: el ejecutor marca hacia afuera, el gateway nunca marca hacia adentro.',
@@ -1353,11 +1507,11 @@ var T = {
     'p4.p4':     '<b>El cliente móvil contra un gateway real.</b> Hoy está cableado al artefacto de contrato, no a un host desplegado.',
     'p4.p5':     '<b>Un hallazgo de revisión adversarial sigue abierto</b> y marcado como bloqueante. Está escrito en <span class="mono">docs/security.md</span> y no está mergeado. No se arregla por no mencionarlo.',
     'p4.p6':     '<b>Acá nada se despliega solo.</b> Eso no es un hueco — un agente empujó a producción una vez, sin que se lo pidieran, y desde entonces el deploy es una puerta humana.',
-    'p4.n1':     '<span class="arrow-note">↖</span> Hay doce ramas abiertas ahora mismo, cinco esperando mi revisión, no más código. Revisar es la parte lenta. Debe serlo.',
+    'p4.n1':     '<span class="arrow-note">↖</span> Doce ramas abiertas ahora mismo, cinco esperando revisión mía y no más código. Revisar es la parte lenta. Tiene que serlo.',
     'p4.n2':     '“Funciona” quiere decir: tiene una prueba, sobrevivió a un reinicio, y lo vi fallar a propósito.',
 
     'p5.h2':    'Hacia dónde va',
-    'p5.lede':  'Cada paso existe porque el anterior resultó ser demasiado chico.',
+    'p5.lede':  'Cada paso existe porque el anterior terminó siendo demasiado chico.',
     'p5.s1.t':  'Un contrato antes que una API',
     'p5.s1.r':  'épica #1 — en curso',
     'p5.s1.p':  'Un contrato versionado y publicado contra el cual se construye el cliente móvil, con una puerta de compatibilidad en CI. Cinco pull requests abiertos; las versiones del contrato chocan a propósito, para que el orden de merge sea una decisión y no un accidente.',
@@ -1373,7 +1527,7 @@ var T = {
     'p5.n1':    '<span class="arrow-note">↖</span> Los números son issues reales del repositorio. Si un paso acá no tiene una issue detrás, todavía no pertenece a esta página.',
 
     'p6.h2':    'Cómo trabajo de verdad con agentes',
-    'p6.lede':  'Uso IA para la mayor parte del código de estos repositorios. Esa es la mitad fácil. <span class="hl">La mitad que costó trabajo fue aprender dónde no creerle.</span>',
+    'p6.lede':  'Uso IA para la mayor parte del código de estos repositorios. Esa es la mitad fácil. <span class="hl">La mitad difícil fue aprender dónde no creerle.</span>',
     'p6.r1.w':  'Primero el contrato',
     'p6.r1.h':  'La frontera se escribe y se publica antes que el código que tiene que respetarla. Una API que el cliente adivinó es un bug con fecha.',
     'p6.r2.w':  'Concilios adversariales',
@@ -1388,8 +1542,33 @@ var T = {
     'p6.r6.h':  'Ningún agente, en ninguno de estos repositorios, despliega nada. Implementar una issue nunca incluye publicarla.',
     'p6.lesson':'“Cuando un pedido de acceso automático a X atraviesa más de un proceso y host, cada uno con su propio punto de decisión, arreglar el más fácil de alcanzar — casi siempre el más cercano — y detenerse ahí da la impresión de una entrega completa sin entregar el resultado que se pidió. Trazá el camino entero primero, y después decí en voz alta qué parte está cerrada y cuál no.”',
     'p6.b1':    'Esa es una entrada entre muchas, y es la razón por la que esta página tiene una columna llamada “todavía a lápiz”. Una herramienta que despacha un agente de IA dentro de un repositorio solo vale la pena si quien la opera es honesto sobre lo que todavía no puede hacer.',
-    'p6.n1':    '<span class="arrow-note">↙</span> Si estás leyendo esto para saber qué tan en serio me tomo la IA en el desarrollo: la respuesta está en la página 4, en la columna de la derecha.',
+    'p6.n1':    '<span class="arrow-note">↙</span> Si estás leyendo esto para saber qué tan en serio me tomo la IA en el desarrollo: la respuesta está en la página 5, en la columna de la derecha.',
     'p6.n2':    'Esta página también es un borrador. Va a estar equivocada la semana siguiente a que la leas, y ese es el modo de falla buscado.',
+
+    'p1.spine':  'El agente va hasta el código.<br /><span>El código no va a ningún lado.</span>',
+    'p2.legend': 'frida y devel3 son solo los nombres de mis dos máquinas: una expuesta a internet, otra donde vive el código.',
+
+    'pc.h2':     '“¿Por qué no usar la nube?”',
+    'pc.lede':   'Porque el agente en la nube necesita que tu código vaya hasta él. Este va hasta donde tu código ya está.',
+    'pc.b1':     'Todo agente de código en la nube tiene la misma forma: le entregás un repositorio hospedado, clona en un sandbox suyo, te devuelve un pull request. La forma funciona. Cobra tres cosas.',
+    'pc.c1':     '<b>El código tiene que ser alcanzable por ellos, y se copia hasta ellos.</b> Empujado a un host que ven, una app autorizada, el trabajo corriendo en la máquina de otro.',
+    'pc.c2':     '<b>El agente solo ve el repositorio.</b> No ve la base de staging, ni la VPN, ni el toolchain licenciado, ni la rama que nunca empujaste.',
+    'pc.c3':     '<b>Te quedás con el agente y el modelo de ellos</b>, y esa elección cambia debajo tuyo.',
+    'pc.b2':     'CodexBridge invierte la primera. Las otras dos caen solas.',
+    'pc.m.h':    'Qué alcanza este',
+    'pc.m.p1':   'La máquina donde el código ya está — con su base, su VPN, su toolchain licenciado, su rama a medio hacer. El agente llega; el código se queda donde estaba.',
+    'pc.m.p2':   'Y la carpeta en <span class=\'mono\'>~/Projects/alguna-cosa</span> que nunca empujaste a ningún lado. Ningún agente en la nube la toca. No es cuestión de política: esa carpeta no existe para ellos.',
+    'pc.t.h':    'Qué hace mejor la nube',
+    'pc.t.p1':   '<b>Nada que mantener en pie.</b> Ningún host tuyo, ningún ejecutor que reiniciar, ninguna máquina que tenga que estar despierta a las tres de la mañana.',
+    'pc.t.p2':   '<b>Compute elástica.</b> Diez agentes a la vez sin que nada tuyo se caliente.',
+    'pc.t.p3':   '<b>Y esta forma no es exclusiva.</b> Un runner self-hosted es la misma idea detrás de una casilla marcada. La diferencia es que acá es el producto entero, con las negativas en el camino — no una configuración.',
+    'pc.comp.h': 'No compiten. Yo uso los dos.',
+    'pc.comp.p': 'En mi uso, dos herramientas están en la misma conversación. El conector de GitHub de ChatGPT hace la planificación, donde el código está hospedado. CodexBridge hace la ejecución, donde el código realmente vive. Ninguno tuvo que tragarse al otro, y yo nunca tuve que elegir.',
+    'pc.folder': '<span class=\'hl\'>La carpeta decide.</span> Atada a un forge, con la credencial en esa máquina, y las issues viven en el forge. Sin atar, viven en CodexBridge. La frase en el chat es la misma en los dos casos — y esa segunda mitad está diseñada y escrita, no construida: <span class=\'mono\'>#78, #79, #80</span>.',
+    'pc.n1':     '<span class=\'arrow-note\'>↖</span> La columna honesta tenía que estar en esta hoja. Una página que solo lista dónde gana es un aviso publicitario, y vos ya sabés leer uno.',
+    'pc.n2':     'La carpeta local es el ejemplo chico, y es el que convence. Todos tienen una.',
+
+    'p4.p7':     '<b>Planificar desde el chat.</b> Épicas e issues viven en el gateway y llegan al cliente móvil, pero ninguna herramienta MCP las escribe — así que “abrí una épica para X” todavía no tiene quién lo atienda <span class=\'mono\'>(#78)</span>. Dejar que una carpeta atada a un forge guarde las issues allá está diseñado y no construido <span class=\'mono\'>(#79, #80)</span>.',
 
     'ui.colophon': 'CodexBridge — cuaderno de trabajo · un solo archivo estático · última revisión 2026-09-01'
   }
