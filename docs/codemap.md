@@ -5,7 +5,7 @@
 
 ## Summary
 
-- 133 file(s) · 1232 symbol(s) indexed
+- 133 file(s) · 1235 symbol(s) indexed
 - Languages: config (2), python (129), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -199,6 +199,7 @@ tests/
 > The forge-neutral surface any provider module in this package exposes.
 
 - **`ForgeOutcome`** *(class)* — "What happened when the executor tried to run one forge operation."
+  - `__post_init__(self)` *(method)*
   - `to_dict(self)` *(method)*
 
 ### `agent/codex_bridge_agent/forge/gh_tool.py`
@@ -1722,6 +1723,8 @@ tests/
 - `test_a_malformed_repo_identity_that_bypassed_pydantic_never_reaches_run_gh(tmp_path, monkeypatch)` *(async function)*
 - `test_a_wellformed_repo_identity_that_bypassed_pydantic_still_reaches_run_gh(tmp_path, monkeypatch)` *(async function)* — "Positive control: `model_construct` alone is not what gets refused --"
 - `test_settings_are_forwarded_to_run_gh(tmp_path, monkeypatch)` *(async function)*
+- `test_captured_output_is_bounded_before_it_leaves_the_executor()` — "`gh` output is third-party text of unbounded size, and it travels."
+- `test_output_within_the_bound_is_left_exactly_as_gh_produced_it()` — "Positive control: the cap must not rewrite ordinary output."
 
 ### `tests/unit/test_forge_policy.py`
 

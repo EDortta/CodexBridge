@@ -25,6 +25,24 @@ from typing import Any, Awaitable, Callable
 LogSender = Callable[[str, str], Awaitable[None]]
 
 
+# `gh`'s own stdout/stderr is third-party text of unbounded size: it crosses
+# the websocket to the gateway and lands in a stored result blob. The
+# precedent this module mirrors, `DeliveryOutcome`, avoids the question
+# entirely by carrying structured facts only (`commit`, `remote_sha`,
+# `files_changed`) and never a command's raw output. Keeping the output here
+# is a deliberate departure -- a refusal is much harder to diagnose without
+# it, and `gh` reports the forge's own error text nowhere else -- so it is
+# bounded instead of dropped, at the one place every outcome is built.
+MAX_CAPTURED_OUTPUT = 2000
+
+
+def _truncate_captured(text: str | None) -> str | None:
+    if text is None or len(text) <= MAX_CAPTURED_OUTPUT:
+        return text
+    dropped = len(text) - MAX_CAPTURED_OUTPUT
+    return f"{text[:MAX_CAPTURED_OUTPUT]}\n[... {dropped} more characters dropped]"
+
+
 @dataclass(frozen=True)
 class ForgeOutcome:
     """What happened when the executor tried to run one forge operation.
@@ -57,6 +75,14 @@ class ForgeOutcome:
     return_code: int | None = None
     stdout: str | None = None
     stderr: str | None = None
+
+    def __post_init__(self) -> None:
+        # Truncation lives here rather than at each construction site in
+        # `github.py`: there are twenty of them today and every future
+        # operation adds more, so a per-site cap is a rule that holds until
+        # someone forgets it once.
+        object.__setattr__(self, "stdout", _truncate_captured(self.stdout))
+        object.__setattr__(self, "stderr", _truncate_captured(self.stderr))
 
     def to_dict(self) -> dict[str, Any]:
         return {

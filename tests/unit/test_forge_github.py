@@ -19,6 +19,7 @@ import pytest
 
 from agent.codex_bridge_agent.config import AgentSettings
 from agent.codex_bridge_agent.forge import github
+from agent.codex_bridge_agent.forge.base import MAX_CAPTURED_OUTPUT, ForgeOutcome
 from agent.codex_bridge_agent.forge.gh_tool import GhResult
 from shared.protocol import ForgeOperationKind, ForgeOperationRequest
 
@@ -454,3 +455,34 @@ async def test_settings_are_forwarded_to_run_gh(tmp_path: Path, monkeypatch):
     assert calls[0]["gh_bin"] == "/opt/gh/gh"
     assert calls[0]["credential_relative_path"] == ".credentials/other-token"
     assert calls[0]["timeout_seconds"] == 12.5
+
+
+def test_captured_output_is_bounded_before_it_leaves_the_executor() -> None:
+    """`gh` output is third-party text of unbounded size, and it travels.
+
+    A `ForgeOutcome` crosses the websocket to the gateway and lands in a
+    stored result blob. `DeliveryOutcome`, the precedent this module mirrors,
+    sidesteps the question by carrying structured facts only and never a
+    command's raw output; keeping the output here is a deliberate departure
+    for diagnosability, so the bound is what keeps it honest.
+    """
+    huge = "x" * (MAX_CAPTURED_OUTPUT + 5_000)
+    outcome = ForgeOutcome(attempted=True, outcome="refused", reason="boom", stdout=huge, stderr=huge)
+
+    assert len(outcome.stdout) < len(huge)
+    assert len(outcome.stderr) < len(huge)
+    assert "5000 more characters dropped" in outcome.stdout
+    assert outcome.to_dict()["stderr"].startswith("x" * 100)
+
+
+def test_output_within_the_bound_is_left_exactly_as_gh_produced_it() -> None:
+    """Positive control: the cap must not rewrite ordinary output.
+
+    Without this, a bug that truncated everything to the empty string would
+    still satisfy the test above.
+    """
+    modest = "https://github.com/owner/repo/issues/42\n"
+    outcome = ForgeOutcome(attempted=True, outcome="succeeded", stdout=modest, stderr="")
+
+    assert outcome.stdout == modest
+    assert outcome.stderr == ""
