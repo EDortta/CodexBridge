@@ -39,6 +39,7 @@ from shared.protocol import DiscoveredState, DiscoveryRoot, ExecutorRegistration
 
 
 ADMIN_TOKEN = "token-admin"      # roles=["admin"] -- may adopt/deny
+FLEETWATCHER_TOKEN = "token-fleetwatcher"  # codexbridge.admin scope, no admin role
 ALICE_TOKEN = "token-alice"      # authenticated, codexbridge.read only -- no fleet access
 NOSCOPE_TOKEN = "token-noscope"  # authenticated, no scopes at all
 
@@ -64,6 +65,17 @@ def users_file(tmp_path):
                         "user_id": "noscope", "email": "noscope@example.com", "password_hash": "x",
                         "roles": [], "allowed_projects": [],
                         "scopes": [], "enabled": True,
+                    },
+                    {
+                        # Fleet visibility without the admin role and without
+                        # can_approve_sensitive: the exact actor the sensitive
+                        # capability ladder exists to stop from granting
+                        # modify/deliver. `codexbridge.admin` as a SCOPE is
+                        # what `nodes.discoveries.decide` requires; it must
+                        # not by itself buy a sensitive grant.
+                        "user_id": "fleetwatcher", "email": "fw@example.com", "password_hash": "x",
+                        "roles": [], "allowed_projects": [],
+                        "scopes": ["codexbridge.admin"], "enabled": True,
                     },
                 ]
             }
@@ -105,6 +117,7 @@ async def api(users_file, monkeypatch):
             (ADMIN_TOKEN, "admin", ["codexbridge.admin"]),
             (ALICE_TOKEN, "alice", ["codexbridge.read"]),
             (NOSCOPE_TOKEN, "noscope", []),
+            (FLEETWATCHER_TOKEN, "fleetwatcher", ["codexbridge.admin"]),
         ):
             await store.create_oauth_access_token(
                 seed, token=token, client_id="c", user_id=user_id,
@@ -211,6 +224,52 @@ async def test_a_principal_with_the_administrative_scope_can_adopt(api) -> None:
         "/api/v1/discovered-resources/r1/adopt",
         headers=auth(ADMIN_TOKEN),
         json={"newProject": {"projectId": "hub", "name": "Hub"}},
+    )
+    assert response.status_code == 200
+
+
+async def test_adoption_cannot_grant_modify_without_the_sensitive_ladder(api) -> None:
+    """The second door to `modify`/`deliver`, closed.
+
+    `POST .../authorize` applies a privilege ladder on top of its
+    administrative scope: granting `modify` or `deliver` also needs
+    `can_approve_sensitive` or the admin role. Adoption writes the same
+    `project_authorizations` table through `grantCapabilities`, so gating
+    only the dedicated route would leave this one open to exactly the
+    principal the ladder exists to stop -- a token carrying
+    `codexbridge.admin` for fleet visibility, for an account nobody trusted
+    with a sensitive grant.
+    """
+    await seed_resource(api.factory, resource_id="r1")
+    response = api.post(
+        "/api/v1/discovered-resources/r1/adopt",
+        headers=auth(FLEETWATCHER_TOKEN),
+        json={
+            "newProject": {"projectId": "hub", "name": "Hub"},
+            "grantCapabilities": ["modify"],
+        },
+    )
+    assert response.status_code == 403
+    async with api.factory() as session:
+        row = await session.get(DiscoveredResourceModel, "r1")
+        assert row.state == DiscoveredState.DISCOVERED.value  # nothing adopted either
+
+
+async def test_the_same_actor_may_adopt_when_it_asks_for_no_sensitive_capability(api) -> None:
+    """Positive control: the ladder gates the capability, not the adoption.
+
+    Without this, a bug that refused `fleetwatcher` every adoption would pass
+    the test above while breaking the read/test flow the operator actually
+    uses most.
+    """
+    await seed_resource(api.factory, resource_id="r1")
+    response = api.post(
+        "/api/v1/discovered-resources/r1/adopt",
+        headers=auth(FLEETWATCHER_TOKEN),
+        json={
+            "newProject": {"projectId": "hub", "name": "Hub"},
+            "grantCapabilities": ["read", "test"],
+        },
     )
     assert response.status_code == 200
 

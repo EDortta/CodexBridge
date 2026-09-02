@@ -5,7 +5,7 @@
 
 ## Summary
 
-- 141 file(s) · 1371 symbol(s) indexed
+- 141 file(s) · 1373 symbol(s) indexed
 - Languages: config (2), python (137), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -1274,6 +1274,8 @@ tests/
 - `test_list_with_the_admin_scope_is_allowed(api)` *(async function)* — "Positive control for the previous two: the scope alone is sufficient."
 - `test_a_principal_without_the_administrative_scope_cannot_adopt(api)` *(async function)*
 - `test_a_principal_with_the_administrative_scope_can_adopt(api)` *(async function)* — "Positive control for the previous test."
+- `test_adoption_cannot_grant_modify_without_the_sensitive_ladder(api)` *(async function)* — "The second door to `modify`/`deliver`, closed."
+- `test_the_same_actor_may_adopt_when_it_asks_for_no_sensitive_capability(api)` *(async function)* — "Positive control: the ladder gates the capability, not the adoption."
 - `test_a_token_with_no_scopes_cannot_deny(api)` *(async function)*
 - `test_an_unknown_node_id_is_not_found(api)` *(async function)*
 - `test_an_invalid_state_filter_is_rejected(api)` *(async function)*

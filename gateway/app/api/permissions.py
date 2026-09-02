@@ -361,6 +361,15 @@ CATALOGUE: tuple[Action, ...] = (
 )
 
 
+# Every action that can put a capability into `project_authorizations`, and
+# therefore every action the sensitive-capability ladder below has to cover.
+# `nodes.discoveries.decide` belongs here because adoption's own
+# `grantCapabilities` writes that table directly: gating only the dedicated
+# authorize route would leave a second door to `modify`/`deliver` standing
+# open, reachable by exactly the principal the ladder exists to stop.
+_CAPABILITY_GRANTING_ACTIONS = frozenset({NODES_AUTHORIZATIONS_MANAGE, NODES_DISCOVERIES_DECIDE})
+
+
 def is_allowed(
     principal,
     action: Action,
@@ -425,7 +434,7 @@ def is_allowed(
     allowed = principal.has_scope(action.scope)
     if action is DECISIONS_DECIDE:
         allowed = allowed and (principal.can_approve_sensitive or principal.is_admin())
-    if action is NODES_AUTHORIZATIONS_MANAGE and capabilities is not None:
+    if action in _CAPABILITY_GRANTING_ACTIONS and capabilities is not None:
         requested = set()
         for capability in capabilities:
             try:
