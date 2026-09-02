@@ -1291,3 +1291,26 @@ operador, a experiencia dele e o dado; a minha leitura e a hipotese.
 Efeito colateral util: a leitura correta (composicao — o conector planeja no
 forge, o CodexBridge executa na maquina) e um argumento melhor do que o que eu
 tinha antes, e virou a folha 3 da landing.
+
+## 2026-09-01 — "confirmado contra a versao X" e evidencia com prazo de validade
+
+Os comentarios de `agent/codex_bridge_agent/runners/codex.py` registram, com
+cuidado, que os modos de sandbox foram confirmados contra `codex-cli 0.147.0`.
+Isso e boa pratica e foi util. Mas ao testar a rede dentro do sandbox na devel3,
+a CLI instalada ja era a **0.151.0** — quatro versoes adiante do que o comentario
+afirma ter verificado.
+
+Desta vez o comportamento nao mudou (o `workspace-write` continua sem rede, e
+`danger-full-access` continua existindo). Mas ninguem sabia disso antes do teste:
+a decisao de arquitetura inteira estava apoiada numa observacao feita contra uma
+versao que nao e mais a que roda.
+
+Licao: anotar a versao nao congela o comportamento, so datar a evidencia. Quando
+uma propriedade de seguranca depende do comportamento de uma ferramenta externa,
+o teste tem de ser re-executavel — de preferencia um teste no repositorio, nao
+uma frase num comentario — para que a proxima sessao descubra a mudanca por
+falha, e nao por sorte.
+
+Adendo do mesmo teste: `sandbox_workspace_write.network_access=true` liga a rede
+dentro do sandbox com uma unica flag por invocacao. A facilidade e o argumento
+*contra* usar esse caminho, nao a favor (issue #80).
