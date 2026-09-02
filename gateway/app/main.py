@@ -17,7 +17,7 @@ from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import epics as epics_routes
 from gateway.app.api.routes import issues as issues_routes
 from gateway.app.api.setup import install_api_conventions
-from gateway.app.core.agent_auth import TokenSource, resolve_executor_token
+from gateway.app.core.agent_auth import resolve_executor_token
 from gateway.app.core.config import settings
 from gateway.app.version import APP_VERSION
 from gateway.app.core.logging import configure_logging
@@ -724,22 +724,16 @@ async def handle_task_cancelled(session: AsyncSession, envelope: AgentEnvelope) 
 async def agent_ws(
     websocket: WebSocket,
     executor_id: str,
-    token: str | None = None,
-    x_executor_token: str | None = Header(default=None),
+    x_executor_token: str | None = Header(default=None, alias=EXECUTOR_TOKEN_HEADER),
 ) -> None:
-    presented, source = resolve_executor_token(header_token=x_executor_token, query_token=token)
+    # The token is read from the header only. The deprecated `?token=...` form
+    # #15 kept accepting for one release is gone: a credential in the URL is a
+    # credential in every access log on the path, and the transition window it
+    # existed for has closed.
+    presented = resolve_executor_token(header_token=x_executor_token)
     if presented is None:
         await websocket.close(code=4401)
         return
-    if source == TokenSource.QUERY:
-        # No token value here, and none in any branch below: the point of the
-        # change is that this handshake stops writing the credential to logs.
-        logging.getLogger(__name__).warning(
-            "executor %s authenticated with the deprecated token query parameter, which is "
-            "recorded verbatim by every access log on the path; send the %s header instead (#15)",
-            executor_id,
-            EXECUTOR_TOKEN_HEADER,
-        )
 
     async with SessionLocal() as session:
         executor = await session.get(store.ExecutorModel, executor_id)

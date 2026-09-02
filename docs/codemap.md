@@ -915,9 +915,8 @@ tests/
 - `test_a_handshake_with_no_credential_is_refused(client)`
 - `test_refusing_an_anonymous_handshake_touches_no_executor_record(client, monkeypatch)` — "4401 must be decided before the database, not after a lookup."
 - `test_the_header_is_bound_and_reaches_the_registry_check(client)` — "An unknown executor authenticating by header gets 4404, not 4401."
-- `test_the_query_parameter_still_works_and_warns(client, caplog)`
-- `test_the_deprecation_warning_does_not_print_the_token(client, caplog)` — "A warning about a leaked credential must not leak it again."
-- `test_the_header_path_logs_no_deprecation_warning(client, caplog)`
+- `test_the_query_parameter_no_longer_authenticates(client)` — "The removal #15 deferred by one release."
+- `test_a_query_token_cannot_stand_in_for_a_blank_header(client)` — "No fall-through: an empty header is absent, and the URL is not a backup."
 
 ### `tests/integration/test_api_conventions.py`
 
@@ -1505,12 +1504,10 @@ tests/
 
 > Credential resolution for the `/agent/ws` handshake — issue #15.
 
-- `test_header_is_the_new_path()`
-- `test_query_still_authenticates_during_the_transition()` — "Gateway and agent deploy independently, so the old form must keep working."
-- `test_header_wins_when_both_are_present()` — "An agent already on the header must not be downgraded by a stale query."
-- `test_nothing_presented_is_absent_not_empty_string()`
-- `test_blank_values_do_not_count_as_a_credential(blank)` — "`?token=` is not a presented credential."
-- `test_a_blank_header_falls_through_to_the_query()` — "Proxies that inject empty headers must not break the transition path."
+- `test_the_header_is_the_credential()`
+- `test_surrounding_whitespace_is_not_part_of_the_credential()`
+- `test_nothing_presented_is_absent()`
+- `test_blank_values_do_not_count_as_a_credential(blank)` — "A blank `X-Executor-Token:` is not a presented credential."
 
 ### `tests/unit/test_agent_auto_project.py`
 

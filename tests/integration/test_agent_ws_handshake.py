@@ -3,13 +3,12 @@
 Resolution rules are unit-tested in `tests/unit/test_agent_auth.py`. What is
 worth an integration test is the wiring: that FastAPI actually binds the header,
 that a handshake with no credential is refused before anything touches the
-database, and that the surviving query path announces itself without printing
-the credential it was called with.
+database, and that the deprecated query form, kept accepted for one release, no
+longer authenticates anything.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import AsyncIterator
 
 import pytest
@@ -96,39 +95,32 @@ def test_the_header_is_bound_and_reaches_the_registry_check(client: TestClient) 
     assert refused.value.code == 4404
 
 
-def test_the_query_parameter_still_works_and_warns(client: TestClient, caplog) -> None:
-    with caplog.at_level(logging.WARNING, logger="gateway.app.main"):
-        with pytest.raises(WebSocketDisconnect):
-            with client.websocket_connect("/agent/ws?executor_id=nobody&token=legacy"):
-                pass
+def test_the_query_parameter_no_longer_authenticates(client: TestClient) -> None:
+    """The removal #15 deferred by one release.
 
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert any("deprecated token query parameter" in r.getMessage() for r in warnings)
-
-
-def test_the_deprecation_warning_does_not_print_the_token(client: TestClient, caplog) -> None:
-    """A warning about a leaked credential must not leak it again.
-
-    This is the whole point of #15: the value stops appearing in anything the
-    gateway writes.
+    A credential presented only in the URL is now no credential at all: 4401,
+    decided before the registry is consulted, exactly like an anonymous
+    handshake. Any executor still on the old form must be upgraded to send the
+    header — the agent has sent it since the same release
+    (`agent/codex_bridge_agent/service.py`).
     """
-    with caplog.at_level(logging.WARNING, logger="gateway.app.main"):
-        with pytest.raises(WebSocketDisconnect):
-            with client.websocket_connect("/agent/ws?executor_id=nobody&token=s3cr3t-value"):
-                pass
-
-    for record in caplog.records:
-        assert "s3cr3t-value" not in record.getMessage()
-        assert "s3cr3t-value" not in str(record.args)
+    with pytest.raises(WebSocketDisconnect) as refused:
+        with client.websocket_connect("/agent/ws?executor_id=nobody&token=legacy"):
+            pass
+    assert refused.value.code == 4401
 
 
-def test_the_header_path_logs_no_deprecation_warning(client: TestClient, caplog) -> None:
-    with caplog.at_level(logging.WARNING, logger="gateway.app.main"):
-        with pytest.raises(WebSocketDisconnect):
-            with client.websocket_connect(
-                "/agent/ws?executor_id=nobody",
-                headers={EXECUTOR_TOKEN_HEADER: "whatever"},
-            ):
-                pass
+def test_a_query_token_cannot_stand_in_for_a_blank_header(client: TestClient) -> None:
+    """No fall-through: an empty header is absent, and the URL is not a backup.
 
-    assert not any("deprecated" in r.getMessage() for r in caplog.records)
+    The old resolver fell back to the query parameter when the header was blank,
+    so a proxy injecting an empty header kept the deprecated path alive. It does
+    not any more.
+    """
+    with pytest.raises(WebSocketDisconnect) as refused:
+        with client.websocket_connect(
+            "/agent/ws?executor_id=nobody&token=legacy",
+            headers={EXECUTOR_TOKEN_HEADER: ""},
+        ):
+            pass
+    assert refused.value.code == 4401
