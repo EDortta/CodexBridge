@@ -176,6 +176,11 @@ _STATIC_MAPPING: dict[str, tuple[str, str]] = {
     "task.decision_resolved_by_actor": ("decision.resolved_by_actor", ENTITY_KIND_DECISION),
     # --- planning ---------------------------------------------------------
     "epic.created": ("epic.created", ENTITY_KIND_EPIC),
+    # WK-20260902-epic-update-and-move: `store.update_epic` is new, and it
+    # is the only way an epic reaches `cancelled` on either transport, so a
+    # mobile client that never heard about it would show a plan that quietly
+    # stopped being true.
+    "epic.updated": ("epic.updated", ENTITY_KIND_EPIC),
     "issue.created": ("issue.created", ENTITY_KIND_ISSUE),
     "issue.updated": ("issue.updated", ENTITY_KIND_ISSUE),
     "issue.linked_to_epic": ("issue.linked_to_epic", ENTITY_KIND_ISSUE),
@@ -417,6 +422,10 @@ def _epic_created(payload: dict, redact) -> str:
     return f"Epic created with status {_enum(payload, 'status')}."
 
 
+def _epic_updated(payload: dict, redact) -> str:
+    return f"Epic updated; status {_enum(payload, 'status')}."
+
+
 def _issue_created(payload: dict, redact) -> str:
     return f"Issue created with status {_enum(payload, 'status')}."
 
@@ -460,6 +469,7 @@ _SUMMARY_BUILDERS = {
     "decision.resolved": _decision_resolved,
     "decision.resolved_by_actor": _decision_resolved_by_actor,
     "epic.created": _epic_created,
+    "epic.updated": _epic_updated,
     "issue.created": _issue_created,
     "issue.updated": _issue_updated,
     "issue.linked_to_epic": _issue_linked_to_epic,
