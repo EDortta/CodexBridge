@@ -34,6 +34,7 @@ from gateway.app.api.routes import decisions as decisions_routes
 from gateway.app.api.routes import epics as epics_routes
 from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import issues as issues_routes
+from gateway.app.api.routes import nodes as nodes_routes
 from gateway.app.api.routes import missions as missions_routes
 from gateway.app.api.routes import notifications as notifications_routes
 from gateway.app.api.routes import projects as projects_routes
@@ -170,6 +171,7 @@ async def api(users_file, monkeypatch):
     app.include_router(artifacts_routes.router)
     app.include_router(events_routes.router)
     app.include_router(notifications_routes.router)
+    app.include_router(nodes_routes.router)
 
     async def override():
         async with factory() as s:
@@ -1319,6 +1321,7 @@ async def test_me_separates_read_operational_and_administrative(api) -> None:
 # One request per action, so the report can be checked against the thing it
 # describes.
 ENDPOINT_FOR_ACTION = {
+    "nodes.read": ("GET", "/api/v1/nodes"),
     "sessions.read": ("GET", "/api/v1/sessions"),
     "sessions.readLogs": ("GET", "/api/v1/sessions/{id}/logs"),
     "sessions.explainError": ("POST", "/api/v1/sessions/{id}/explain-error"),

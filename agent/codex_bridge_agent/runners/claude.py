@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import signal
 import time
 from datetime import datetime, timezone
@@ -64,9 +65,13 @@ from uuid import uuid4
 
 from agent.codex_bridge_agent.config import AgentSettings
 from agent.codex_bridge_agent.git_tools import collect_git_snapshot
-from agent.codex_bridge_agent.runners.base import LogSender, RunnerCapabilities, RunningTask
+from agent.codex_bridge_agent.runners.base import EngineProbe, LogSender, RunnerCapabilities, RunningTask
 from shared.protocol import AgentEngine, TaskState
 from shared.security import filtered_environment, sanitize_log_line
+
+# Issue #73 Stage 2, same rationale as `runners/codex.py`'s own constant of
+# this name: bounds how long `probe()` waits for `<bin> --version`.
+_PROBE_TIMEOUT_SECONDS = 5
 
 
 SANDBOX_READ_ONLY = "read-only"
@@ -156,6 +161,36 @@ class ClaudeRunner:
             cost_class="subscription",
             env_allowlist=CLAUDE_ENV_ALLOWLIST,
         )
+
+    async def probe(self) -> EngineProbe:
+        """Issue #73 Stage 2: is `self.settings.claude_bin` actually here, right now.
+
+        Mirrors `runners.codex.CodexRunner.probe` -- see that method's
+        docstring for why this never raises and why `detail` never carries a
+        filesystem path.
+        """
+        try:
+            resolved = shutil.which(self.settings.claude_bin)
+            if resolved is None:
+                return EngineProbe(available=False, detail="not found on PATH")
+            process = await asyncio.create_subprocess_exec(
+                self.settings.claude_bin,
+                "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=_PROBE_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                return EngineProbe(available=False, detail="probe timed out")
+            first_line = stdout.decode("utf-8", errors="replace").splitlines()[0] if stdout else ""
+            return EngineProbe(available=True, version=first_line.strip()[:200] or None)
+        except Exception:
+            # Deliberately everything, not just `OSError`: see this method's
+            # docstring. A probe that escapes costs the connection.
+            return EngineProbe(available=False, detail="probe failed")
 
     def is_known(self, task_id: str) -> bool:
         return task_id in self.known_tasks

@@ -18,9 +18,12 @@ centralized across more than one instance.
 
 from __future__ import annotations
 
+import asyncio
+
 from agent.codex_bridge_agent.config import AgentSettings
 from agent.codex_bridge_agent.runners.base import EngineNotImplementedError, Runner
 from agent.codex_bridge_agent.runners.registry import KNOWN_ENGINES
+from shared.protocol import EngineAvailability
 
 
 class RunnerPool:
@@ -74,3 +77,59 @@ class RunnerPool:
         if engine is None:
             return False
         return await self._runners[engine].restart(task_id)
+
+    async def probe_all(self) -> list[EngineAvailability]:
+        """Issue #73 Stage 2: one `EngineAvailability` for every `KNOWN_ENGINES`
+
+        entry, not just the ones this pool instantiated a `Runner` for. A
+        candidate engine with `implemented=False` (no `Runner` exists in this
+        codebase) is reported unavailable with a reason rather than omitted
+        entirely -- the fleet surface needs to answer "what could this build
+        ever run" as well as "what can it run today"
+        (`runners/registry.py`'s own docstring makes the same point about
+        `KNOWN_ENGINES` itself).
+
+        The implemented engines are probed concurrently
+        (`asyncio.gather(..., return_exceptions=True)`) so one runner's probe
+        raising cannot take down the whole announcement -- an exception here
+        becomes `available=False, detail="probe failed"` rather than
+        propagating, mirroring the same "never let one bad part break the
+        rest" posture `Runner.probe()` itself takes toward its own
+        subprocess.
+        """
+        implemented_names = [name for name, runner in self._runners.items()]
+        results = await asyncio.gather(
+            *(self._runners[name].probe() for name in implemented_names),
+            return_exceptions=True,
+        )
+        probes: dict[str, EngineAvailability] = {}
+        for name, outcome in zip(implemented_names, results):
+            if isinstance(outcome, BaseException):
+                probes[name] = EngineAvailability(
+                    engine=name,
+                    implemented=True,
+                    available=False,
+                    detail="probe failed",
+                )
+            else:
+                probes[name] = EngineAvailability(
+                    engine=name,
+                    implemented=True,
+                    available=outcome.available,
+                    version=outcome.version,
+                    detail=outcome.detail,
+                )
+        availabilities: list[EngineAvailability] = []
+        for name, registration in KNOWN_ENGINES.items():
+            if name in probes:
+                availabilities.append(probes[name])
+            else:
+                availabilities.append(
+                    EngineAvailability(
+                        engine=name,
+                        implemented=False,
+                        available=False,
+                        detail="no runner implemented",
+                    )
+                )
+        return availabilities

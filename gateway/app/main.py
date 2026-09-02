@@ -7,12 +7,13 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.api.idempotency import purge_expired
 from gateway.app.api.rate_limit import RateLimitDependency, client_key
 from gateway.app.api.routes import auth as auth_routes
-from gateway.app.api.routes import decisions, missions, probes, projects, sessions
+from gateway.app.api.routes import decisions, missions, nodes as nodes_routes, probes, projects, sessions
 from gateway.app.api.routes import artifacts as artifacts_routes
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import epics as epics_routes
@@ -50,7 +51,7 @@ from gateway.app.services import metrics, store
 from gateway.app.services.audit import record_event
 from gateway.app.services.agent_hub import AgentHub
 from gateway.app.services.notify import notify_task_finished
-from shared.protocol import EXECUTOR_TOKEN_HEADER, AgentEnvelope, AgentMessageType, TaskState
+from shared.protocol import EXECUTOR_TOKEN_HEADER, AgentEnvelope, AgentMessageType, NodeAnnouncement, TaskState
 from shared.security import sanitize_log_line, secure_compare
 
 
@@ -157,6 +158,11 @@ app.include_router(events_routes.router, dependencies=[Depends(RateLimitDependen
 # Notification-subscription preferences (issue #13): recorded intent for a push
 # transport this build does not have. See `routes/notifications.py`.
 app.include_router(notifications_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# Bridge Node fleet visibility (issue #73, Stage 2). Same limiter; guarded by
+# the fleet-wide `permissions.NODES_READ` action rather than the
+# project-scoped `visible_projects` pattern the routers above use.
+app.include_router(nodes_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:
@@ -799,11 +805,62 @@ async def agent_ws(
         while True:
             raw = await websocket.receive_json()
             envelope = AgentEnvelope.model_validate(raw)
+            if envelope.executor_id != executor_id:
+                # `envelope.executor_id` is a field the CLIENT writes into the
+                # message body. `executor_id` is the one that presented a
+                # machine token at the handshake. Believing the first let any
+                # connected node write another node's row -- forging its
+                # reported capabilities, or refreshing its liveness so a dead
+                # node reads healthy -- which is precisely the fleet surface
+                # #73 Stage 2 exists to make trustworthy.
+                #
+                # The guard lives here, once, rather than in each branch: #16
+                # already fixed this for `task.ack` alone (`handle_task_ack`),
+                # and the branches added since inherited the same trust. One
+                # check before the dispatch means the next message type cannot
+                # reintroduce it.
+                logging.getLogger(__name__).warning(
+                    "executor %s sent an envelope claiming executor_id %s; dropping it",
+                    sanitize_log_line(executor_id),
+                    sanitize_log_line(envelope.executor_id),
+                )
+                continue
             async with SessionLocal() as session:
                 is_new = await store.store_message_receipt(session, envelope.message_id, envelope.executor_id, envelope.type.value)
                 if not is_new:
                     continue
-                if envelope.type == AgentMessageType.HEARTBEAT:
+                if envelope.type == AgentMessageType.HELLO:
+                    # Issue #73 Stage 2. Backward compatibility matters here: an
+                    # agent from before this change sends `{"version": "0.1.0"}`,
+                    # which validates as a `NodeAnnouncement` only by accident
+                    # (Pydantic ignores the unknown key and every field has a
+                    # default) -- so the old shape is handled explicitly rather
+                    # than left to that accident: `version` is read as
+                    # `agent_version` when the payload carries no `agent_version`
+                    # of its own. A HELLO that still fails validation after that
+                    # rewrite is logged and the loop CONTINUES: a gateway that
+                    # hangs up on the previous agent release turns a deploy into
+                    # an outage, so this branch must never close the socket or
+                    # raise out of the receive loop.
+                    payload = dict(envelope.payload)
+                    if "version" in payload and "agent_version" not in payload:
+                        payload["agent_version"] = payload.pop("version")
+                    try:
+                        announcement = NodeAnnouncement.model_validate(payload)
+                    except ValidationError:
+                        logging.getLogger(__name__).warning(
+                            "executor %s sent a HELLO payload that failed NodeAnnouncement "
+                            "validation; ignoring it and keeping the connection open",
+                            envelope.executor_id,
+                        )
+                    else:
+                        # The authenticated id, never the claimed one -- the
+                        # guard at the top of the loop has already refused any
+                        # envelope where they differ.
+                        hello_executor = await session.get(store.ExecutorModel, executor_id)
+                        if hello_executor is not None:
+                            await store.record_node_announcement(session, hello_executor, announcement)
+                elif envelope.type == AgentMessageType.HEARTBEAT:
                     await store.mark_executor_connected(session, envelope.executor_id, True)
                 elif envelope.type == AgentMessageType.TASK_ACK:
                     await handle_task_ack(session, envelope)

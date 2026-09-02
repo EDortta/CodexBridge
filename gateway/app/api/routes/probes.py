@@ -79,11 +79,16 @@ version_router = APIRouter()
 # /api/v1/notifications/preferences`, plus the `MobileEvent` family of schemas.
 # Additive only, so a minor bump.
 #
+# 1.8.0 -> 1.9.0: Bridge Node fleet visibility (issue #73, Stage 2) —
+# `GET /api/v1/nodes` and `GET /api/v1/nodes/{nodeId}`, reporting each
+# node's announcement and engine probe. Two new endpoints and their
+# schemas, nothing existing changed, so a minor bump.
+#
 # **1.7.0 was reserved for issue #11 while both branches were open**, and that
 # is why this merge was a one-line text conflict instead of two different
 # 1.7.0 contracts racing to overwrite each other. Both landed; the numbering
 # above is the order they were reserved in, not the order they merged.
-API_CONTRACT_VERSION = "1.8.0"
+API_CONTRACT_VERSION = "1.9.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a
