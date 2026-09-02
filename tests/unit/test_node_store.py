@@ -21,7 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from gateway.app.db.base import Base
 from gateway.app.models.entities import ExecutorModel, NodeModel, ProjectAuthorizationModel
 from gateway.app.services import store
-from shared.protocol import Capability, EngineAvailability, ExecutorRegistration, NodeAnnouncement
+from shared.protocol import (
+    Capability,
+    EngineAvailability,
+    ExecutorRegistration,
+    NodeAnnouncement,
+    ProjectRegistration,
+)
 
 
 @pytest.fixture
@@ -130,6 +136,181 @@ async def test_upsert_registry_produces_a_node_for_a_newly_added_executor(db_ses
     assert node2.display_name == "E2"
     executor2 = await db_session.get(ExecutorModel, "E2")
     assert executor2.node_id == "E2"
+
+
+async def test_upsert_registry_never_overwrites_an_existing_executor_or_project_row(db_session) -> None:
+    """The correction issue #76 item 4 makes: a revoked node stays revoked
+    across a reapplication of the file that seeded it.
+
+    Written first, per the task's own instruction, because this is the test
+    that actually proves the contract change in `upsert_registry`'s
+    docstring — every other assertion in this module could pass on the OLD,
+    continuously-authoritative behaviour by coincidence, but this one cannot.
+
+    Carries its own positive control (`test_upsert_registry_produces_a_node_
+    for_a_newly_added_executor` above already proves creation works; this
+    test's own second `upsert_registry` call, which DOES still create the
+    untouched `p2` project, is the local one) — 2026-09-01's napkin-lessons
+    entry: a negative that passes because nothing ran proves nothing.
+    """
+    await store.upsert_registry(
+        db_session,
+        executors=[
+            ExecutorRegistration(
+                executor_id="E1", display_name="Original Name", machine_token="original-token",
+                allowed_projects=["p1"], enabled=True,
+            )
+        ],
+        projects=[
+            ProjectRegistration(
+                project_id="p1", name="Original Project", path="/srv/p1",
+                allowed_modes=[], max_timeout_seconds=600, sensitive_patterns=[], enabled=True,
+            )
+        ],
+    )
+
+    # An operator's decision, made through the API this migration exists to
+    # support — not a file edit. `revoke_node` is `store`'s own function
+    # under test elsewhere in this suite; used here as the realistic way a
+    # row ends up revoked.
+    await store.revoke_node(db_session, "E1")
+    revoked_node = await db_session.get(NodeModel, "E1")
+    assert revoked_node.admission_state == "revoked"
+    assert revoked_node.enabled is False
+    revoked_executor = await db_session.get(ExecutorModel, "E1")
+    assert revoked_executor.enabled is False
+
+    # `registry.json` gets reloaded at the next boot -- still claiming E1 is
+    # enabled, under a different display name, because nobody edited the
+    # file to reflect the API-side revoke. A NEW project, p2, is also in this
+    # reload: the positive control proving this second call actually ran.
+    await store.upsert_registry(
+        db_session,
+        executors=[
+            ExecutorRegistration(
+                executor_id="E1", display_name="Reloaded Name", machine_token="rotated-token",
+                allowed_projects=["p1"], enabled=True,
+            )
+        ],
+        projects=[
+            ProjectRegistration(
+                project_id="p1", name="Reloaded Project", path="/srv/p1-elsewhere",
+                allowed_modes=[], max_timeout_seconds=600, sensitive_patterns=[], enabled=True,
+            ),
+            ProjectRegistration(
+                project_id="p2", name="Brand New Project", path="/srv/p2",
+                allowed_modes=[], max_timeout_seconds=600, sensitive_patterns=[], enabled=True,
+            ),
+        ],
+    )
+
+    # The revoke survives the reload: create-only means the file never gets
+    # to undo it.
+    reloaded_node = await db_session.get(NodeModel, "E1")
+    assert reloaded_node.admission_state == "revoked"
+    assert reloaded_node.enabled is False
+    reloaded_executor = await db_session.get(ExecutorModel, "E1")
+    assert reloaded_executor.enabled is False
+    assert reloaded_executor.display_name == "Original Name"
+
+    # `p1` (already in the database) is untouched down to its name and path.
+    reloaded_project = await db_session.get(store.ProjectModel, "p1")
+    assert reloaded_project.name == "Original Project"
+    assert reloaded_project.path == "/srv/p1"
+
+    # `p2` (genuinely new) IS created -- the positive control: this second
+    # call really ran, it just chose not to touch what already existed.
+    new_project = await db_session.get(store.ProjectModel, "p2")
+    assert new_project is not None
+    assert new_project.name == "Brand New Project"
+
+
+async def test_upsert_registry_hashes_the_machine_token_of_a_new_executor(db_session) -> None:
+    from shared.security import hash_token
+
+    await store.upsert_registry(
+        db_session,
+        executors=[
+            ExecutorRegistration(
+                executor_id="E1", display_name="E1", machine_token="clear-text-token",
+                allowed_projects=[], enabled=True,
+            )
+        ],
+        projects=[],
+    )
+
+    executor = await db_session.get(ExecutorModel, "E1")
+    assert executor.machine_token_hash == hash_token("clear-text-token")
+
+
+async def test_upsert_registry_backfills_an_empty_machine_token_hash(db_session) -> None:
+    """Issue #76's compatibility rule: a pre-#76 executor row, whose only
+    copy of the credential lives in `metadata_json`, gets its hash column
+    filled in from that JSON the next time the registry loads -- so it does
+    not lose its `/agent/ws` connection the moment this build starts.
+    """
+    from shared.security import hash_token
+
+    bare = ExecutorModel(
+        id="E1",
+        display_name="E1",
+        enabled=True,
+        connected=False,
+        metadata_json=json.dumps({"machine_token": "legacy-clear-text", "allowed_projects": []}),
+        machine_token_hash=None,
+    )
+    db_session.add(bare)
+    await db_session.commit()
+
+    await store.upsert_registry(
+        db_session,
+        executors=[
+            ExecutorRegistration(
+                executor_id="E1", display_name="E1", machine_token="legacy-clear-text",
+                allowed_projects=[], enabled=True,
+            )
+        ],
+        projects=[],
+    )
+
+    executor = await db_session.get(ExecutorModel, "E1")
+    assert executor.machine_token_hash == hash_token("legacy-clear-text")
+
+
+async def test_upsert_registry_does_not_overwrite_an_already_backfilled_hash(db_session) -> None:
+    """The other half of the same rule: once the hash column is populated,
+    `registry.json` never gets to change it again, even if its own clear-text
+    copy is later rotated -- create-only applies to the hash exactly as it
+    does to `enabled`/`display_name`/`metadata_json`."""
+    from shared.security import hash_token
+
+    await store.upsert_registry(
+        db_session,
+        executors=[
+            ExecutorRegistration(
+                executor_id="E1", display_name="E1", machine_token="first-token",
+                allowed_projects=[], enabled=True,
+            )
+        ],
+        projects=[],
+    )
+    first_hash = (await db_session.get(ExecutorModel, "E1")).machine_token_hash
+    assert first_hash == hash_token("first-token")
+
+    await store.upsert_registry(
+        db_session,
+        executors=[
+            ExecutorRegistration(
+                executor_id="E1", display_name="E1", machine_token="a-different-token-now",
+                allowed_projects=[], enabled=True,
+            )
+        ],
+        projects=[],
+    )
+
+    executor = await db_session.get(ExecutorModel, "E1")
+    assert executor.machine_token_hash == first_hash
+    assert executor.machine_token_hash != hash_token("a-different-token-now")
 
 
 # --------------------------------------------------------------------------

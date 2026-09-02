@@ -96,6 +96,52 @@ class AgentHub:
             except ValueError:
                 return
 
+    async def force_close(self, executor_id: str) -> bool:
+        """Close `executor_id`'s live socket, if it has one. Issue #76.
+
+        This is what makes `POST /api/v1/nodes/{id}/revoke` actually revoke
+        something instead of only refusing the *next* handshake
+        (`store.revoke_node` already does that part). Without this call, a
+        socket that was open when the operator revoked stays open — every
+        message it sends keeps being processed, and it keeps receiving
+        dispatched work — until it happens to disconnect on its own. Decision
+        #4 of issue #76 names this in writing: "revogar fecha o socket... sem
+        isso, revogar é teatro".
+
+        `4403` is the same code the handshake itself uses for "token não
+        confere com o registro" (`docs/protocol.md`) — this cut adds no new
+        close code for revocation; the meaning ("this credential is no longer
+        honoured") is the same one either way, and `4404`/`4401` would be
+        actively wrong here (the executor id and its previous credential were
+        both real).
+
+        Returns whether a connection was actually closed, so the caller can
+        tell "revoked and dropped a live socket" from "revoked, nothing was
+        connected" without inspecting `is_connected` separately in a way that
+        could race against `register`/`unregister`.
+
+        Removes from `self.connections` directly rather than calling
+        `unregister`: `unregister` also flips `ExecutorModel.connected` to
+        `False` via `store.mark_executor_connected`, which is redundant here
+        (`revoke_node` already set `enabled=False` and the row will read as
+        offline once `last_seen_at` ages out) and would open a second,
+        unnecessary database round trip on the hot path of closing a socket
+        the caller is about to also revoke in the same request.
+        """
+        async with self._lock:
+            connection = self.connections.pop(executor_id, None)
+        if connection is None:
+            return False
+        try:
+            await connection.websocket.close(code=4403)
+        except Exception:
+            # The socket may already be in the process of closing on its own
+            # (a race with a client disconnect). Either way it is out of
+            # `self.connections` now, which is the property that matters: the
+            # next envelope this connection tries to send has nowhere to go.
+            pass
+        return True
+
     async def send(self, executor_id: str, envelope: AgentEnvelope) -> None:
         connection = self.connections[executor_id]
         await connection.websocket.send_json(envelope.model_dump(mode="json"))

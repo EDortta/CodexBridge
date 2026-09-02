@@ -14,6 +14,15 @@ class AgentSettings(BaseSettings):
     gateway_ws_url: str = "ws://127.0.0.1:8080/agent/ws"
     executor_id: str = "T610"
     machine_token: str = "replace-with-long-random-token"
+    # Issue #76 (minimal cut). When set, `resolve_machine_token` below prefers
+    # this over the static `machine_token` field: `scripts/enroll_node.py`
+    # writes the value `POST /api/v1/nodes/enroll` returns straight into this
+    # file with `0600` permissions, so an operator adopting a new machine
+    # never has to copy a secret into `.env` by hand -- the exact habit issue
+    # #76 exists to end. `machine_token` stays the default for an operator
+    # still on the `registry.json` + static-token flow this build shipped
+    # with before; nothing about that flow changes.
+    machine_token_file: str | None = None
     allowed_projects_file: str = str(Path("examples/agent-projects.json").resolve())
     # WK-20260830-chatgpt-entry-provider-and-delivery. Opt-in, unset by
     # default: when set, a `project_id` not found in `allowed_projects_file`
@@ -114,4 +123,45 @@ def resolve_auto_project(project_id: str, root: str, *, max_depth: int = 6) -> P
     if resolved_match != resolved_root and resolved_root not in resolved_match.parents:
         return None
     return ProjectRegistration(project_id=project_id, name=match.name, path=str(match))
+
+
+class MachineTokenFileError(RuntimeError):
+    """`machine_token_file` is set but unusable -- always an operator problem,
+    never something to fall back silently past."""
+
+
+def resolve_machine_token(settings: AgentSettings) -> str:
+    """The machine token to present at the `/agent/ws` handshake.
+
+    Prefers `settings.machine_token_file` over the static `machine_token`
+    field when set -- see that field's own docstring for why. A configured
+    file that cannot actually be used raises rather than silently falling
+    back to `machine_token`: an operator who set the file path did so because
+    the static field is the placeholder, not a real credential, and a silent
+    fallback would connect (or, more likely, fail the handshake with a
+    confusing `4403`) using a token nobody meant to use.
+
+    Same permission discipline `gateway/app/services/notify.py` already
+    applies to its own credential file: refuses one readable or writable by
+    group/other rather than trusting whatever `chmod` it was left at.
+    """
+    if not settings.machine_token_file:
+        return settings.machine_token
+    file_path = Path(settings.machine_token_file).expanduser()
+    if not file_path.is_file():
+        raise MachineTokenFileError(
+            f"machine_token_file is set to {settings.machine_token_file!r} but that file "
+            "does not exist or is not readable."
+        )
+    mode = file_path.stat().st_mode
+    if mode & 0o077:
+        raise MachineTokenFileError(
+            f"machine_token_file at {settings.machine_token_file!r} is readable or "
+            f"writable by group/other (mode {oct(mode & 0o777)}); refusing to use it. "
+            "Fix with `chmod 600`."
+        )
+    token = file_path.read_text(encoding="utf-8").strip()
+    if not token:
+        raise MachineTokenFileError(f"machine_token_file at {settings.machine_token_file!r} is empty.")
+    return token
 

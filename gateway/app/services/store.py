@@ -17,6 +17,7 @@ from gateway.app.models.entities import (
     ExecutorModel,
     IssueModel,
     MessageReceiptModel,
+    NodeInviteModel,
     NodeModel,
     OAuthAccessTokenModel,
     OAuthAuthorizationCodeModel,
@@ -75,22 +76,59 @@ async def upsert_registry(
     executors: list[ExecutorRegistration],
     projects: list[ProjectRegistration],
 ) -> None:
+    """Seed executors and projects from `registry.json` — issue #76's contract
+    change to what this file means.
+
+    **Before #76, `registry.json` was continuously authoritative.** Every
+    startup rewrote `enabled`, `display_name` and `metadata_json` on a row
+    that already existed, from whatever the file currently said. That made
+    `POST /api/v1/nodes/{id}/revoke` (issue #76) impossible to keep: an
+    operator revokes a node through the API, the gateway restarts for any
+    unrelated reason, and the next boot finds the row still listed in
+    `registry.json` — unrevoked, un-consulted — and dutifully puts it back
+    exactly as the file says. The API's decision would not survive a restart
+    it never touched, which is precisely the "revoking is theatre" defect
+    issue #76 names in writing.
+
+    **After #76, the file is a seed, not a source of truth: it creates what
+    is absent and never touches a row that already exists.** `enabled`,
+    `display_name` and `metadata_json` on an existing row are the operator's
+    (or the API's) to own from the moment the row exists; the file gets to
+    choose them once, at creation, and never again. The identical rule
+    applies to `projects` below, for the identical reason — nothing revokes a
+    project today, but the moment something does, the silent-revert bug would
+    exist for it too if this loop still overwrote existing rows.
+
+    **One deliberate exception: `machine_token_hash`.** Filling in an EMPTY
+    hash from the row's own `metadata_json["machine_token"]` is not
+    overwriting a decision — there is no hash there yet to overwrite — and
+    `/agent/ws` (`gateway/app/main.py:agent_ws`) now authenticates against
+    that hash column exclusively, never against `metadata_json` directly.
+    Without this backfill, every executor `registry.json` seeded before this
+    column existed — which is every executor in every deployment upgrading
+    onto this build — would lose its connection the moment this build starts,
+    because the column `agent_ws` reads would be empty for all of them.
+    `metadata_json` itself is still never rewritten on an existing row: only
+    the hash column, and only while it is still empty.
+    """
     for executor in executors:
         current = await session.get(ExecutorModel, executor.executor_id)
-        metadata_json = json.dumps(executor.model_dump(mode="json"), ensure_ascii=True)
         if current is None:
+            metadata_json = json.dumps(executor.model_dump(mode="json"), ensure_ascii=True)
             current = ExecutorModel(
                 id=executor.executor_id,
                 display_name=executor.display_name,
                 enabled=executor.enabled,
                 connected=False,
                 metadata_json=metadata_json,
+                machine_token_hash=hash_token(executor.machine_token),
             )
             session.add(current)
-        else:
-            current.display_name = executor.display_name
-            current.enabled = executor.enabled
-            current.metadata_json = metadata_json
+        elif not current.machine_token_hash:
+            # The one exception to create-only above: a row from before this
+            # column existed has no hash to preserve, so filling it in is not
+            # overwriting anything the operator or the API decided.
+            current.machine_token_hash = hash_token(executor.machine_token)
         # Issue #73 Stage 2: every registry executor gets a Bridge Node row.
         # `0009_control_plane.sql` seeded one per executor that existed at
         # migration time; without this call, an executor added to
@@ -99,8 +137,8 @@ async def upsert_registry(
         await ensure_node_for_executor(session, current)
     for project in projects:
         current = await session.get(ProjectModel, project.project_id)
-        config_json = json.dumps(project.model_dump(mode="json"), ensure_ascii=True)
         if current is None:
+            config_json = json.dumps(project.model_dump(mode="json"), ensure_ascii=True)
             session.add(
                 ProjectModel(
                     id=project.project_id,
@@ -110,11 +148,8 @@ async def upsert_registry(
                     config_json=config_json,
                 )
             )
-        else:
-            current.name = project.name
-            current.path = project.path
-            current.enabled = project.enabled
-            current.config_json = config_json
+        # else: create-only (issue #76) — a project already in the database
+        # keeps whatever it currently says; the file only ever seeds it once.
     await session.commit()
 
 
@@ -618,6 +653,164 @@ async def get_node(session: AsyncSession, node_id: str) -> tuple[NodeModel, Exec
         .first()
     )
     return node, executor
+
+
+# --------------------------------------------------------------------------
+# Node enrollment — issue #76 (minimal cut)
+# --------------------------------------------------------------------------
+
+
+async def create_node_invite(
+    session: AsyncSession,
+    *,
+    token: str,
+    created_by: str,
+    display_name_hint: str | None,
+    ttl_seconds: int,
+) -> NodeInviteModel:
+    """Issue a bearer enrollment invite. Only `hash_token(token)` is stored.
+
+    The caller (`POST /api/v1/nodes/invite`) holds `token` for exactly as long
+    as it takes to put it in the HTTP response body; nothing here, and
+    nothing this function calls, writes it anywhere else — not `audit_events`,
+    not a log line. Decision #1 of issue #76: the invite is a bearer secret
+    protected by its short TTL, not by binding it to a claimed machine
+    identity.
+    """
+    invite = NodeInviteModel(
+        id=str(uuid4()),
+        token_hash=hash_token(token),
+        created_by=created_by,
+        created_at=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+        display_name_hint=display_name_hint,
+    )
+    session.add(invite)
+    await record_event(
+        session,
+        "node_invite",
+        invite.id,
+        "node_invite.created",
+        {"created_by": created_by, "display_name_hint": display_name_hint},
+    )
+    await session.commit()
+    await session.refresh(invite)
+    return invite
+
+
+async def enroll_node(
+    session: AsyncSession,
+    *,
+    invite_token: str,
+    display_name: str,
+    machine_token: str,
+) -> tuple[NodeModel, ExecutorModel] | None:
+    """Redeem `invite_token`: create the Executor+Node it authorizes.
+
+    Returns `None` when the invite may not be used — unknown, already
+    consumed, or expired — and does not say which. Same three-way refusal as
+    `consume_oauth_authorization_code`: telling them apart would tell a
+    probing, unauthenticated caller (this endpoint has no principal — the
+    node presenting the invite has no credential yet) whether a guessed token
+    was ever real.
+
+    The new node's id is generated here, never taken from the caller: this
+    endpoint is unauthenticated by design (decision #2 — gated by the invite,
+    not by a principal), so accepting a caller-chosen id would let anyone
+    holding a live invite collide with, and overwrite, an existing node's row
+    the moment `session.add` runs into the same primary key.
+
+    Atomic with consuming the invite: the invite is marked consumed and the
+    executor/node rows are added in the same transaction, so a failure
+    between the two cannot leave a consumed invite with nothing enrolled, and
+    cannot leave an enrolled node whose invite looks unused.
+    """
+    result = await session.execute(
+        select(NodeInviteModel).where(NodeInviteModel.token_hash == hash_token(invite_token))
+    )
+    invite = result.scalar_one_or_none()
+    if invite is None or invite.consumed_at is not None:
+        return None
+    if _as_utc(invite.expires_at) <= datetime.now(timezone.utc):
+        return None
+
+    node_id = str(uuid4())
+    now = datetime.now(timezone.utc)
+    executor = ExecutorModel(
+        id=node_id,
+        display_name=display_name,
+        enabled=True,
+        connected=False,
+        # No `machine_token` key: this executor was never seeded from
+        # `registry.json`, so there is no clear-text copy to carry — only the
+        # hash below, which is what `agent_ws` actually authenticates
+        # against. `allowed_projects` starts empty; issue #76 does not touch
+        # project authorization (`project_authorizations`, issue #73), which
+        # is granted separately after the node connects.
+        metadata_json=json.dumps({"allowed_projects": [], "max_concurrent_tasks": 1}, ensure_ascii=True),
+        machine_token_hash=hash_token(machine_token),
+        node_id=node_id,
+    )
+    node = NodeModel(
+        id=node_id,
+        display_name=display_name,
+        enabled=True,
+        admission_state="enrolled",
+        created_at=now,
+    )
+    session.add(executor)
+    session.add(node)
+    invite.consumed_at = now
+    invite.consumed_by_node_id = node_id
+    await record_event(
+        session,
+        "node",
+        node_id,
+        "node.enrolled",
+        {"display_name": display_name, "invite_id": invite.id},
+    )
+    await session.commit()
+    await session.refresh(executor)
+    await session.refresh(node)
+    return node, executor
+
+
+async def revoke_node(session: AsyncSession, node_id: str) -> NodeModel | None:
+    """Revoke `node_id`'s credential. Returns `None` if the node does not exist.
+
+    Sets `admission_state="revoked"` and `enabled=False` on **both** the node
+    and its bound executor — not the node alone. `/agent/ws` gates the
+    handshake on `NodeModel.admission_state`, but `create_task` gates task
+    submission on `ExecutorModel.enabled` (`create_task`, above); leaving the
+    executor's own `enabled` untouched would let new work keep being assigned
+    to a node this call just revoked, right up until it next tried to
+    connect.
+
+    Does **not** close a live socket or touch the node's local checkouts
+    (decision #4) — those are the caller's job: `gateway/app/api/routes/
+    enrollment.py`'s revoke endpoint calls `AgentHub.force_close` in the same
+    request, right after this commits, so a connection that was live when
+    revoke was requested cannot outlive the decision. This function alone
+    only prevents the *next* handshake and the *next* dispatch from
+    succeeding; without the hub call, revoking would be decorative for
+    anyone already connected.
+    """
+    node = await session.get(NodeModel, node_id)
+    if node is None:
+        return None
+    node.admission_state = "revoked"
+    node.enabled = False
+    executor = (
+        (await session.execute(select(ExecutorModel).where(ExecutorModel.node_id == node_id)))
+        .scalars()
+        .first()
+    )
+    if executor is not None:
+        executor.enabled = False
+    await record_event(session, "node", node_id, "node.revoked", {})
+    await session.commit()
+    await session.refresh(node)
+    return node
 
 
 async def next_dispatchable_task(session: AsyncSession, executor_id: str) -> TaskModel | None:

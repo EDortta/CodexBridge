@@ -96,6 +96,11 @@ def _node_dto(node: NodeModel, executor: ExecutorModel | None) -> dict:
         "id": node.id,
         "displayName": node.display_name,
         "enabled": node.enabled,
+        # Issue #76 (minimal cut). Distinct from `enabled` above: this is WHY
+        # the node may or may not be dispatched to -- an ordinary disable
+        # leaves it "enrolled", a revoke moves it to "revoked". See
+        # `NodeModel.admission_state`'s own docstring.
+        "admissionState": node.admission_state,
         "health": health.value,
         "healthReason": node.health_reason,
         "lastSeenAt": _iso(executor.last_seen_at) if executor is not None else None,

@@ -67,7 +67,12 @@ version_router = APIRouter()
 # an optional `reason` field on its request body, recorded on the mission's
 # timeline. Additive only (new optional field; an existing client sending no
 # body is unaffected), so another minor bump.
-API_CONTRACT_VERSION = "1.9.0"
+#
+# 1.9.0 -> 1.10.0: issue #76 (minimal cut) adds `POST /api/v1/nodes/invite`,
+# `POST /api/v1/nodes/enroll` and `POST /api/v1/nodes/{nodeId}/revoke`, and
+# `NodeStatus` gains `admissionState`. Additive only (three new endpoints, one
+# new response field on an existing schema), so another minor bump.
+API_CONTRACT_VERSION = "1.10.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a

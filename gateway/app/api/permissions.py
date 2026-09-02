@@ -201,6 +201,27 @@ NODES_READ = Action(
     summary="List Bridge Nodes and read one, across the whole fleet.",
 )
 
+# Issue #76 (minimal cut): admitting and revoking a node. Same reasoning as
+# `NODES_READ` — fleet-wide, no per-project scope to key off of, so both are
+# administrative rather than a scope of their own. Two actions, not one:
+# issuing an invite and revoking a live credential are different authorities
+# an operator may grant separately, the same distinction
+# `ISSUES_WRITE_SCOPE`/`CONVERSATIONS_WRITE_SCOPE` already draw elsewhere in
+# this catalogue.
+NODES_INVITE = Action(
+    name="nodes.invite",
+    category=ADMINISTRATIVE,
+    scope=ADMIN_SCOPE,
+    summary="Issue a bearer enrollment invite for a new Bridge Node.",
+)
+
+NODES_REVOKE = Action(
+    name="nodes.revoke",
+    category=ADMINISTRATIVE,
+    scope=ADMIN_SCOPE,
+    summary="Revoke a Bridge Node's credential and close its live connection.",
+)
+
 EPICS_READ = Action(
     name="epics.read",
     category=READ,
@@ -293,6 +314,8 @@ CATALOGUE: tuple[Action, ...] = (
     DECISIONS_DECIDE,
     MISSIONS_READ_ALL_PROJECTS,
     NODES_READ,
+    NODES_INVITE,
+    NODES_REVOKE,
 )
 
 
