@@ -9,9 +9,16 @@ Run explicitly, by an operator:
 
 **Startup does not call this.** Applying schema changes to a live database is an
 operator decision, not a side effect of restarting a service. What startup does
-do is refuse to serve when the schema is behind (`gateway/app/db/schema_guard.py`),
-so the failure is loud and names this command instead of surfacing later as a
-missing column on the first request.
+do is refuse to serve when a *column* this build needs is missing
+(`gateway/app/db/schema_guard.py`), so that failure is loud and names this
+command instead of surfacing later on the first request.
+
+**A missing *table* is not caught**, because `startup` runs
+`Base.metadata.create_all` before `check_schema` and creates it. The gateway
+then serves on a schema that has the tables but none of the `.sql`'s indexes or
+column defaults, and with no `schema_migrations` row — silently. Every
+table-only migration (0006, 0007, 0008) has that shape. Run this command;
+do not infer from a clean start that you already did.
 
 Why this exists: `migrations/` had no runner at all. The only schema bootstrap
 was `Base.metadata.create_all`, which issues `CREATE TABLE IF NOT EXISTS` and

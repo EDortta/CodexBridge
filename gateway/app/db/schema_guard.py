@@ -45,7 +45,48 @@ REQUIRED_TABLES: dict[str, str] = {
     "conversations": "0007_conversations.sql",
     "conversation_messages": "0007_conversations.sql",
     "conversation_read_states": "0007_conversations.sql",
+    # Issue #73's control plane. Registered as a block: the five arrived in one
+    # migration and a database missing any one of them is missing all of them.
+    "nodes": "0009_control_plane.sql",
+    "workspace_bindings": "0009_control_plane.sql",
+    "scm_associations": "0009_control_plane.sql",
+    "project_authorizations": "0009_control_plane.sql",
+    "discovered_resources": "0009_control_plane.sql",
+    # Issue #11's artifact catalogue. Renumbered to 0010 on the way into
+    # `development`: 0008 and 0009 were taken by the time this merged.
+    "artifacts": "0010_artifacts.sql",
+    "android_builds": "0010_artifacts.sql",
+    "artifact_download_tokens": "0010_artifacts.sql",
+    # Issue #13's event stream adds no table of its own — it reads `audit_events`,
+    # which 0001 already created. This is the notification-preferences table, the
+    # one thing that issue does persist.
+    "notification_preferences": "0011_event_subscriptions.sql",
 }
+
+# READ THIS BEFORE TRUSTING THE TABLE ABOVE.
+#
+# `REQUIRED_TABLES` does not currently fail a boot. `gateway/app/main.py:startup`
+# runs `Base.metadata.create_all` one statement before `check_schema`, and every
+# table named above is also declared on `Base` — so a gateway started against a
+# database missing any of them creates them itself and the guard sees them
+# present. A council round reproduced it against a database at 0007.
+#
+# It is still worth maintaining: it names which migration owns which object, it
+# is what a reader consults, and it becomes a real gate the moment the ordering
+# changes. But an entry here is **not** the "the failure appears at startup"
+# guarantee that `REQUIRED_COLUMNS` and `FORBIDDEN_COLUMNS` genuinely provide —
+# `CREATE TABLE IF NOT EXISTS` never adds a column, which is why those two fire
+# and this one does not.
+#
+# What a skipped table-only migration actually costs: the `create_all` schema
+# instead of the shipped one — no indexes, no column defaults from the `.sql` —
+# and no `schema_migrations` row, so the next migration's bookkeeping starts
+# from a wrong premise. Nothing warns.
+#
+# Pinned by `tests/unit/test_schema_guard.py::test_required_tables_cannot_fire_at_boot_today`,
+# which fails if someone makes the gate real — at which point this comment,
+# `docs/api/README.md`, `scripts/install.sh`, `deploy/README.md` and
+# `scripts/apply_migrations.py` all get their promise back.
 
 REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     "tasks": {
@@ -62,6 +103,13 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
     "oauth_access_tokens": {
         "revoked_at": "0003_mobile_auth.sql",
         "grant_id": "0003_mobile_auth.sql",
+    },
+    # Without this, a gateway upgraded past 0009 without running it would
+    # create `nodes` (a brand-new table `create_all` does add) while
+    # `executors` silently kept no `node_id` — so every node lookup would find
+    # a fleet of one project-less machines and report it as normal.
+    "executors": {
+        "node_id": "0009_control_plane.sql",
     },
 }
 

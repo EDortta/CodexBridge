@@ -27,12 +27,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.app.api import permissions
+from gateway.app.api.routes import artifacts as artifacts_routes
 from gateway.app.api.routes import auth as auth_routes
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import decisions as decisions_routes
 from gateway.app.api.routes import epics as epics_routes
+from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import issues as issues_routes
+from gateway.app.api.routes import nodes as nodes_routes
 from gateway.app.api.routes import missions as missions_routes
+from gateway.app.api.routes import notifications as notifications_routes
 from gateway.app.api.routes import projects as projects_routes
 from gateway.app.api.routes import sessions as sessions_routes
 from gateway.app.api.setup import install_api_conventions
@@ -164,6 +168,10 @@ async def api(users_file, monkeypatch):
     app.include_router(epics_routes.router)
     app.include_router(issues_routes.router)
     app.include_router(conversations_routes.router)
+    app.include_router(artifacts_routes.router)
+    app.include_router(events_routes.router)
+    app.include_router(notifications_routes.router)
+    app.include_router(nodes_routes.router)
 
     async def override():
         async with factory() as s:
@@ -825,6 +833,166 @@ async def test_signing_out_twice_with_only_an_access_token_is_still_a_sign_out(a
     assert second.json()["accessTokensRevoked"] == 0
 
 
+async def _artifact_in_p1(factory):
+    """One artifact row, no bytes on disk.
+
+    The download endpoint checks the credential before it looks for the file,
+    so a row with nothing behind it separates the two answers this test needs:
+    `404` means "the token was accepted and the content is missing", `401`
+    means "the token is gone". No file is written, and nothing outside the
+    database is touched.
+    """
+    async with factory() as session:
+        return await store.create_artifact(
+            session,
+            project_id="p1",
+            artifact_type="report",
+            name="build-report.txt",
+            size_bytes=3,
+            sha256="ab" * 32,
+            origin="ci",
+            storage_path="p1/build-report.txt",
+            content_type="text/plain",
+        )
+
+
+async def test_signing_out_kills_a_download_token_minted_before_it(api) -> None:
+    """Sign-out has to close every credential, not the two it was written for.
+
+    An artifact download token (issue #11) is a third credential this actor
+    holds, and the first cut of #11 left it alive through a sign-out: the
+    session died and the minted token went on streaming an APK for the rest of
+    its TTL — up to an hour at the configured ceiling. Two council lenses
+    reproduced it independently (`200`, full body, after a `200` from
+    `/auth/revoke`), and it is verbatim the failure this endpoint's own
+    docstring says it exists to prevent.
+
+    Revoked by actor rather than by grant: `artifact_download_tokens` carries
+    no `grant_id`, and revoking too little is the failure above while revoking
+    too much costs the holder one extra tap on Download.
+    """
+    artifact = await _artifact_in_p1(api.factory)
+    body = sign_in(api).json()
+    headers = auth(body["accessToken"])
+
+    minted = api.post(f"/api/v1/artifacts/{artifact.id}/download-token", headers=headers)
+    assert minted.status_code == 201
+    download_headers = {"Authorization": f"Bearer {minted.json()['token']}"}
+
+    accepted = api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers)
+    assert accepted.status_code == 404, "precondition: the credential is live and the bytes are not"
+
+    revoked = api.post("/api/v1/auth/revoke", headers=headers)
+    assert revoked.status_code == 200
+
+    assert api.get("/api/v1/artifacts", headers=headers).status_code == 401
+    after = api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers)
+    assert after.status_code == 401, "the download token outlived the session that minted it"
+
+
+async def test_revoking_by_refresh_token_also_kills_the_download_tokens(api) -> None:
+    """The other revocation door closes the same set.
+
+    `/auth/revoke` reaches `revoke_auth_grant` when a refresh token is
+    presented and `revoke_access_token` when only a bearer is. Which door the
+    caller used must not decide what stays alive (`design-standards.md` §3) —
+    the guard lives in one helper both call for exactly that reason.
+    """
+    artifact = await _artifact_in_p1(api.factory)
+    body = sign_in(api).json()
+    headers = auth(body["accessToken"])
+
+    minted = api.post(f"/api/v1/artifacts/{artifact.id}/download-token", headers=headers)
+    download_headers = {"Authorization": f"Bearer {minted.json()['token']}"}
+    assert api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers).status_code == 404
+
+    assert api.post("/api/v1/auth/revoke", json={"refreshToken": body["refreshToken"]}).status_code == 200
+
+    after = api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers)
+    assert after.status_code == 401
+
+
+async def test_a_replayed_dead_refresh_token_cannot_kill_a_live_grants_download(api) -> None:
+    """Revocation stops at the grant it names — the round-1 fix reached past it.
+
+    `/auth/revoke` deliberately acts on a refresh token it has already
+    classified as consumed, revoked or expired (see the endpoint's docstring:
+    fail-closed, and the abuse is "one forced re-authentication of one grant").
+    That bound held because both `UPDATE`s are scoped to `grant_id` and are
+    no-ops on a dead token.
+
+    The first cut of the download-token revocation was scoped to `user_id`
+    alone, which made it the one statement a replay still hit: an attacker
+    holding a long-dead refresh token — from a phone backup, an old client log
+    — could destroy the download credential of a *live* grant, unauthenticated
+    and repeatably, while the response reported that nothing was revoked. Found
+    by a second council round; the fix records `grant_id` on the download token
+    and revokes inside it.
+    """
+    artifact = await _artifact_in_p1(api.factory)
+
+    dead = sign_in(api).json()
+    api.post("/api/v1/auth/revoke", headers=auth(dead["accessToken"]))
+
+    live = sign_in(api).json()
+    live_headers = auth(live["accessToken"])
+    minted = api.post(f"/api/v1/artifacts/{artifact.id}/download-token", headers=live_headers)
+    download_headers = {"Authorization": f"Bearer {minted.json()['token']}"}
+    assert api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers).status_code == 404
+
+    for _ in range(3):
+        replay = api.post("/api/v1/auth/revoke", json={"refreshToken": dead["refreshToken"]})
+        assert replay.status_code == 200
+        assert replay.json()["accessTokensRevoked"] == 0
+
+    assert api.get("/api/v1/artifacts", headers=live_headers).status_code == 200
+    survived = api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers)
+    assert survived.status_code == 404, (
+        "an unauthenticated replay of a dead refresh token destroyed a live grant's "
+        "download credential"
+    )
+
+
+async def test_a_grantless_sign_out_does_not_abort_the_phones_download(api) -> None:
+    """Signing out of ChatGPT must not kill an APK transfer on the phone.
+
+    The browser OAuth flow issues access tokens that belong to no grant;
+    revoking one lands in `store.revoke_access_token`. Scoped by actor alone,
+    that deleted the phone's download tokens too — the operator's 40 MB
+    transfer aborting at 90% because they closed a browser tab, with the phone
+    session still perfectly alive. `grant_id=None` is a value here, addressing
+    exactly the grantless session's own download tokens.
+    """
+    from datetime import timedelta
+
+    artifact = await _artifact_in_p1(api.factory)
+
+    phone = sign_in(api).json()
+    phone_headers = auth(phone["accessToken"])
+    minted = api.post(f"/api/v1/artifacts/{artifact.id}/download-token", headers=phone_headers)
+    download_headers = {"Authorization": f"Bearer {minted.json()['token']}"}
+
+    async with api.factory() as session:
+        await store.create_oauth_access_token(
+            session,
+            token="chatgpt-browser-token",
+            client_id="chatgpt",
+            user_id="alice",
+            scopes=["codexbridge.read"],
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+
+    signed_out = api.post("/api/v1/auth/revoke", headers=auth("chatgpt-browser-token"))
+    assert signed_out.status_code == 200
+    assert signed_out.json()["accessTokensRevoked"] == 1
+
+    survived = api.get(f"/api/v1/artifacts/{artifact.id}/download", headers=download_headers)
+    assert survived.status_code == 404, (
+        "a grantless (browser OAuth) sign-out destroyed a download token minted by "
+        "the phone's own grant"
+    )
+
+
 async def test_an_access_token_that_was_never_issued_signs_out_quietly(api) -> None:
     """Same rule, reached from the other side: incurious about the credential."""
     response = api.post("/api/v1/auth/revoke", headers=auth("never-issued"))
@@ -873,6 +1041,151 @@ async def test_revocation_is_recorded_against_the_actor(api) -> None:
     events = await audit_events(api.factory, "auth.credentials_revoked")
     assert [event.entity_id for event in events] == ["alice"]
     assert json.loads(events[0].payload_json)["reason"] == "signed_out"
+
+
+async def test_a_no_op_revoke_writes_no_audit_row(api) -> None:
+    """A retry the endpoint blesses must not add a `0/0` audit row.
+
+    `/revoke` is idempotent and its contract invites the retry a flaky mobile
+    connection makes. A refresh token whose grant is already revoked is still
+    *found* by `inspect_refresh_token` (it returns the row, revoked), so the
+    handler calls `revoke_auth_grant` again — revoking nothing. Recording
+    `auth.credentials_revoked` on that no-op buries the real revocations under
+    `0/0` rows, the more so now that the retention sweep no longer ages them out.
+    """
+    body = sign_in(api).json()
+    first = api.post("/api/v1/auth/revoke", json={"refreshToken": body["refreshToken"]})
+    assert first.status_code == 200 and first.json()["accessTokensRevoked"] >= 1
+
+    # The same, now-revoked refresh token again: the grant is found but already
+    # revoked, so this call revokes nothing.
+    second = api.post("/api/v1/auth/revoke", json={"refreshToken": body["refreshToken"]})
+    assert second.status_code == 200 and second.json()["accessTokensRevoked"] == 0
+
+    events = await audit_events(api.factory, "auth.credentials_revoked")
+    assert len(events) == 1, (
+        f"a no-op revoke wrote an audit row: {[json.loads(e.payload_json) for e in events]}"
+    )
+
+
+async def test_a_last_minute_rotation_does_not_outlive_the_grant_deadline(api) -> None:
+    """A rotation near the grant's end must not mint an access token past it.
+
+    The grant has an absolute lifetime (`refreshTokenExpiresAt`, carried forward
+    unchanged). Minting `access_expires_at = now + access_TTL` on the last legal
+    rotation put the access token's expiry *after* the grant deadline, and
+    `GET /auth/me` answered 200 with it past the deadline the grant is documented
+    to enforce. The access expiry is capped at the grant deadline.
+    """
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    async with api.factory() as s:
+        await store.issue_auth_grant(
+            s,
+            grant_id="g-deadline",
+            access_token="old-access",
+            refresh_token="old-refresh",
+            client_id="codexbridge-mobile",
+            user_id="alice",
+            scopes=["codexbridge.read"],
+            access_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+            refresh_expires_at=deadline,
+            event_type="auth.signed_in",
+        )
+
+    rotated = api.post("/api/v1/auth/refresh", json={"refreshToken": "old-refresh"})
+    assert rotated.status_code == 200
+    body = rotated.json()
+
+    access_exp = datetime.fromisoformat(body["accessTokenExpiresAt"].replace("Z", "+00:00"))
+    refresh_exp = datetime.fromisoformat(body["refreshTokenExpiresAt"].replace("Z", "+00:00"))
+    assert access_exp <= refresh_exp, (
+        f"the rotated access token expires at {access_exp}, past the grant deadline {refresh_exp}"
+    )
+    # expiresIn is capped too, not left at the full TTL — it is the field the
+    # contract tells the client to schedule its refresh from. Lower bound as well
+    # as upper: an over-truncation that returned an already-expired access token
+    # (the tz-misread the normalization guards against) would satisfy `<= 30` too.
+    assert 0 < body["expiresIn"] <= 30, f"expiresIn out of range: {body['expiresIn']}"
+
+
+async def test_a_rotation_far_from_the_deadline_still_gets_the_full_access_ttl(api) -> None:
+    """The deadline cap must not shorten a normal rotation — the fix's floor.
+
+    Capping `access_expires_at` at the grant deadline is right only when the
+    deadline is nearer than the TTL. A rotation 30 days out must still mint an
+    access token good for the full access TTL, not the whole grant; dropping the
+    `min` and always using the deadline would hand out a 30-day access token and
+    this is what catches it.
+    """
+    from gateway.app.core.config import settings
+
+    ttl = settings.oauth_access_token_ttl_seconds
+    async with api.factory() as s:
+        await store.issue_auth_grant(
+            s,
+            grant_id="g-far",
+            access_token="far-access",
+            refresh_token="far-refresh",
+            client_id="codexbridge-mobile",
+            user_id="alice",
+            scopes=["codexbridge.read"],
+            access_expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl),
+            refresh_expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+            event_type="auth.signed_in",
+        )
+
+    body = api.post("/api/v1/auth/refresh", json={"refreshToken": "far-refresh"}).json()
+    now = datetime.now(timezone.utc)
+    access_exp = datetime.fromisoformat(body["accessTokenExpiresAt"].replace("Z", "+00:00"))
+    assert access_exp - now <= timedelta(seconds=ttl + 5), (
+        f"a far-deadline rotation minted an access token good for {access_exp - now}, "
+        f"past the {ttl}s TTL"
+    )
+    assert body["expiresIn"] <= ttl + 5
+
+
+async def test_the_retention_sweep_keeps_a_refresh_reuse_record(api) -> None:
+    """The spam sweep must not age out the record that a token was replayed.
+
+    `auth.credentials_revoked{reason:"refresh_token_reuse"}` is the one durable
+    artefact saying a stolen refresh token was replayed on a grant. Scoping the
+    retention window to `entity_type == "auth"` deleted it along with rejected
+    sign-ins; it is scoped to `AUTH_SWEEPABLE_EVENT_TYPES` (the high-volume
+    `auth.sign_in_failed`, `auth.token_refreshed`, `auth.signed_in`), which
+    excludes `auth.credentials_revoked`, so the theft record survives while a
+    rejected sign-in of the same age is still swept.
+    """
+    async with api.factory() as s:
+        old = datetime.now(timezone.utc) - timedelta(days=120)
+        s.add(
+            AuditEventModel(
+                entity_type="auth",
+                entity_id="alice",
+                event_type="auth.credentials_revoked",
+                payload_json=json.dumps({"grant_id": "g1", "reason": "refresh_token_reuse"}),
+                created_at=old,
+            )
+        )
+        s.add(
+            AuditEventModel(
+                entity_type="auth",
+                entity_id="alice",
+                event_type="auth.sign_in_failed",
+                payload_json=json.dumps({"reason": "bad_password"}),
+                created_at=old,
+            )
+        )
+        await s.commit()
+
+        purged = await store.purge_expired_audit_events(s, retention_days=90)
+        survivors = sorted(
+            row.event_type for row in (await s.execute(select(AuditEventModel))).scalars()
+        )
+
+    assert purged == 1, "the sweep took something other than the rejected sign-in"
+    assert survivors == ["auth.credentials_revoked"], (
+        f"the theft record was aged out by a spam control: survivors={survivors}"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1008,6 +1321,7 @@ async def test_me_separates_read_operational_and_administrative(api) -> None:
 # One request per action, so the report can be checked against the thing it
 # describes.
 ENDPOINT_FOR_ACTION = {
+    "nodes.read": ("GET", "/api/v1/nodes"),
     "sessions.read": ("GET", "/api/v1/sessions"),
     "sessions.readLogs": ("GET", "/api/v1/sessions/{id}/logs"),
     "sessions.explainError": ("POST", "/api/v1/sessions/{id}/explain-error"),
@@ -1038,6 +1352,24 @@ ENDPOINT_FOR_ACTION = {
     "conversations.read": ("GET", "/api/v1/conversations"),
     "conversations.create": ("POST", "/api/v1/conversations"),
     "conversations.postMessage": ("POST", "/api/v1/conversations/{id}/messages"),
+    # Issue #11. Same reasoning as the six above: `require_action` runs before
+    # the handler resolves `{id}`, so a 403 for a caller lacking the scope — or
+    # a non-403 for one that has it — is reliable even though no artifact row
+    # exists behind that id (nothing in this build produces one).
+    "artifacts.read": ("GET", "/api/v1/artifacts"),
+    "artifacts.download": ("POST", "/api/v1/artifacts/{id}/download-token"),
+    # The backlog endpoint, never `/events/stream`: this loop issues a plain
+    # request and reads the status, and an SSE body does not end until the
+    # server closes it, so pointing the parity check at the stream would hang
+    # the suite for `event_stream_max_duration_seconds`. Both are guarded by
+    # the same `events.read` action, which is what is being checked here.
+    "events.read": ("GET", "/api/v1/events"),
+    "notifications.read": ("GET", "/api/v1/notifications/preferences"),
+    # No body sent, on purpose. `require_action` is a sub-dependency and runs
+    # before the request body is validated, so a caller lacking the scope gets
+    # the 403 this loop looks for; one that has it gets a 422 for the missing
+    # body, which is a non-403 and is exactly what the loop asserts.
+    "notifications.manage": ("PUT", "/api/v1/notifications/preferences"),
 }
 
 # Actions with no endpoint of their own, each naming the test that covers it

@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-08-30 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 115 file(s) · 1086 symbol(s) indexed
-- Languages: config (2), python (111), shell (2)
+- 145 file(s) · 1559 symbol(s) indexed
+- Languages: config (2), python (141), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -68,12 +68,16 @@ gateway/
       request_context.py  — "Per-request identifier, carried from the middleware to the error envelope."
       routes/
         __init__.py  — "HTTP routers for the mobile contract surface."
+        artifacts.py  — "The artifact catalogue, Android build metadata, and the download flow — issue #11."
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
         conversations.py  — "Conversations and contextual messaging — issue #10."
         decisions.py  — "Operational decisions: sensitive tasks held for a human to resolve — issue #6."
         epics.py  — "Epics — issue #8."
+        events.py  — "Near-real-time delivery of what changed, and the backlog behind it — issue #13."
         issues.py  — "Issues — issue #8."
         missions.py  — "Missions: the mission-control view of the same run Sessions exposes — issue #7."
+        nodes.py  — "Bridge Nodes — the fleet visibility surface of issue #73, Stage 2."
+        notifications.py  — "What this actor wants to be notified about — issue #13."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
         projects.py  — "Projects and the project operational dashboard — issue #5."
         sessions.py  — "Agent sessions, their logs, and lifecycle control."
@@ -101,34 +105,49 @@ gateway/
     services/
       __init__.py
       agent_hub.py
+      artifact_storage.py  — "Where an artifact's bytes live, and which of them a request may read."
+      artifact_types.py  — "The closed vocabulary an artifact row may use, and the one error it raises."
       audit.py
       conversation_types.py  — "Closed vocabulary for conversation context references, and their error."
+      email_templates.py  — "Branded HTML for every CodexBridge transactional email."
+      event_types.py  — "Which audit rows become mobile events, and what those events may say — issue #13."
       google_calendar.py  — "A Google Calendar client for reminders, built to be tested without ever"
       issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
       metrics.py
+      notify.py  — "Out-of-band completion notification by email."
       store.py
     version.py  — "The single statement of this application's version."
 pyproject.toml
 scripts/
   apply_migrations.py  — "Apply the SQL files in `migrations/`, once each, in filename order."
+  check_contract_compatibility.py  — "Refuse a contract change that breaks the minimum API version mobile still supports."
   diagnose.sh
+  discover_projects.py  — "Read-only scan of a directory tree for real git repositories."
   install.sh
+  publish_contract.py  — "Publish the OpenAPI contract as a pinned, checksummed artifact."
+  register_projects.py  — "Turn an operator-approved project list into a diff against the real"
 shared/
   __init__.py  — "Shared contracts for the gateway and the agent."
   policy.py
+  project_discovery.py  — "Read-only filesystem discovery of real git repositories."
   protocol.py
   security.py
 tests/
   conftest.py
   contract/
+    test_contract_compatibility.py  — "The gate that fails a pull request before it breaks the pinned mobile client."
+    test_declared_examples_are_real.py  — "Response **bodies**, checked against the contract — the half the route gate skips."
     test_docs_match_the_runtime.py  — "Prose that states a runtime fact, checked against the runtime."
     test_openapi_document.py  — "Contract tests for the canonical OpenAPI document."
     test_proxy_routes.py  — "Every contracted path must be routed by the proxies in front of the gateway."
+    test_published_contract_artifact.py  — "The pinned contract artifact `EDortta/CodexBridgeMobile` consumes."
   integration/
     test_agent_ack_handling.py  — "`task.ack` handling in the `/agent/ws` message loop — issue #16 council."
     test_agent_hub.py
     test_agent_ws_handshake.py  — "The `/agent/ws` handshake stops carrying the token in the URL — issue #15."
+    test_agent_ws_identity.py  — "An envelope's `executor_id` is a claim; the handshake's is the fact."
     test_api_conventions.py  — "Representative-endpoint compliance for the cross-cutting API rules (issue #12)."
+    test_artifacts.py  — "Artifacts, Android build metadata and the download flow — issue #11."
     test_auth.py  — "The mobile credential lifecycle — issue #4."
     test_claude_runner_real_process.py  — "ClaudeRunner against a REAL `claude` subprocess — not the fakes used elsewhere."
     test_codex_runner_real_process.py  — "CodexRunner against a REAL `codex` subprocess — not the fake used everywhere else."
@@ -136,8 +155,10 @@ tests/
     test_decisions.py  — "Operational decisions — issue #6."
     test_dispatch_payload_engine_and_delivery.py  — "`AgentHub.dispatch_next` forwards engine/issue_ref/delivery to the executor."
     test_epics_issues.py  — "Epics and issues — issue #8."
+    test_events.py  — "The mobile event stream, its polling fallback, and notification preferences — issue #13."
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
+    test_nodes.py  — "Bridge Node fleet visibility — issue #73 Stage 2."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
     test_probes.py  — "Health, readiness and version — issue #3."
     test_project_and_eta_resolution.py  — "`resolve_project_reference` and `estimate_task_duration_seconds`."
@@ -148,18 +169,27 @@ tests/
     test_start_development_task.py  — "The `start_development_task` MCP tool -- the conversational entry point."
     test_store_and_mcp.py
   unit/
+    test_agent_announcement.py  — "The `hello` payload's real content -- issue #73 Stage 2."
     test_agent_auth.py  — "Credential resolution for the `/agent/ws` handshake — issue #15."
+    test_agent_auto_project.py  — "`agent.codex_bridge_agent.config.resolve_auto_project` -- the opt-in"
     test_agent_service.py
     test_apply_migrations.py  — "The migration runner, exercised against real throwaway databases."
+    test_capability_vocabulary.py  — "The capability vocabulary issue #73's authorization plane is built on."
     test_claude_runner.py  — "ClaudeRunner's pure logic: command assembly, NDJSON extraction, sandbox mapping."
     test_codex_runner.py  — "CodexRunner's pause/resume/restart/cancel state machine — issue #16 council."
     test_config_settings.py  — "issue #17 council round 1, "the second caller": `cancel_replay_max_age_seconds`"
+    test_discover_projects.py  — "`scripts/discover_projects.py` -- read-only repo discovery."
+    test_email_templates.py  — "`gateway.app.services.email_templates` -- pure rendering, no I/O."
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
     test_google_calendar.py  — "`gateway.app.services.google_calendar`, without ever touching Google."
     test_instructions.py  — "`resolve_issue_text` and `build_task_instruction`."
     test_main_import.py
+    test_node_store.py  — "`store.ensure_node_for_executor` / `upsert_registry` / `record_node_announcement`"
+    test_notify.py  — "`gateway.app.services.notify` -- the task-finished completion email."
     test_policy.py
     test_rate_limiter_bounds.py  — "The limiter's key space must be bounded, or it becomes the resource exhausted."
+    test_register_projects.py  — "`scripts/register_projects.py` -- diff-only, never applies anything."
+    test_runner_probe.py  — "`Runner.probe()` and `RunnerPool.probe_all()` -- issue #73 Stage 2."
     test_runner_registry.py  — "The runner abstraction itself: capability declarations and the pool's"
     test_schema_guard.py  — "The guard that refuses to serve a database the code has outgrown."
     test_security.py
@@ -174,6 +204,7 @@ tests/
 - **`AgentSettings`** *(class)*
 - **`AgentProjectConfig`** *(class)*
 - `load_agent_projects(path)`
+- `resolve_auto_project(project_id, root)` — "Fallback lookup for a `project_id` the static allowlist does not know."
 
 ### `agent/codex_bridge_agent/git_delivery.py`
 
@@ -202,9 +233,11 @@ tests/
 > The provider-neutral surface the executor dispatches a task through.
 
 - **`RunningTask`** *(class)* — "A live subprocess plus the control flags `pause`/`cancel`/`restart`"
+- **`EngineProbe`** *(class)* — "The runtime answer to "is this engine's binary actually here, right now"."
 - **`RunnerCapabilities`** *(class)* — "What a provider can and cannot do, declared rather than assumed."
 - **`Runner`** *(class)* — "One provider's implementation of "run this instruction, report back"."
   - `capabilities(self)` *(method)*
+  - `probe(self)` *(async method)*
   - `is_known(self, task_id)` *(method)*
   - `mark_dispatched(self, task_id)` *(method)*
   - `forget(self, task_id)` *(method)*
@@ -223,6 +256,7 @@ tests/
 - **`ClaudeRunner`** *(class)* — "Mirrors `runners.codex.CodexRunner`'s public surface method for method"
   - `__init__(self, settings)` *(method)*
   - `capabilities(self)` *(method)*
+  - `probe(self)` *(async method)* — "Issue #73 Stage 2: is `self.settings.claude_bin` actually here, right now."
   - `is_known(self, task_id)` *(method)*
   - `mark_dispatched(self, task_id)` *(method)*
   - `forget(self, task_id)` *(method)*
@@ -237,6 +271,7 @@ tests/
 - **`CodexRunner`** *(class)*
   - `__init__(self, settings)` *(method)*
   - `capabilities(self)` *(method)*
+  - `probe(self)` *(async method)* — "Issue #73 Stage 2: is `self.settings.codex_bin` actually here, right now."
   - `is_known(self, task_id)` *(method)* — "Whether this runner has any record of the task at all."
   - `mark_dispatched(self, task_id)` *(method)*
   - `forget(self, task_id)` *(method)*
@@ -260,6 +295,7 @@ tests/
   - `pause(self, task_id)` *(async method)*
   - `resume(self, task_id)` *(async method)*
   - `restart(self, task_id)` *(async method)*
+  - `probe_all(self)` *(async method)* — "Issue #73 Stage 2: one `EngineAvailability` for every `KNOWN_ENGINES`"
 
 ### `agent/codex_bridge_agent/runners/registry.py`
 
@@ -285,6 +321,7 @@ tests/
 > Authentication and authorization for the contract surface.
 
 - `unauthenticated(message)` — "The one shape of a 401 on this surface."
+- `principal_for_token(session, token)` *(async function)* — "The principal a bearer token resolves to right now, or None."
 - `current_principal(request, session)` *(async function)* — "Resolve the bearer token to a principal, or refuse the request."
 - `bearer_token(request)` — "The presented bearer token, or None when the header is absent or not one."
 - `require_action(action)` — "Dependency factory refusing a principal that may not perform `action`."
@@ -364,6 +401,17 @@ tests/
   - `__init__(self, app, on_unhandled)` *(method)*
   - `dispatch(self, request, call_next)` *(async method)*
 
+### `gateway/app/api/routes/artifacts.py`
+
+> The artifact catalogue, Android build metadata, and the download flow — issue #11.
+
+- `list_artifacts(project, type, origin, cursor, limit, principal, session)` *(async function)* — "Artifacts the caller may see, newest first."
+- `get_artifact(artifact_id, principal, session)` *(async function)*
+- `mint_download_token(artifact_id, request, response, principal, session)` *(async function)* — "Mint a short-lived bearer credential for this artifact's bytes."
+- `download_artifact(artifact_id, request, session)` *(async function)* — "Stream an artifact's bytes to the holder of a live download token."
+- `list_android_builds(project, environment, package_name, cursor, limit, principal, session)` *(async function)* — "APK artifacts with their build metadata, newest first."
+- `get_android_build(build_id, principal, session)` *(async function)* — "One Android build, addressed by the id of the artifact it is."
+
 ### `gateway/app/api/routes/auth.py`
 
 > Sign-in, renewal, revocation, and what the actor may actually do.
@@ -411,6 +459,23 @@ tests/
 - `create_epic(payload, response, idempotency_key, principal, session)` *(async function)*
 - `link_issue(epic_id, issue_id, response, if_match, idempotency_key, principal, session)` *(async function)* — "Attach an issue to an epic. Both must be in a project the caller may see."
 
+### `gateway/app/api/routes/events.py`
+
+> Near-real-time delivery of what changed, and the backlog behind it — issue #13.
+
+- **`StreamSlot`** *(class)* — "One acquired slot, releasable exactly once, remembering whose it was."
+  - `__init__(self, slots, owner)` *(method)*
+  - `release(self)` *(method)*
+- **`StreamSlots`** *(class)* — "How many event streams this process will hold open at once."
+  - `__init__(self, limit, per_actor)` *(method)*
+  - `active` *(property)*
+  - `active_for(self, owner)` *(method)*
+  - `acquire(self, owner)` *(method)*
+  - `release(self, owner)` *(method)*
+- `list_events(response, after, project, type, limit, principal, session)` *(async function)* — "Events the caller may see, oldest first, after `after`."
+- `event_stream()` *(async function)* — "The SSE body: an async generator of frames."
+- `stream_events(request, after, project, type, last_event_id, principal)` *(async function)* — "Open a live event stream for the caller's projects."
+
 ### `gateway/app/api/routes/issues.py`
 
 > Issues — issue #8.
@@ -432,6 +497,21 @@ tests/
 - `get_mission_timeline(mission_id, response, cursor, limit, principal, session)` *(async function)* — "The mission's recorded events, oldest first — the order a narrative reads in."
 - `cancel_mission(mission_id, response, if_match, idempotency_key, body, principal, session)` *(async function)* — "Cancel a mission that is queued, waiting, running or awaiting approval."
 - `explain_mission(mission_id, principal, session)` *(async function)* — "A structured account of a mission's current state, assembled server-side."
+
+### `gateway/app/api/routes/nodes.py`
+
+> Bridge Nodes — the fleet visibility surface of issue #73, Stage 2.
+
+- `list_nodes_endpoint(principal, session)` *(async function)* — "Every Bridge Node in the fleet, ordered by id."
+- `get_node_detail(node_id, principal, session)` *(async function)* — "One node's fleet status."
+
+### `gateway/app/api/routes/notifications.py`
+
+> What this actor wants to be notified about — issue #13.
+
+- **`NotificationPreferencesRequest`** *(class)*
+- `get_preferences(response, principal, session)` *(async function)* — "This actor's preferences, or the defaults when nothing was ever saved."
+- `put_preferences(payload, response, principal, session)` *(async function)* — "Replace this actor's preferences."
 
 ### `gateway/app/api/routes/probes.py`
 
@@ -495,6 +575,9 @@ tests/
 ### `gateway/app/core/config.py`
 
 - **`Settings`** *(class)*
+  - `effective_artifact_download_token_ttl_seconds(self)` *(method)*
+  - `effective_event_stream_poll_interval(self)` *(method)*
+  - `effective_event_stream_batch_limit(self)` *(method)*
   - `effective_ready_cache_seconds(self)` *(method)*
   - `accepted_mcp_tokens(self)` *(method)*
   - `oauth_client_ids(self)` *(method)*
@@ -511,6 +594,7 @@ tests/
 - `generate_authorization_code()`
 - `generate_access_token()`
 - `generate_refresh_token()` — "A refresh token is longer-lived than an access token, so it is longer."
+- `generate_artifact_download_token()` — "A bearer credential for the bytes of one artifact (issue #11)."
 - `generate_grant_id()` — "Identifier of one sign-in and every rotation descended from it."
 - `now_utc()`
 - `expires_in(seconds)`
@@ -541,7 +625,7 @@ tests/
   - `is_admin(self)` *(method)*
   - `has_scope(self, scope)` *(method)*
   - `can_access_project(self, project_id)` *(method)*
-- `load_user_registry(path)`
+- `load_user_registry(path)` — "The registry as a lookup dict, failing **closed** on any problem."
 - `lookup_user(path, username_or_email)`
 - `unusable_registry_reason(path)` — "Why no account can sign in against `path`, or None when some can."
 - **`AuthenticationResult`** *(class)* — "Whether the credential was accepted, and — for the audit trail — why not."
@@ -564,6 +648,7 @@ tests/
 ### `gateway/app/db/session.py`
 
 - `get_session()` *(async function)*
+- `session_factory()` — "The sessionmaker, for code that outlives a request's dependencies."
 
 ### `gateway/app/main.py`
 
@@ -596,6 +681,11 @@ tests/
 ### `gateway/app/models/entities.py`
 
 - **`ExecutorModel`** *(class)*
+- **`NodeModel`** *(class)* — "A registered CodexBridge installation — issue #73's Bridge Node."
+- **`WorkspaceBindingModel`** *(class)* — "A logical Project as it exists on one Node's disk (issue #73)."
+- **`ScmAssociationModel`** *(class)* — "Project <-> source-control repository, as an association rather than an"
+- **`ProjectAuthorizationModel`** *(class)* — "What a node may actually do to a project (issue #73's authorization plane)."
+- **`DiscoveredResourceModel`** *(class)* — "Something a node can see that Control has not necessarily adopted."
 - **`ProjectModel`** *(class)*
 - **`TaskModel`** *(class)*
 - **`EpicModel`** *(class)*
@@ -603,8 +693,12 @@ tests/
 - **`ConversationModel`** *(class)* — "A contextual thread linked to at least one product entity — issue #10."
 - **`ConversationMessageModel`** *(class)* — "One message in a conversation. Immutable once written — no update path."
 - **`ConversationReadStateModel`** *(class)* — "How far one actor has read into one conversation."
+- **`ArtifactModel`** *(class)* — "A retained file this gateway can hand to CodexBridgeMobile — issue #11."
+- **`AndroidBuildModel`** *(class)* — "APK metadata for one artifact — issue #11's Android half."
+- **`ArtifactDownloadTokenModel`** *(class)* — "A short-lived bearer credential for the bytes of exactly one artifact."
 - **`TaskLogModel`** *(class)*
 - **`AuditEventModel`** *(class)*
+- **`NotificationPreferenceModel`** *(class)* — "Which events one actor wants to be notified about — issue #13."
 - **`MessageReceiptModel`** *(class)*
 - **`IdempotencyRecordModel`** *(class)* — "A completed write, keyed so an offline retry replays instead of repeating."
 - **`OAuthAuthorizationCodeModel`** *(class)*
@@ -625,6 +719,28 @@ tests/
   - `mark_task_finished(self, executor_id, task_id)` *(async method)* — "Releases the slot `task_id` held and, if the executor is still"
 - `hub_envelope(executor_id, message_type, payload)` — "Build a message for an executor."
 
+### `gateway/app/services/artifact_storage.py`
+
+> Where an artifact's bytes live, and which of them a request may read.
+
+- **`UnsatisfiableRange`** *(class)* — "A well-formed `Range` whose first byte lies past the end of the file."
+- **`ArtifactContentMissing`** *(class)* — "The row exists and its bytes do not."
+- **`ByteRange`** *(class)* — "A resolved, satisfiable range: `[start, end]` inclusive, as HTTP means it."
+  - `length` *(property)*
+- `artifacts_root()` — "The one directory artifact bytes may live under."
+- `validate_storage_path(storage_path)` — "The stored form of a relative artifact path, or `ArtifactError`."
+- `resolve_artifact_file(storage_path)` — "The file `storage_path` names, proven to be inside the artifacts root."
+- `parse_range_header(value, size)` — "The single byte range `value` asks for, or None to serve the whole file."
+- `read_chunks(path, byte_range)` — "Yield the requested bytes of `path`, `chunk_size` at a time."
+
+### `gateway/app/services/artifact_types.py`
+
+> The closed vocabulary an artifact row may use, and the one error it raises.
+
+- **`ArtifactError`** *(class)* — "A rejected artifact field, carrying what the API must report."
+  - `__init__(self, field, code, message)` *(method)*
+- `normalize_fingerprint(value)` — "Colon-separated uppercase form of a SHA-256 certificate fingerprint."
+
 ### `gateway/app/services/audit.py`
 
 - `record_event(session, entity_type, entity_id, event_type, payload)` *(async function)*
@@ -635,6 +751,26 @@ tests/
 
 - **`ConversationPlanningError`** *(class)* — "A create input that fails validation inside the store itself."
   - `__init__(self, field, code, message)` *(method)*
+
+### `gateway/app/services/email_templates.py`
+
+> Branded HTML for every CodexBridge transactional email.
+
+- **`EmailKind`** *(class)*
+- `subject_prefix(kind)` — "The bracketed tag this ecosystem's other notifications already use."
+- `render_email(kind)` — "Render one full HTML document for `kind`. Every text argument is"
+
+### `gateway/app/services/event_types.py`
+
+> Which audit rows become mobile events, and what those events may say — issue #13.
+
+- **`MobileEvent`** *(class)* — "One translated event, in the shape the contract publishes."
+  - `action` *(property)*
+  - `as_dict(self)` *(method)*
+- `classify(audit_event_type, payload)` — "`(mobile type, entity kind)` for one audit row, or None when it is internal."
+- `summarize(mobile_type, payload, redact)` — "A short, human-readable line for one event. Never the raw payload."
+- `actor_of(payload)`
+- `state_of(payload)` — "The entity's state, or None when the row does not record a defined one."
 
 ### `gateway/app/services/google_calendar.py`
 
@@ -660,6 +796,14 @@ tests/
 
 - `render_metrics()`
 
+### `gateway/app/services/notify.py`
+
+> Out-of-band completion notification by email.
+
+- **`NotifyConfigError`** *(class)* — "The gateway itself is not set up for notification email -- an operator"
+- **`EmailCredentials`** *(class)*
+- `notify_task_finished(session, task, settings)` *(async function)* — "Send exactly one completion email for `task` when configured, and"
+
 ### `gateway/app/services/store.py`
 
 - `upsert_registry(session, executors, projects)` *(async function)*
@@ -678,6 +822,10 @@ tests/
 - `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email, can_approve_push)` *(async function)*
 - `mark_executor_connected(session, executor_id, connected)` *(async function)*
 - `executor_is_live(executor)` — "Whether an executor should be presented as connected right now."
+- `ensure_node_for_executor(session, executor)` *(async function)* — "The Bridge Node bound to `executor`, creating and binding one if needed."
+- `record_node_announcement(session, executor, announcement)` *(async function)* — "Persist a HELLO's `NodeAnnouncement` onto the node bound to `executor`."
+- `list_nodes(session)` *(async function)* — "Every Bridge Node, ordered by id, paired with the executor bound to it."
+- `get_node(session, node_id)` *(async function)* — "One Bridge Node and its bound executor, or None if the node does not exist."
 - `next_dispatchable_task(session, executor_id)` *(async function)*
 - `update_task_state(session, task_id, state, error)` *(async function)*
 - `append_log(session, task_id, offset, stream, line)` *(async function)*
@@ -708,6 +856,11 @@ tests/
 - `mission_stage(task)`
 - `list_missions_page(session)` *(async function)* — "Missions (tasks, in mission-control framing) the caller may see, newest"
 - `list_task_events_page(session, task_id)` *(async function)* — "A mission's timeline, oldest first — the order a narrative reads in (issue #7)."
+- `list_mobile_events_page(session)` *(async function)* — "Deliverable audit rows after `after`, oldest first, with their project."
+- `audit_cursor_status(session, after)` *(async function)* — "Whether resuming from `after` can be done without a silent gap."
+- `oldest_audit_event_id(session)` *(async function)* — "Lowest id still in **this caller's** feed, reported alongside a gap."
+- `get_notification_preference(session, user_id)` *(async function)*
+- `set_notification_preference(session)` *(async function)* — "Replace one actor's preferences wholesale, creating the row if absent."
 - `create_epic(session)` *(async function)*
 - `get_epic(session, epic_id)` *(async function)*
 - `get_epic_for_projects(session, epic_id, project_ids)` *(async function)* — "An epic the caller may see, or None. Mirrors `get_task_for_projects`."
@@ -731,12 +884,60 @@ tests/
   - `__init__(self, candidates)` *(method)*
 - `resolve_project_reference(session, text)` *(async function)* — "Resolves "project Y" to exactly one registered project."
 - `estimate_task_duration_seconds(session)` *(async function)* — "A duration estimate for `start_development_task`'s `eta_seconds`."
+- `create_artifact(session)` *(async function)* — "Record an artifact and, for an APK, its build metadata."
+- `artifact_is_retained(artifact, now)` — "Whether the artifact is still inside its retention window."
+- `get_artifact_for_projects(session, artifact_id, project_ids)` *(async function)* — "An artifact the caller may see, or None. Mirrors `get_conversation_for_projects`."
+- `list_artifacts_page(session)` *(async function)* — "Artifacts the caller may see, newest first, over-fetched by one."
+- `android_builds_for(session, artifact_ids)` *(async function)* — "`{artifact_id: AndroidBuildModel}` for a whole page in one query."
+- `get_android_build(session, artifact_id)` *(async function)*
+- `list_android_builds_page(session)` *(async function)* — "APK artifacts with their build metadata, newest first, over-fetched by one."
+- `create_artifact_download_token(session)` *(async function)* — "Store the hash of a freshly minted download token."
+- `get_artifact_download_token(session, token)` *(async function)* — "The live token row for `token`, or None when it is unknown or expired."
 
 ### `scripts/apply_migrations.py`
 
 > Apply the SQL files in `migrations/`, once each, in filename order.
 
 - `main()`
+
+### `scripts/check_contract_compatibility.py`
+
+> Refuse a contract change that breaks the minimum API version mobile still supports.
+
+- `facts(document)` — "Comparable facts for one OpenAPI document."
+- `incompatibilities(baseline, candidate)` — "Every breaking change in `candidate` relative to `baseline`."
+- `minimum_supported_version(document)`
+- `baseline_path(document, published)`
+- `main(argv)`
+
+### `scripts/discover_projects.py`
+
+> Read-only scan of a directory tree for real git repositories.
+
+- **`Candidate`** *(class)*
+- `discover(root)`
+- `main(argv)`
+
+### `scripts/publish_contract.py`
+
+> Publish the OpenAPI contract as a pinned, checksummed artifact.
+
+- `sha256_of(path)`
+- `contract_version(source)` — "`info.version` of the document at `source`."
+- `publish(source, output)` — "Write the version directory and refresh the index. Returns the version."
+- `check(source, output)` — "Everything wrong with the published artifact, in messages an operator can act on."
+- `main(argv)`
+
+### `scripts/register_projects.py`
+
+> Turn an operator-approved project list into a diff against the real
+
+- **`ApprovedProject`** *(class)*
+- `diff_registry_projects(approved, registry_file)` — "Additions to the gateway registry's top-level `projects` list."
+- `diff_executor_allowed_projects(approved, registry_file, executor_id)` — "Additions to one executor's `allowed_projects` list inside the gateway registry."
+- `diff_local_allowed_projects(approved, allowed_projects_file)`
+- `diff_user_allowed_projects(approved, user_registry_file, user_id)`
+- `main(argv)`
 
 ### `shared/policy.py`
 
@@ -746,15 +947,33 @@ tests/
 - `push_is_preauthorized(request)` — "Whether this request's own `delivery` block authorizes a push."
 - `evaluate_task_policy(request)`
 
+### `shared/project_discovery.py`
+
+> Read-only filesystem discovery of real git repositories.
+
+- `is_excluded(dir_name)`
+- `walk_for_git_repos(root, max_depth)` — "Depth-limited scan for directories containing `.git`."
+- `suggest_project_id(path, taken)` — "A short, stable, unique-among-`taken` id for `path`'s own directory name."
+- `build_project_id_index(root, max_depth)` — "Every real repo under `root`, keyed by its `suggest_project_id`."
+
 ### `shared/protocol.py`
 
 - **`AgentEngine`** *(class)* — "Which development-agent CLI runs a task's instruction."
 - **`TaskMode`** *(class)*
+- **`Capability`** *(class)* — "What a node is authorized to do to a project, per issue #73."
+- `capabilities_to_modes(capabilities)` — "The task modes a capability set permits. Unknown values are ignored."
 - **`TaskState`** *(class)*
 - **`PolicyLevel`** *(class)*
 - **`TaskPriority`** *(class)*
 - **`AgentMessageType`** *(class)*
 - **`ApprovalDecision`** *(class)*
+- **`DiscoveredState`** *(class)* — "Lifecycle of something a node can see, per issue #73."
+- **`BindingState`** *(class)* — "Whether a Project-on-a-Node workspace is usable right now."
+- **`NodeHealth`** *(class)* — "A Bridge Node's operational condition, derived at read time."
+- **`DiscoveryRoot`** *(class)* — "One directory tree a node is configured to scan, and what that grants."
+- **`EngineAvailability`** *(class)* — "Whether one `AgentEngine` can actually run on this node, right now."
+- **`NodeAnnouncement`** *(class)* — "What a node reports about itself when it connects (`hello` payload)."
+- `node_health()` — "Derive a node's health from facts, at read time, never from a column."
 - **`ProjectRegistration`** *(class)*
 - **`ExecutorRegistration`** *(class)*
 - **`DeliveryRequest`** *(class)* — "What the requester authorized the executor to do with git, once a task"
@@ -771,12 +990,89 @@ tests/
 - `ensure_within_root(root, target)`
 - `filtered_environment(allowed_keys)`
 
+### `tests/contract/test_contract_compatibility.py`
+
+> The gate that fails a pull request before it breaks the pinned mobile client.
+
+- `run(*args)`
+- `spec()`
+- `baseline(spec)` — "The published copy of the minimum supported version."
+- `test_the_document_declares_a_minimum_supported_version(spec)` — "Without it there is no floor, and this whole file has nothing to compare against."
+- `test_the_minimum_supported_version_is_published(spec)` — "A floor naming an unpublished version is a floor over nothing."
+- `test_the_minimum_supported_version_is_not_ahead_of_the_document(spec)` — "A floor above the ceiling means the build serves nothing it promises."
+- `test_raising_the_floor_past_a_published_version_is_written_down(spec)` — "The one edit that silently disarms this whole file."
+- `test_the_error_code_exemption_still_has_a_schema(spec)` — "The one enum allowed to grow must still be the one the reason applies to."
+- `test_the_document_is_compatible_with_the_minimum_supported_version()` — "The acceptance criterion: a breaking change is caught before merge."
+- `test_the_gate_names_the_incompatible_endpoint_in_its_output(tmp_path)` — ""CI output identifies the incompatible endpoint/schema" — asserted, not assumed."
+- `test_the_gate_refuses_a_floor_that_is_not_published(tmp_path)` — "Pointing the floor at a version nobody can download is not a green run."
+- `test_a_document_with_no_declared_floor_is_an_error(tmp_path)`
+- `test_a_document_compared_with_itself_reports_nothing(baseline)` — "The precondition every other case rests on."
+- `remove_an_endpoint(document)`
+- `remove_an_operation(document)`
+- `remove_a_response_status(document)`
+- `remove_a_response_field(document)`
+- `rename_a_response_field(document)`
+- `remove_an_enum_value(document)`
+- `add_a_value_to_another_enum(document)`
+- `close_an_open_field_with_an_enum(document)` — "`type: string` -> `enum: [...]`: yesterday's valid value may be rejected today."
+- `narrow_a_type(document)`
+- `tighten_a_ceiling(document)`
+- `add_a_pattern(document)`
+- `make_a_field_required(document)`
+- `change_a_reference(document)`
+- `require_authentication_on_an_open_endpoint(document)`
+- `stop_requiring_a_response_field(document)` — "A response field that becomes optional is a break, not a relaxation."
+- `swap_the_credential_an_operation_accepts(document)` — "Collapsing `security` to "is it empty" hid every scheme and scope change."
+- `add_a_branch_to_an_all_of(document)` — "`allOf` is an AND: a new branch narrows every value that validated before."
+- `change_a_default(document)` — "A client that omits the field gets different behaviour and no error."
+- `rename_a_server_variable(document)` — "`servers` was not walked at all; every generated client embeds it."
+- `add_a_required_parameter_to_a_path_item(document)` — "Path-item parameters apply to every operation under the path."
+- `demand_a_request_body_where_there_was_none(document)` — "An operation that starts requiring a body every existing caller omits."
+- `point_an_operation_at_a_required_component_parameter(document)` — "A `$ref` to an already-required component parameter, added to an operation."
+- `use_a_restriction_keyword_the_gate_does_not_model(document)` — "The tripwire: abstaining loudly beats abstaining silently."
+- `test_a_breaking_change_is_caught_and_named(baseline, mutate)` — "Every rule in §"What is a breaking change" that a schema diff can see."
+- `add_an_endpoint(document)`
+- `add_a_realistic_endpoint(document)` — "An endpoint shaped like one someone would actually add."
+- `add_a_component_schema(document)` — "A new schema arrives with its own `required` and constraints, and is referenced."
+- `hoist_parameters_to_the_path_item(document)` — "A pure refactor: path-item parameters apply to every operation under it."
+- `add_an_optional_response_field(document)`
+- `add_a_value_to_error_code(document)`
+- `relax_a_ceiling(document)`
+- `drop_a_pattern(document)`
+- `widen_a_type(document)`
+- `rewrite_prose(document)`
+- `test_a_compatible_change_is_left_alone(baseline, mutate)` — "§"What is not breaking", asserted as loudly as its opposite."
+
+### `tests/contract/test_declared_examples_are_real.py`
+
+> Response **bodies**, checked against the contract — the half the route gate skips.
+
+- `client()`
+- `test_the_document_declares_response_examples_at_all()` — "Anti-vacuity: the parametrized test below is empty if discovery breaks."
+- `test_the_validator_rejects_what_the_schema_forbids(body, why)` — "Everything below is worthless if `_validator` accepts anything."
+- `test_a_declared_example_satisfies_its_own_schema(label, schema, example)` — "An example that contradicts its schema misleads the reader who trusts it most."
+- `test_at_least_one_operation_can_be_driven()` — "Anti-vacuity, again: `security: []` disappearing must not read as green."
+- `test_the_undeclared_field_check_is_not_skipping_everything(client)` — "The third anti-vacuity guard, and the one that was missing."
+- `test_the_gateway_returns_the_declared_shape(client, path, method, operation)` — "The success half of "representative examples are tested"."
+- `test_the_gateway_returns_no_field_the_contract_omits(client, path, method, operation)` — "The body-level mirror of the undocumented-route check."
+- `test_a_failure_response_is_the_declared_error_envelope(client, label, trigger)` — "`Error` is a promise about *every* non-2xx, so it is checked against the schema."
+
 ### `tests/contract/test_docs_match_the_runtime.py`
 
 > Prose that states a runtime fact, checked against the runtime.
 
 - `test_the_codemap_names_every_module_it_claims_to_index()` — "`.docs/agents/programmer.md` tells the next agent to read this instead of scanning."
 - `test_the_api_readme_does_not_deny_the_limiter_that_ships(denial)` — "§"Rate limiting — vocabulary only, so far" outlived the wiring."
+- `test_the_api_readme_does_not_deny_the_publication_machinery_that_ships(denial)` — "§"Getting the contract to the mobile repository" described its own absence."
+- `test_the_testing_doc_counts_the_gates_that_exist()` — "`docs/api/testing.md` enumerates the gates; the enumeration must be true."
+- `test_the_contract_docs_do_not_deny_what_ships(denial)` — "Sentences that were false when written, pinned so they cannot come back."
+- `test_every_field_cited_as_never_shipping_is_actually_listed_there()` — "A pointer whose target does not contain the rule is worse than no pointer."
+- `test_no_shipped_file_still_promises_a_boot_gate_for_a_table_only_migration()` — "`REQUIRED_TABLES` does not fail a boot, and five files used to say it does."
+- `test_the_env_example_does_not_claim_the_artifacts_root_is_the_checkout()` — "The one file an operator copies must not describe a default it does not have."
+- `test_the_installation_guide_names_every_setting_security_md_calls_mandatory()` — "`docs/security.md` says this one must be set at deploy; step 4 never named it."
+- `test_no_document_names_a_capability_flag_the_probe_does_not_report()` — "A `false` flag a client can read is the point; a *missing* key is not one."
+- `test_the_codemap_names_the_canonical_checkout_not_a_worktree()` — "`governancekit map` stamps the root it was run from, and agents run in worktrees."
+- `test_the_audit_payload_writer_count_is_the_real_one()` — "Five files tell a reader how many writers can put a key in an audit payload."
 
 ### `tests/contract/test_openapi_document.py`
 
@@ -796,6 +1092,8 @@ tests/
 - `test_route_paths_are_well_formed(spec)` — "An unbalanced brace is a typo the router accepts and serves literally."
 - `test_normalize_matches_names_but_not_converters(served, documented, equivalent)` — "snake_case vs camelCase is not drift; a converter difference is."
 - `test_reported_contract_version_matches_the_document(spec)` — "`GET /api/version` must not claim a contract version the file disagrees with."
+- `test_every_declared_security_scheme_is_used(spec)` — "A scheme nothing references describes a credential nothing accepts."
+- `test_the_artifact_download_does_not_claim_the_session_credential(spec)` — "The one operation that refuses the session token must not declare it."
 - `test_every_declared_component_is_referenced_or_owned(spec)` — "A component nothing points at is a claim the API behaves that way."
 - `test_no_pending_component_is_stale(spec)` — "An entry whose component is now wired must be removed."
 
@@ -807,6 +1105,24 @@ tests/
 - `test_nginx_configs_exist()` — "If the configs move, this gate must fail loudly rather than pass empty."
 - `test_every_contract_path_is_routed_by_every_terminating_vhost(contract_paths)`
 - `test_every_proxied_location_reaches_an_upstream()` — "A location block with no `proxy_pass` silently drops its path."
+
+### `tests/contract/test_published_contract_artifact.py`
+
+> The pinned contract artifact `EDortta/CodexBridgeMobile` consumes.
+
+- `run(*args)`
+- `spec()`
+- `test_the_publisher_exists_and_runs()` — "If the script moves, every other test here would pass vacuously."
+- `test_the_published_artifact_matches_the_current_document()` — "A merged contract change that never reached `contract/` is drift."
+- `test_the_current_version_is_published(spec)` — "`info.version` must name a directory a client can fetch."
+- `test_the_index_names_the_current_version_as_latest(spec)` — "The pointer a consumer follows when it has not pinned yet."
+- `test_a_published_version_is_byte_identical_to_the_document(spec)` — "Not "equivalent YAML" — identical bytes."
+- `test_every_published_version_hashes_to_its_manifest()` — "The property that makes a pin worth pinning."
+- `test_check_reports_a_document_that_moved_ahead_of_the_artifact(tmp_path)` — "Change the document, do not republish: the check must name the stale file."
+- `test_check_reports_a_published_version_edited_after_the_fact(tmp_path)` — "Rewriting a pinned version is the failure the digest exists to catch."
+- `test_check_reports_a_contract_that_was_never_published(tmp_path)`
+- `test_publishing_a_new_version_leaves_the_old_one_untouched(tmp_path)` — "A pin survives the next release, or it was never a pin."
+- `test_publishing_is_deterministic(tmp_path)` — "Two runs over one input produce identical bytes."
 
 ### `tests/integration/test_agent_ack_handling.py`
 
@@ -823,6 +1139,8 @@ tests/
 - `test_a_rejected_ack_from_a_runner_that_lost_the_task_is_not_replayed_again(factory, monkeypatch, control)` *(async function)* — "finding 11 (council round 2 on #17, "the claim auditor"): the branch"
 - `test_a_rejected_ack_from_a_runner_that_lost_the_task_dispatches_the_queue(factory, monkeypatch)` *(async function)* — "finding 10 (council round 2 on #17, "the sweep skeptic"): freeing the"
 - `test_an_older_agent_with_no_known_field_keeps_the_pre_existing_fallback(factory, monkeypatch)` *(async function)* — "Additive per design-standards.md §4: an agent build that predates the"
+- `test_a_rejected_ack_from_a_runner_that_lost_the_task_triggers_notification(factory, monkeypatch)` *(async function)* — "issue #70: the "reconnect with no record" branch is the one path"
+- `test_an_accepted_ack_does_not_trigger_notification(factory, monkeypatch)` *(async function)* — "A normal pause/resume/restart ack never lands a task in a terminal"
 
 ### `tests/integration/test_agent_hub.py`
 
@@ -850,6 +1168,23 @@ tests/
 - `test_the_query_parameter_still_works_and_warns(client, caplog)`
 - `test_the_deprecation_warning_does_not_print_the_token(client, caplog)` — "A warning about a leaked credential must not leak it again."
 - `test_the_header_path_logs_no_deprecation_warning(client, caplog)`
+
+### `tests/integration/test_agent_ws_identity.py`
+
+> An envelope's `executor_id` is a claim; the handshake's is the fact.
+
+- **`FakeSocket`** *(class)* — "Just enough `WebSocket` for `agent_ws`: it accepts, sends, and runs dry."
+  - `__init__(self, incoming)` *(method)*
+  - `accept(self)` *(async method)*
+  - `close(self, code)` *(async method)*
+  - `send_json(self, payload)` *(async method)*
+  - `receive_json(self)` *(async method)*
+- `wired(monkeypatch)` *(async function)*
+- `test_a_node_announcing_itself_is_recorded(wired)` *(async function)* — "The honest path, so every refusal below is not passing for want of wiring."
+- `test_a_node_cannot_announce_on_another_nodes_behalf(wired)` *(async function)* — "The exploit: authenticate as one node, claim to be another."
+- `test_the_forged_envelope_is_dropped_not_redirected(wired)` *(async function)* — "Rewriting the claimed id to the authenticated one would be worse."
+- `test_a_forged_heartbeat_does_not_refresh_another_nodes_liveness(wired)` *(async function)* — "Liveness feeds `node_health`, so forging it forges the fleet's health."
+- `test_the_connection_survives_a_forged_envelope(wired)` *(async function)* — "Dropping the message must not drop the socket."
 
 ### `tests/integration/test_api_conventions.py`
 
@@ -909,6 +1244,70 @@ tests/
 - `test_a_completed_record_is_final(db_session)` *(async function)* — "Replacing a recorded 200 with a later 500 defeats the whole mechanism."
 - `test_non_contract_unhandled_error_is_logged_once(client, caplog)` — "Two full tracebacks for one failure, on the highest-volume transport."
 
+### `tests/integration/test_artifacts.py`
+
+> Artifacts, Android build metadata and the download flow — issue #11.
+
+- `users_file(tmp_path)`
+- `artifacts_root(tmp_path, monkeypatch)` — "The one directory artifact bytes may be read from, for this test run."
+- `api(users_file, artifacts_root, monkeypatch)` *(async function)*
+- `auth(token)`
+- `android_metadata(**overrides)`
+- `make_artifact(api)` *(async function)* — "Record one artifact and, unless told otherwise, write its bytes."
+- `mint(api, artifact_id, token)`
+- `download(api, artifact_id, download_token, **kwargs)`
+- `test_the_list_carries_the_checksum_and_the_signing_metadata(api)` *(async function)* — "Issue #11's "checksums and signing metadata before download/install"."
+- `test_detail_reports_the_same_shape_as_the_list(api)` *(async function)*
+- `test_a_non_apk_artifact_carries_no_android_block(api)` *(async function)* — "`android` is absent, not null: an archive has no build metadata to show."
+- `test_pagination_walks_every_artifact_exactly_once(api)` *(async function)* — "Stable ordering across a paged walk — the issue's pagination criterion."
+- `test_an_artifact_in_another_project_is_absent_from_the_list(api)` *(async function)*
+- `test_an_artifact_in_another_project_is_indistinguishable_from_a_missing_one(api)` *(async function)* — "The exact cross-project answer every other resource in this contract gives."
+- `test_minting_a_token_for_a_hidden_artifact_gives_the_same_404(api)` *(async function)* — "The mint endpoint must not be the oracle the read endpoint refuses to be."
+- `test_the_project_query_cannot_widen_what_the_caller_may_see(api)` *(async function)* — "`?project=p2` from a p1-only actor narrows to nothing, never widens."
+- `test_an_admin_sees_every_project(api)` *(async function)*
+- `test_a_download_token_cannot_reach_across_projects(api)` *(async function)* — "The bytes are behind the same project scope the metadata is."
+- `test_mint_then_download_returns_the_bytes(api)` *(async function)*
+- `test_the_minted_credential_never_travels_in_the_url(api)` *(async function)* — "`security-standards.md` §2: a credential in a query string reaches logs."
+- `test_a_session_bearer_token_does_not_download(api)` *(async function)* — "The session credential is not what fetches the bytes."
+- `test_a_download_with_no_credential_is_refused(api)` *(async function)*
+- `test_an_expired_token_is_refused_with_the_typed_error(api)` *(async function)*
+- `test_a_token_minted_for_one_artifact_is_refused_on_another(api)` *(async function)*
+- `test_an_unknown_token_is_refused(api)` *(async function)*
+- `test_every_download_refusal_is_the_same_refusal(api)` *(async function)* — "Absent, unknown, expired and wrong-artifact must be indistinguishable."
+- `test_minting_for_an_unknown_artifact_is_a_typed_404(api)` *(async function)*
+- `test_the_download_token_is_never_stored_in_the_clear(api)` *(async function)* — "The fourth narrowing, which the module docstring claimed was tested."
+- `test_a_token_stops_at_the_projects_the_account_still_has(api)` *(async function)* — ""...or narrows" — the half of the re-read claim that had no test."
+- `test_an_absurdly_long_range_is_not_a_five_hundred(api, header)` *(async function)* — "A `Range` of 4301+ digits was an unhandled `ValueError`."
+- `test_a_zero_padded_range_is_still_a_range(api)` *(async function)* — "Leading zeros are legal and carry no meaning — RFC 9110 §14.1.1 is `1*DIGIT`."
+- `test_the_missing_content_404_writes_a_log_line_the_request_id_finds(api, caplog)` *(async function)* — "The `requestId` has to resolve to something, or the refusal is a dead end."
+- `test_a_token_survives_reuse_inside_its_lifetime(api)` *(async function)* — "Deliberately **not** single-use — the lifetime is the control."
+- `test_issuing_a_download_authorization_is_audited(api)` *(async function)* — "A credential for bytes leaves a trail, like every other credential here."
+- `test_the_default_artifacts_root_follows_the_working_directory()` — "The default is a development convenience, not a stable location."
+- `test_a_token_whose_account_was_disabled_stops_working(api)` *(async function)* — "The account is re-read at download time, not trusted from minting time."
+- `test_a_satisfiable_range_is_a_206_with_content_range(api)` *(async function)*
+- `test_a_suffix_range_returns_the_tail(api)` *(async function)*
+- `test_an_unsatisfiable_range_is_a_416_naming_the_size(api)` *(async function)*
+- `test_a_range_this_endpoint_does_not_serve_falls_back_to_the_whole_file(api, header)` *(async function)* — "RFC 9110 §14.2 lets a server ignore a `Range` it will not honour."
+- `test_parse_range_header_agrees_with_the_endpoint()` — "The unit-level statement of the same rule, over sizes the API cannot reach."
+- `test_a_retired_artifact_is_still_listed_and_says_so(api)` *(async function)*
+- `test_a_retired_artifact_mints_no_token_and_serves_no_bytes(api)` *(async function)*
+- `test_no_response_body_carries_the_storage_path(api)` *(async function)* — "`storage_path` is this table's `ProjectModel.path`."
+- `test_a_traversing_storage_path_cannot_be_stored_at_all(api)` *(async function)* — "The lexical half of the confinement rule, at the write."
+- `test_a_symlink_inside_the_root_does_not_escape_it(api)` *(async function)* — "The half the string check cannot see."
+- `test_a_row_whose_bytes_are_gone_is_a_typed_404_naming_no_path(api)` *(async function)*
+- `test_resolve_refuses_before_it_reports_missing(artifacts_root)` — "A missing file and a rejected path are different exceptions, not one."
+- `test_the_android_list_shows_only_apks(api)` *(async function)*
+- `test_the_android_list_filters_on_metadata_the_catalogue_cannot(api)` *(async function)*
+- `test_a_build_is_addressed_by_the_artifacts_own_id(api)` *(async function)*
+- `test_an_artifact_that_is_not_a_build_is_not_a_build(api)` *(async function)* — "Same `404` as an id that does not exist: from this endpoint's vocabulary"
+- `test_a_build_in_another_project_answers_the_same_404(api)` *(async function)*
+- `test_the_android_list_is_project_scoped(api)` *(async function)*
+- `test_an_apk_must_carry_build_metadata_and_nothing_else_may(api)` *(async function)*
+- `test_a_fingerprint_has_one_spelling(api)` *(async function)* — "A bare 64-hex fingerprint and the colon-separated form are one certificate."
+- `test_a_name_that_could_forge_a_header_is_refused(api)` *(async function)* — "`name` is interpolated into `Content-Disposition`."
+- `test_an_artifact_needs_a_real_checksum(api)` *(async function)*
+- `test_an_unknown_project_is_refused_at_the_write(api)` *(async function)*
+
 ### `tests/integration/test_auth.py`
 
 > The mobile credential lifecycle — issue #4.
@@ -948,10 +1347,18 @@ tests/
 - `test_a_refresh_token_alone_can_sign_out(api)` *(async function)* — "The usual moment to sign out is after the access token has expired."
 - `test_revocation_is_idempotent_and_says_nothing_about_the_token(api)` *(async function)*
 - `test_signing_out_twice_with_only_an_access_token_is_still_a_sign_out(api)` *(async function)* — "The second call is the one a flaky mobile connection actually makes."
+- `test_signing_out_kills_a_download_token_minted_before_it(api)` *(async function)* — "Sign-out has to close every credential, not the two it was written for."
+- `test_revoking_by_refresh_token_also_kills_the_download_tokens(api)` *(async function)* — "The other revocation door closes the same set."
+- `test_a_replayed_dead_refresh_token_cannot_kill_a_live_grants_download(api)` *(async function)* — "Revocation stops at the grant it names — the round-1 fix reached past it."
+- `test_a_grantless_sign_out_does_not_abort_the_phones_download(api)` *(async function)* — "Signing out of ChatGPT must not kill an APK transfer on the phone."
 - `test_an_access_token_that_was_never_issued_signs_out_quietly(api)` *(async function)* — "Same rule, reached from the other side: incurious about the credential."
 - `test_a_consumed_refresh_token_still_ends_its_own_grant(api)` *(async function)* — "Pinned on purpose — this behaviour is a decision, not an accident."
 - `test_revoking_nothing_is_refused(api)` *(async function)*
 - `test_revocation_is_recorded_against_the_actor(api)` *(async function)*
+- `test_a_no_op_revoke_writes_no_audit_row(api)` *(async function)* — "A retry the endpoint blesses must not add a `0/0` audit row."
+- `test_a_last_minute_rotation_does_not_outlive_the_grant_deadline(api)` *(async function)* — "A rotation near the grant's end must not mint an access token past it."
+- `test_a_rotation_far_from_the_deadline_still_gets_the_full_access_ttl(api)` *(async function)* — "The deadline cap must not shorten a normal rotation — the fix's floor."
+- `test_the_retention_sweep_keeps_a_refresh_reuse_record(api)` *(async function)* — "The spam sweep must not age out the record that a token was replayed."
 - `test_me_requires_a_token(api)` *(async function)*
 - `test_me_refuses_an_expired_token(api)` *(async function)*
 - `test_every_401_on_this_surface_is_the_same_401(api)` *(async function)* — "Four places claimed this and it was not true."
@@ -1126,6 +1533,90 @@ tests/
 - `test_the_epic_list_cursor_walks_every_epic_once(api)` *(async function)*
 - `test_list_epics_filters_by_status(api)` *(async function)*
 
+### `tests/integration/test_events.py`
+
+> The mobile event stream, its polling fallback, and notification preferences — issue #13.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)*
+- `auth(token)`
+- `make_task(factory, project_id)` *(async function)*
+- `emit(factory, entity_type, entity_id, event_type, payload)` *(async function)* — "Write one audit row directly and return its id."
+- `newest_audit_id(factory)` *(async function)*
+- **`FakeClock`** *(class)* — "A monotonic clock the test moves on purpose."
+  - `__init__(self)` *(method)*
+  - `__call__(self)` *(method)*
+- `stepping_sleep(clock, step, on_poll)` — "An `asyncio.sleep` replacement that advances the fake clock instead."
+- `parse_frames(chunks)` — "SSE text as a list of `{id?, event?, data?, comment?}` dicts."
+- `run_stream(factory)` *(async function)* — "Drive `event_stream` for exactly `polls` iterations and return its frames."
+- `redact_for_test(value)` — "The real redactor, imported through the route module the code injects."
+- `entity_frames(frames)` — "Only the frames that carry an event — control frames and heartbeats out."
+- `test_the_backlog_returns_translated_events_oldest_first(api)` *(async function)*
+- `test_the_page_reports_more_and_a_position_to_continue_from(api)` *(async function)*
+- `test_a_type_filter_narrows_without_making_the_position_stall(api)` *(async function)* — "`nextAfter` is the last id *loaded*, not the last id returned."
+- `test_an_unknown_type_filter_is_a_validation_error(api)` *(async function)*
+- `test_a_declared_but_unemitted_type_filters_to_nothing_rather_than_failing(api)` *(async function)* — "`artifact.*` is in the vocabulary and produced by nothing in this build."
+- `test_the_project_filter_only_ever_narrows(api)` *(async function)*
+- `test_a_restricted_principal_sees_only_its_own_projects_events(api)` *(async function)*
+- `test_authentication_events_never_appear_on_any_principals_feed(api)` *(async function)* — "Sign-in activity is not a product event, and streaming it is a disclosure."
+- `test_a_preference_change_is_not_a_project_event(api)` *(async function)* — "`notification` rows are excluded the same way `auth` rows are."
+- `test_an_event_whose_project_cannot_be_derived_reaches_nobody(api)` *(async function)* — "Fail closed, administrators included."
+- `test_reading_events_requires_the_read_scope(api)` *(async function)*
+- `test_no_stored_payload_key_is_passed_through_to_a_client(api)` *(async function)* — "The audit payload is written by thirty-five call sites and is not a response."
+- `test_free_text_in_a_summary_is_redacted_and_bounded(api)` *(async function)* — "`redact` is applied to executor free text, and the line has a ceiling."
+- `test_an_executors_control_and_state_strings_cannot_reach_a_notification_line(api)` *(async function)* — "Council round 1, the adversarial user — the whitelist's premise was false."
+- `test_every_echoed_payload_value_comes_from_a_closed_vocabulary()` — "The guard behind the test above, asserted directly."
+- `test_the_gap_signal_cannot_report_on_events_the_caller_may_not_see(api)` *(async function)* — "Council round 1 — the `gap` block was a one-bit oracle over the whole log."
+- `test_the_oldest_available_id_is_the_callers_own_oldest(api)` *(async function)* — "`oldestAvailableId` returned the global minimum audit id to any reader."
+- `test_a_resume_position_beyond_the_id_range_is_refused_not_a_500(api)` *(async function)* — "Council round 1 — `?after=2**63+1` was an authenticated 500."
+- `test_an_out_of_range_last_event_id_is_clamped_not_replayed(api)` *(async function)* — "The same overflow on the stream, where a 500 is not even available."
+- `test_every_emitted_event_type_has_a_summary_builder()` — "A type with no builder falls back to a bland sentence — silently."
+- `test_every_audited_domain_event_type_is_translated()` — "A new audit event under a deliverable entity must be classified on purpose."
+- `test_the_non_deliverable_entity_constants_stay_non_deliverable()` — "The exclusion of auth and preference rows is by construction; pin it."
+- `test_the_declared_but_unemitted_types_are_not_produced_by_this_build()` — "`artifact.*` and `androidBuild.*` are contract, not behaviour."
+- `test_the_stream_opens_with_an_acknowledgement_carrying_no_position(api)` *(async function)* — "`stream.open` must not carry `id:`."
+- `test_events_recorded_while_the_stream_runs_are_delivered(api)` *(async function)*
+- `test_reconnecting_from_the_last_id_loses_nothing_and_repeats_nothing(api)` *(async function)* — "The acceptance criterion, end to end."
+- `test_the_same_position_replayed_twice_delivers_the_same_events(api)` *(async function)* — "Resume is a pure function of the position, so a duplicated reconnect is safe."
+- `test_a_position_the_log_has_moved_past_is_announced_before_anything_is_delivered(api)` *(async function)* — "A gap is signalled, never papered over — and signalled *first*."
+- `test_a_position_ahead_of_the_log_is_a_gap_too(api)` *(async function)* — "The mirror case: a cursor from another deployment, or a restored backup."
+- `test_a_continuous_position_produces_no_gap_frame(api)` *(async function)* — "The signal is only worth having if it stays quiet when nothing was lost."
+- `test_the_polling_fallback_reports_the_same_gap(api)` *(async function)* — ""No silent loss" is a property of the events, not of one transport."
+- `test_a_revoked_token_stops_the_stream_it_had_already_opened(api)` *(async function)* — "Authorization is re-checked on every poll, not once at `GET`."
+- `test_an_expired_token_stops_the_stream(api)` *(async function)* — "Expiry is the same failure as revocation and must end the stream too."
+- `test_a_project_removed_from_the_actor_stops_reaching_them(api, users_file)` *(async function)* — "`allowed_projects` is re-read per poll, not captured when the stream opened."
+- `test_a_disconnected_client_ends_the_stream_without_a_closing_frame(api)` *(async function)* — "Nothing is listening, so there is nothing to tell."
+- `test_an_idle_stream_sends_a_comment_not_an_event(api)` *(async function)* — "A heartbeat keeps a proxy from timing out an idle connection."
+- `test_a_newline_in_stored_text_cannot_split_one_frame_into_two(api)` *(async function)* — "SSE is a line protocol: a raw newline inside `data:` ends the frame early."
+- `test_a_stream_type_filter_narrows_delivery_without_stalling_the_cursor(api)` *(async function)*
+- `test_the_slot_ceiling_refuses_rather_than_degrading_the_shared_pool(api)` *(async function)* — "The rate limiter bounds requests per window, not connections held open."
+- `test_a_finished_stream_gives_its_slot_back(api)` *(async function)* — "A slot that is not returned is gone for good, and the ceiling ratchets down."
+- `test_a_connection_that_dies_before_the_body_starts_still_returns_its_slot(api)` *(async function)* — "The release path the generator's `finally` cannot reach — council round 1."
+- `test_one_account_cannot_take_every_stream_slot(api)` *(async function)* — "A global ceiling is not a share — council round 1, the adversarial user."
+- `test_the_per_actor_ceiling_can_never_exceed_the_process_ceiling()` — "A per-actor ceiling above the global one reads as a share and is not one."
+- `test_the_module_level_slots_carry_the_configured_per_actor_ceiling()` — "The ceiling the deployment actually uses is wired from settings."
+- `test_the_stream_ceiling_fits_inside_the_connection_pool()` — "32 streams against a 15-connection pool is the incident `probes.py` records."
+- `test_the_stream_is_served_as_an_event_stream_that_a_proxy_will_not_buffer(api, monkeypatch)` *(async function)*
+- `test_last_event_id_resumes_and_beats_the_query_parameter(api, monkeypatch)` *(async function)* — "The header is what a reconnecting `EventSource` sends by itself."
+- `test_a_malformed_last_event_id_is_ignored_rather_than_refused(api)` *(async function)* — "The user agent sets that header, not the application."
+- `test_a_bad_type_filter_fails_before_the_body_starts(api, monkeypatch)` *(async function)* — "Once an event-stream body has started there is no status code left to change."
+- `test_preferences_round_trip(api)` *(async function)*
+- `test_a_put_replaces_the_document_rather_than_merging_into_it(api)` *(async function)* — "`PUT`, not `PATCH`: an absent field takes its default."
+- `test_preferences_are_per_actor_and_never_another_accounts(api)` *(async function)*
+- `test_an_unknown_event_type_is_refused_with_the_field_named(api)` *(async function)*
+- `test_writing_preferences_needs_a_scope_reading_them_does_not(api)` *(async function)* — "Two actions, because an operator may grant one without the other."
+- `test_the_manage_scope_is_one_a_signed_in_client_can_actually_be_granted()` — "A scope outside `oauth_default_scopes` can never be granted to anyone."
+- `test_the_env_template_can_grant_every_scope_the_catalogue_needs()` — "The allowlist has two sources, and production reads the one nobody edits."
+- `test_a_rejected_subscription_list_cannot_amplify_the_response(api)` *(async function)* — "Council round 1 — the count was bounded, the bytes were not."
+- `test_a_rejected_type_filter_cannot_amplify_the_response(api)` *(async function)* — "The same reflection on the query side, where the URL is the only limit."
+- `test_a_stored_type_that_no_longer_exists_is_dropped_on_the_way_out(api)` *(async function)* — "A stored preference can outlive the type it names."
+- `test_preferences_do_not_filter_the_stream(api)` *(async function)* — "A documented decision, not an omission — so it is pinned as behaviour."
+- `test_an_empty_project_list_matches_nothing_and_is_not_no_restriction(api)` *(async function)* — "The one-character mistake: `if project_ids:` instead of `is not None`."
+- `test_task_created_forks_on_the_state_it_was_created_in(api)` *(async function)* — "One audit row, two mobile meanings, resolved from the payload."
+- `test_epics_issues_and_conversations_all_resolve_to_their_project(api)` *(async function)* — "Every deliverable entity type must have a working project derivation."
+- `test_the_audit_index_exists_on_a_fresh_install_as_well_as_an_upgraded_one()` — "An index declared only in SQL is missing on every new database."
+- `test_the_poll_interval_is_floored_rather_than_honoured()` — "A zero interval is a busy loop against the pool every endpoint shares."
+
 ### `tests/integration/test_mcp_reminders.py`
 
 > The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer.
@@ -1192,6 +1683,34 @@ tests/
 - `test_explain_on_a_blocked_mission_reports_it(api)` *(async function)*
 - `test_explain_of_an_invisible_mission_is_not_found(api)` *(async function)*
 
+### `tests/integration/test_nodes.py`
+
+> Bridge Node fleet visibility — issue #73 Stage 2.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)* — "A real app over a real database, seeded with one executor -> one node."
+- `mark_live(factory, executor_id)` *(async function)*
+- `set_last_seen(factory, executor_id, when)` *(async function)*
+- `set_node_enabled(factory, node_id, enabled)` *(async function)*
+- `set_capabilities_observed_at(factory, node_id, when)` *(async function)*
+- `announce(factory, executor_id, **overrides)` *(async function)*
+- `auth(token)`
+- `test_nodes_require_a_token(api)` *(async function)*
+- `test_an_expired_token_is_refused(api)` *(async function)*
+- `test_a_token_without_the_admin_scope_is_forbidden(api)` *(async function)*
+- `test_a_token_with_no_scopes_at_all_is_forbidden(api)` *(async function)*
+- `test_an_unknown_node_id_is_not_found(api)` *(async function)*
+- `test_list_returns_the_seeded_node(api)` *(async function)*
+- `test_detail_returns_the_seeded_node(api)` *(async function)*
+- `test_health_is_unknown_when_the_node_has_never_been_seen(api)` *(async function)*
+- `test_health_is_offline_when_last_seen_is_older_than_the_reconnect_grace(api)` *(async function)*
+- `test_health_is_degraded_when_live_but_disabled(api)` *(async function)*
+- `test_health_is_ok_when_live_and_enabled(api)` *(async function)*
+- `test_inventory_is_stale_before_any_announcement(api)` *(async function)*
+- `test_inventory_is_not_stale_right_after_an_announcement(api)` *(async function)*
+- `test_a_stale_capabilities_observed_at_is_reported_stale(api)` *(async function)*
+- `test_no_absolute_path_leaks_after_an_announcement(api)` *(async function)* — "`docs/api/README.md` "fields that must never ship" excludes absolute"
+
 ### `tests/integration/test_oauth_authorize.py`
 
 > The browser OAuth form — the *other* caller of the password check.
@@ -1243,6 +1762,9 @@ tests/
 - `test_a_concurrent_burst_issues_one_probe(monkeypatch)` *(async function)* — "The cache alone does not help while the first probe is still running."
 - `test_zero_cache_seconds_is_floored(monkeypatch)` — "A TTL of 0 would restore the uncached DoS, so it is not honoured."
 - `test_every_served_api_route_carries_the_rate_limiter()` — "`main.py` claimed every future /api route inherits the limiter. It does not."
+- `test_every_served_api_route_is_guarded_or_listed_with_a_reason()` — "A route with no authorization guard ships only on purpose, in writing."
+- `test_no_exemption_outlives_its_route()` — "A stale entry pre-authorizes whatever later claims that path."
+- `test_every_exemption_is_load_bearing()` — "An entry the gate would pass without is an exemption that documents nothing."
 
 ### `tests/integration/test_project_and_eta_resolution.py`
 
@@ -1324,6 +1846,7 @@ tests/
 - `test_issue_17_headline_scenario_no_longer_stalls_the_queue(factory, monkeypatch)` *(async function)*
 - `test_rejected_approval_of_a_never_dispatched_task_does_not_pin_the_slot(factory, monkeypatch)` *(async function)* — "The second scenario in finding 1: a task that was never dispatched at"
 - `test_cancel_ack_immediately_dispatches_the_next_queued_task(factory, monkeypatch)` *(async function)* — "finding 10 (council round 2 on #17, "the sweep skeptic"): the two tests"
+- `test_handle_task_cancelled_triggers_notification(factory, monkeypatch)` *(async function)* — "issue #70: `handle_task_cancelled` lands a task in CANCELLED -- a"
 
 ### `tests/integration/test_sessions.py`
 
@@ -1432,6 +1955,14 @@ tests/
 - `test_mcp_continue_codex_session_leaves_task_queued_when_the_executor_is_offline(mcp_hub_factory)` *(async function)* — "No regression on the pre-existing (disconnected) case: an offline"
 - `test_mcp_continue_codex_session_at_capacity_does_not_dispatch(mcp_hub_factory)` *(async function)* — "A connected executor already at its concurrency limit must not be sent"
 
+### `tests/unit/test_agent_announcement.py`
+
+> The `hello` payload's real content -- issue #73 Stage 2.
+
+- `test_hello_envelope_validates_as_node_announcement_with_derived_capabilities(monkeypatch, allow_workspace_write, allow_git_delivery, expected_present, expected_absent)` *(async function)*
+- `test_hello_envelope_carries_os_and_arch_but_never_the_hostname(monkeypatch)` *(async function)* — "Issue #73: node identity must not be inferred from mutable hostname --"
+- `test_build_announcement_falls_back_to_minimal_payload_when_probing_raises(monkeypatch)` *(async function)* — "`_build_announcement` must never cost the connection. If anything"
+
 ### `tests/unit/test_agent_auth.py`
 
 > Credential resolution for the `/agent/ws` handshake — issue #15.
@@ -1442,6 +1973,18 @@ tests/
 - `test_nothing_presented_is_absent_not_empty_string()`
 - `test_blank_values_do_not_count_as_a_credential(blank)` — "`?token=` is not a presented credential."
 - `test_a_blank_header_falls_through_to_the_query()` — "Proxies that inject empty headers must not break the transition path."
+
+### `tests/unit/test_agent_auto_project.py`
+
+> `agent.codex_bridge_agent.config.resolve_auto_project` -- the opt-in
+
+- `test_resolves_a_real_repo_by_its_suggested_id(tmp_path)`
+- `test_resolves_a_nested_submodule(tmp_path)` — "The same reasoning `discover_projects.py` bakes in: monorepo"
+- `test_no_match_returns_none(tmp_path)`
+- `test_a_root_that_is_not_a_directory_returns_none(tmp_path)`
+- `test_a_directory_without_git_is_never_matched(tmp_path)`
+- `test_a_symlinked_directory_outside_root_is_never_followed(tmp_path)` — "`walk_for_git_repos` never follows a symlink -- this proves the"
+- `test_the_resolved_id_matches_what_discover_projects_would_suggest(tmp_path)` — "Consistency property this module's own docstring promises: an id a"
 
 ### `tests/unit/test_agent_service.py`
 
@@ -1459,6 +2002,8 @@ tests/
   - `resume(self, _)` *(async method)*
   - `restart(self, _)` *(async method)*
 - `test_dispatch_failure_returns_task_result(tmp_path)` *(async function)*
+- `test_an_unregistered_project_is_still_refused_when_auto_project_root_is_unset(tmp_path)` *(async function)* — "Default behavior, unchanged by the new opt-in setting existing at"
+- `test_auto_project_root_resolves_a_project_the_static_allowlist_does_not_know(tmp_path)` *(async function)* — "WK-20260830-chatgpt-entry-provider-and-delivery: with the opt-in root"
 - `test_machine_token_travels_in_a_header_not_the_url(monkeypatch)` *(async function)* — "The token in the query string was logged verbatim 107 times (#15)."
 - `test_connect_kwargs_are_accepted_by_the_real_installed_websockets_library()` *(async function)* — "Drives the REAL `websockets.connect`, not a fake -- every other test in"
 - `test_pause_resume_and_restart_controls_acknowledge_over_the_socket(monkeypatch)` *(async function)* — "Drives the real `_run_once` dispatch loop, not a copy of it."
@@ -1494,6 +2039,22 @@ tests/
 - `test_dry_run_changes_nothing(legacy_db)`
 - `test_unknown_migration_name_is_refused(legacy_db)`
 - `test_engine_and_delivery_columns_default_existing_rows_to_codex(legacy_db)` — "0008: an existing row must read back as what it always was -- a plain"
+- `test_control_plane_seeds_one_node_per_existing_executor(legacy_db)` — "0009: an existing deployment must come up with its fleet already"
+- `test_control_plane_grants_nothing_by_existing_alone(legacy_db)` — "0009 must create the authorization plane EMPTY."
+- `test_control_plane_refuses_a_database_without_executors_before_touching_it(tmp_path)` — "A wrong database must be left untouched, not half-migrated."
+
+### `tests/unit/test_capability_vocabulary.py`
+
+> The capability vocabulary issue #73's authorization plane is built on.
+
+- `test_every_task_mode_is_reachable_through_some_capability()` — "A mode no capability grants is a mode no authorization can ever permit."
+- `test_read_grants_no_mode_that_can_modify_a_file()` — "The load-bearing claim of the whole read-only tier."
+- `test_deliver_grants_no_mode()` — "Delivery is not a mode, and must not become one by accident."
+- `test_an_unknown_capability_grants_nothing()` — "Forward compatibility must narrow, never widen."
+- `test_a_discovery_root_cannot_grant_write_capabilities()` — "#73: "A node cannot grant itself project authorization merely by"
+- `test_auto_authorizable_capabilities_never_reach_a_file()` — "Guards the constant itself, not just the validator that reads it."
+- `test_a_root_grants_nothing_unless_it_says_so()` — "Scanning a tree and authorizing it are different acts."
+- `test_the_five_discovered_states_are_all_distinct_values()` — "#73: "Do not collapse these into a single `enabled` boolean.""
 
 ### `tests/unit/test_claude_runner.py`
 
@@ -1542,6 +2103,34 @@ tests/
 - `test_a_replay_window_far_past_the_overflow_point_is_rejected_at_startup(field)`
 - `test_a_replay_window_at_the_documented_ceiling_is_accepted(field)`
 - `test_a_negative_replay_window_is_rejected(field)`
+
+### `tests/unit/test_discover_projects.py`
+
+> `scripts/discover_projects.py` -- read-only repo discovery.
+
+- `test_finds_a_top_level_repo(tmp_path)`
+- `test_descends_past_a_repo_root_to_find_a_submodule(tmp_path)` — "CLAUDE.md: "Vale monorepo e submódulos (web, api, etc.)" -- a nested"
+- `test_never_descends_into_excluded_directory_names(tmp_path)`
+- `test_max_depth_stops_descent(tmp_path)`
+- `test_suggested_project_ids_are_unique_on_a_name_collision(tmp_path)` — "The first `api` seen keeps the plain name; only the later collision"
+- `test_flags_a_candidate_already_in_the_local_allowlist(tmp_path)`
+- `test_a_malformed_local_allowlist_is_treated_as_empty_not_a_crash(tmp_path)`
+- `test_cli_writes_json_to_the_requested_output_file(tmp_path)`
+- `test_cli_never_writes_anywhere_but_the_requested_output_file(tmp_path)` — "Read-only by contract: the script's own docstring promises this."
+- `test_cli_rejects_a_root_that_is_not_a_directory(tmp_path)`
+
+### `tests/unit/test_email_templates.py`
+
+> `gateway.app.services.email_templates` -- pure rendering, no I/O.
+
+- `test_every_kind_renders_a_complete_html_document()`
+- `test_every_kind_has_a_distinct_accent_color_and_badge_label()` — "Approved on the design canvas: no two kinds should read as the same"
+- `test_subject_prefix_is_bracketed_and_kind_specific()`
+- `test_every_text_field_is_html_escaped(value)` — "Every argument is caller-controlled text -- some of it, per `render_email`'s"
+- `test_a_cta_link_escapes_its_href_and_label()`
+- `test_no_style_block_and_no_class_attribute()` — "Email clients strip <style> blocks and class selectors unpredictably"
+- `test_no_inline_svg_shipped_in_a_real_email()` — "Outlook's desktop renderer does not support <svg> -- a broken icon in"
+- `test_no_rows_and_no_cta_omits_the_highlight_card()`
 
 ### `tests/unit/test_git_delivery.py`
 
@@ -1618,6 +2207,32 @@ tests/
 
 - `test_main_app_imports()`
 
+### `tests/unit/test_node_store.py`
+
+> `store.ensure_node_for_executor` / `upsert_registry` / `record_node_announcement`
+
+- `db_session()` *(async function)*
+- `test_ensure_node_for_executor_creates_and_binds_when_node_id_is_null(db_session)` *(async function)*
+- `test_ensure_node_for_executor_is_idempotent(db_session)` *(async function)*
+- `test_upsert_registry_produces_a_node_for_a_newly_added_executor(db_session)` *(async function)*
+- `test_record_node_announcement_writes_observation_fields(db_session)` *(async function)*
+- `test_record_node_announcement_leaves_enabled_health_reason_and_authorizations_untouched(db_session)` *(async function)* — "An announcement is an observation, never a grant (issue #73)."
+
+### `tests/unit/test_notify.py`
+
+> `gateway.app.services.notify` -- the task-finished completion email.
+
+- `session()` *(async function)*
+- `test_no_config_is_a_silent_no_op(session, monkeypatch)` *(async function)*
+- `test_a_non_terminal_state_is_a_no_op(session, tmp_path, monkeypatch)` *(async function)*
+- `test_a_world_readable_config_file_is_refused(session, tmp_path, monkeypatch)` *(async function)*
+- `test_a_missing_config_file_is_refused(session, tmp_path, monkeypatch)` *(async function)*
+- `test_a_sender_that_raises_never_fails_the_task_and_records_only_the_exception_type(session, tmp_path, monkeypatch)` *(async function)*
+- `test_a_config_file_with_spaces_around_equals_parses_correctly(session, tmp_path, monkeypatch)` *(async function)* — "This ecosystem's own credential files are inconsistent: most are"
+- `test_task_last_error_is_never_included_in_the_email(session, tmp_path, monkeypatch)` *(async function)* — "Issue #70 enumerates exactly what the body may carry -- task id,"
+- `test_a_delivery_refusal_reason_is_redacted(session, tmp_path, monkeypatch, delivery_reason)` *(async function)* — "`reason` is the one delivery field allowed to carry free text (issue"
+- `test_a_successful_send_writes_no_audit_event(session, tmp_path, monkeypatch)` *(async function)*
+
 ### `tests/unit/test_policy.py`
 
 - `test_policy_level_for_mode()`
@@ -1636,6 +2251,36 @@ tests/
 - `test_idle_buckets_are_dropped()` *(async function)* — "A window that emptied leaves an entry behind unless something removes it."
 - `test_an_honest_caller_is_still_limited_while_the_table_churns()` *(async function)* — "Eviction must not become a way to escape the limit."
 - `test_the_limit_still_fires_for_a_single_key()` *(async function)*
+
+### `tests/unit/test_register_projects.py`
+
+> `scripts/register_projects.py` -- diff-only, never applies anything.
+
+- `test_registry_diff_adds_only_the_missing_projects(tmp_path)`
+- `test_registry_diff_flags_a_path_collision_instead_of_silently_skipping(tmp_path)`
+- `test_registry_diff_treats_a_missing_file_as_an_empty_registry(tmp_path)`
+- `test_executor_diff_adds_only_ids_not_already_allowed(tmp_path)`
+- `test_executor_diff_notes_an_unknown_executor_id(tmp_path)`
+- `test_local_allowed_projects_diff_matches_registry_diff_shape(tmp_path)`
+- `test_user_diff_adds_only_ids_not_already_allowed(tmp_path)`
+- `test_user_diff_matches_by_email_case_insensitively(tmp_path)`
+- `test_duplicate_project_id_in_the_approved_list_is_rejected(tmp_path)`
+- `test_cli_never_writes_to_any_file_it_reads(tmp_path)`
+- `test_cli_writes_only_the_report_when_out_is_given(tmp_path)`
+- `test_cli_requires_at_least_one_target_file(tmp_path)`
+- `test_cli_rejects_user_id_without_user_registry_file(tmp_path)`
+
+### `tests/unit/test_runner_probe.py`
+
+> `Runner.probe()` and `RunnerPool.probe_all()` -- issue #73 Stage 2.
+
+- `test_probe_reports_unavailable_when_binary_not_on_path(monkeypatch, runner_cls, bin_field)` *(async function)*
+- `test_probe_reports_available_and_the_parsed_version(monkeypatch, runner_cls, bin_field)` *(async function)*
+- `test_probe_survives_oserror_without_raising(monkeypatch, runner_cls, bin_field)` *(async function)*
+- `test_probe_survives_a_timeout_without_raising(monkeypatch, runner_cls, bin_field, timeout_module)` *(async function)*
+- `test_probe_detail_never_carries_the_configured_binary_path(monkeypatch, runner_cls, bin_field)` *(async function)* — "`detail` is meant to explain a probe failure to an operator, never to"
+- `test_probe_all_returns_one_entry_per_known_engine()` *(async function)*
+- `test_probe_all_survives_one_runner_raising()` *(async function)*
 
 ### `tests/unit/test_runner_registry.py`
 
@@ -1657,6 +2302,7 @@ tests/
 - `test_a_database_that_cannot_express_revocation_refuses_to_serve(tmp_path)` — "`revoked_at` is what makes a revoked token stop working."
 - `test_create_all_does_not_repair_an_existing_table(tmp_path)` — "The premise of the guard, asserted rather than assumed."
 - `test_engine_and_delivery_columns_are_required(tmp_path)` — "Migration 0008: engine/issue_ref/delivery_json/delivery_result_json."
+- `test_required_tables_cannot_fire_at_boot_today()` — "`REQUIRED_TABLES` is documentation, not a boot gate — pinned, not fixed."
 
 ### `tests/unit/test_security.py`
 
@@ -1676,6 +2322,13 @@ tests/
 - `test_an_empty_registry_still_costs_something(tmp_path)` — "A missing `users.json` must not make probing cheap."
 - `test_load_user_registry_indexes_by_user_id_and_email(tmp_path)`
 - `test_authenticated_principal_checks_scopes_and_projects()`
+- `test_a_malformed_registry_fails_closed_instead_of_raising(tmp_path)` — "A hand-edit that leaves invalid JSON must refuse every credential, not raise."
+- `test_a_shape_pydantic_refuses_fails_closed(tmp_path)` — "A structurally-valid JSON whose entries lack required fields also fails closed."
+- `test_a_duplicate_user_id_refuses_the_whole_registry(tmp_path)` — "Last-write-wins on a colliding key silently rebinds a live token's privileges."
+- `test_a_user_id_colliding_with_another_email_refuses_the_registry(tmp_path)` — "A `user_id` equal to another account's e-mail is the same collision."
+- `test_a_case_variant_collision_is_refused(tmp_path)` — "The collision is case-insensitive, because resolution is."
+- `test_a_non_pbkdf2_hash_does_not_set_the_derivation_cost(tmp_path)` — "An argon2/scrypt string in the registry must not dictate the PBKDF2 target."
+- `test_an_over_ceiling_pbkdf2_hash_is_unusable_and_uncosted(tmp_path)` — "A typo'd pbkdf2 round count cannot turn one line into an authentication DoS."
 
 ### `tests/unit/test_version_is_single_sourced.py`
 

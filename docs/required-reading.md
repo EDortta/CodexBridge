@@ -38,7 +38,26 @@ Documentos específicos deste repositório. Esta seção é 100% do projeto: nen
 a toca. Use `- (none)` se genuinamente não houver nenhum.
 
 - `docs/project-rules.md` — regras específicas deste projeto (também na tabela acima)
+- `docs/control-plane.md` — **obrigatório** ao tocar em nó, projeto lógico,
+  binding de workspace, associação SCM ou autorização (issue #73). Explica por que
+  essas entidades são separadas e o que se perde ao fundi-las.
 - `docs/napkin-lessons.md` — lições curtas; leia ao retomar trabalho relacionado
+
+## Fontes locais — fora do checkout
+
+Credenciais e destinos vivem fora do repositório (nunca versionados), mas um agente
+precisa saber onde estão e para que servem — path e propósito, nunca o conteúdo. Ver
+`.docs/workflows/sending-email.md` antes de qualquer envio de e-mail.
+
+| Fonte | Propósito | Symlink no projeto |
+|---|---|---|
+| `~/.config/credentials/email/dortta-yahoo.conf` | transporte SMTP (conta Yahoo) para notificação de conclusão de tarefa | `.credentials/yahoo-email.conf` |
+| `~/.config/credentials/job-outreach/calendar/service-account.json` | service account Google Calendar (`create_reminder`/`cancel_reminder`), compartilhada com job-outreach e igreja-pequena | `.credentials/google-calendar-sa.json` |
+
+**Destinatário fixo das notificações de conclusão de tarefa: `edortta71@gmail.com`.**
+Definido pelo operador nesta sessão (2026-08-30) — nunca resolver de
+`requested_by_email` nem do `userEmail` do harness; ver `CODEX_BRIDGE_NOTIFICATION_TO`
+em `.env.example`.
 
 ## Por área
 
@@ -57,9 +76,21 @@ Leitura escopada: só quem for mexer na área precisa.
 - `docs/api/codex-bridge.openapi.yaml` — o contrato canônico da API móvel. Mudar
   endpoint significa mudar este arquivo **primeiro**; `tests/contract/` reprova a
   divergência.
+- `docs/api/testing.md` — **obrigatório** ao mexer no contrato: qual gate guarda
+  qual par, como publicar uma versão (`scripts/publish_contract.py`), como o repo
+  móvel fixa uma versão pelo digest, e o que o gate de breaking change
+  (`scripts/check_contract_compatibility.py`) **não** consegue ver. Mudou o YAML
+  e não republicou? A suíte reprova, e a mensagem diz o arquivo.
 - `migrations/` + `scripts/apply_migrations.py` — **obrigatório** ao alterar
   `gateway/app/models/entities.py`. Uma mudança de schema não está pronta quando o
   modelo muda: o `create_all` do startup só cria tabela nova, nunca adiciona coluna
   a tabela existente, então sem a migration a instalação limpa funciona e toda
   instalação existente quebra na primeira leitura. Registre o objeto novo em
-  `gateway/app/db/schema_guard.py` para que a falha apareça no startup.
+  `gateway/app/db/schema_guard.py`.
+  **Cuidado com o que esse registro garante:** coluna nova (`REQUIRED_COLUMNS`,
+  `FORBIDDEN_COLUMNS`) reprova o startup de fato; tabela nova
+  (`REQUIRED_TABLES`) **não** — o `create_all` roda antes do `check_schema` e
+  cria a tabela, então o gateway sobe sem os índices e defaults do `.sql` e sem
+  linha em `schema_migrations`, em silêncio. Ver o comentário em
+  `gateway/app/db/schema_guard.py` e
+  `tests/unit/test_schema_guard.py::test_required_tables_cannot_fire_at_boot_today`.

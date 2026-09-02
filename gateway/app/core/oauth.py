@@ -23,6 +23,18 @@ def generate_refresh_token() -> str:
     return secrets.token_urlsafe(64)
 
 
+def generate_artifact_download_token() -> str:
+    """A bearer credential for the bytes of one artifact (issue #11).
+
+    Minted here rather than at the route so that every credential this gateway
+    issues comes from one module and one CSPRNG (`security-standards.md` §11).
+    It is stored hashed and lives for minutes, but it is still a credential: the
+    generator is `secrets`, never `random`, and the length matches the access
+    token's rather than being "short because the lifetime is short".
+    """
+    return secrets.token_urlsafe(48)
+
+
 def generate_grant_id() -> str:
     """Identifier of one sign-in and every rotation descended from it.
 

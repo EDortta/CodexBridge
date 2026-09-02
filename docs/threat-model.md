@@ -39,6 +39,33 @@ implementar isso precisa passar a raiz do projeto e o alvo como argumentos
 distintos. Registrado aqui para que ninguém leia "ancestralidade verificada" e
 presuma proteção que ainda não está armada.
 
+**Raiz de auto-descoberta do executor (WK-20260830, opt-in, `CODEX_BRIDGE_AGENT_AUTO_PROJECT_ROOT`).**
+Decisão do operador (2026-08-30): quando ligada, "allowlist redundante no
+agente" acima deixa de ser uma lista fechada e vira "qualquer repositório git
+real sob esta raiz" (`shared/project_discovery.py`, `resolve_auto_project`).
+
+* controle: só ativa por configuração explícita — desligada por padrão, sem
+  mudança de comportamento para quem não a liga
+* controle: a varredura nunca segue symlink e nunca sobe diretório (herdado
+  de `walk_for_git_repos`) — testado explicitamente
+  (`test_a_symlinked_directory_outside_root_is_never_followed`)
+* controle: o caminho encontrado é resolvido (`realpath`) e checado contra a
+  raiz resolvida antes de virar um `ProjectRegistration` — segunda barreira
+  sobre a mesma garantia, no único ponto que devolve um caminho para quem vai
+  rodar um agente de código contra ele
+* controle: só precisa ter `.git` — uma pasta comum não vira projeto por
+  engano
+* risco aceito, com escopo explícito: esta válvula move a fronteira da
+  **camada 7** (`docs/project-onboarding.md`) de "cadastrado à mão" para
+  "existe fisicamente dentro desta árvore" — ainda uma fronteira, mais larga.
+  **Não afeta as camadas 1–6**, que rodam no gateway: um projeto ainda
+  precisa existir em `registry.json` antes de o ChatGPT conseguir nomeá-lo
+  (`gateway/app/services/store.py:resolve_project_reference` não tem
+  equivalente — o gateway não enxerga o disco do executor). Ligar esta
+  válvula sozinha não entrega "qualquer projeto, sem cadastro nenhum,
+  ponta a ponta" — só remove o segundo cadastro (o do executor), não o
+  primeiro (o do gateway).
+
 ### Execução de comandos arbitrários
 
 * controle: nenhuma ferramenta MCP genérica de shell
@@ -177,6 +204,54 @@ tratamento de uma chamada MCP: `oauth2.googleapis.com` (troca de token) e
 * recomendação operacional: service account dedicada a este uso, não
   reaproveitada de outro projeto — revogar a chave de uma SA compartilhada
   quebraria os outros consumidores dela
+
+### Egresso novo do gateway por e-mail (WK-20260830, issue #70)
+
+`notify.notify_task_finished` é o segundo caso em que o gateway disca para
+fora: ao SMTP configurado em `CODEX_BRIDGE_NOTIFICATION_EMAIL_CONFIG_FILE`,
+depois que `TASK_RESULT` já comitou o resultado real da tarefa.
+
+* controle: credencial só por referência — a variável de ambiente aponta
+  para um arquivo (`~/.config/credentials/email/*.conf` em dev, obrigatoriamente
+  fora de qualquer home em produção por causa de `ProtectHome=true` na unit
+  systemd), nunca a senha inline em configuração versionada
+* controle: o arquivo de credencial é recusado se tiver qualquer bit de
+  grupo/outro (`mode & 0o077`) — testado explicitamente
+  (`test_a_world_readable_config_file_is_refused`, `tests/unit/test_notify.py`)
+* controle: `aiosmtplib`, não `smtplib` bloqueante — a mesma classe de
+  problema já documentada e corrigida uma vez para `users.authenticate`
+* controle: uma falha de envio (config ausente, arquivo inseguro, erro de
+  rede, credencial rejeitada pelo servidor) nunca falha a tarefa — o estado
+  final já foi comitado antes desta chamada; toda falha vira um evento
+  `task.notification_failed` com **apenas o nome do tipo da exceção**, nunca
+  a mensagem (que rotineiramente ecoa o banner do servidor e às vezes a
+  própria credencial) — testado explicitamente
+  (`test_a_sender_that_raises_never_fails_the_task_and_records_only_the_exception_type`)
+* controle: o corpo do e-mail nunca inclui diff, linha de log, conteúdo de
+  arquivo do repositório, ou caminho absoluto. Duas escolhas deliberadas: (1)
+  `task.last_error` **nunca** entra no corpo — não está na lista de campos
+  que a issue #70 permite, e `redact()` só reconhece formas conhecidas de
+  segredo/caminho, não "isto é um log ou um diff" em geral, então um
+  `last_error` "redigido" ainda não seria uma garantia real contra a issue
+  (`test_task_last_error_is_never_included_in_the_email`); (2) o único campo
+  de texto livre que o corpo carrega — o motivo de recusa da entrega — passa
+  pelo mesmo `redact()` já usado nas respostas da API
+  (`gateway/app/api/routes/sessions.py`) antes de entrar no corpo
+  (`test_a_delivery_refusal_reason_is_redacted`) — ambos em
+  `tests/unit/test_notify.py`
+* controle: destinatário fixo por configuração do operador
+  (`CODEX_BRIDGE_NOTIFICATION_TO`), nunca `requested_by_email` nem qualquer
+  noção de "o usuário" vinda do harness — ver
+  `docs/required-reading.md`, "Fontes locais — fora do checkout"
+* risco aceito, escopo explícito (finding F27 do concílio, parcial): dispara
+  em `TASK_RESULT` (concluída/falhou), `task.cancelled`, e no cancelamento
+  por reconexão órfã (issue #17) — testado em
+  `tests/integration/test_agent_ack_handling.py` e
+  `tests/integration/test_reconnect_replay_resolves.py`. Só a varredura de
+  recuperação no startup (`store.recover_tasks_after_startup`, que resolve
+  tarefas expiradas ou perdidas após uma queda do gateway) ainda não dispara
+  e-mail — esse único caminho continua coberto apenas pelo polling descrito
+  em `docs/chatgpt-registration.md`
 
 ### Fila inconsistente após reinício
 

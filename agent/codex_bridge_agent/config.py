@@ -6,6 +6,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from shared.project_discovery import build_project_id_index
 from shared.protocol import ProjectRegistration
 
 
@@ -14,6 +15,30 @@ class AgentSettings(BaseSettings):
     executor_id: str = "T610"
     machine_token: str = "replace-with-long-random-token"
     allowed_projects_file: str = str(Path("examples/agent-projects.json").resolve())
+    # WK-20260830-chatgpt-entry-provider-and-delivery. Opt-in, unset by
+    # default: when set, a `project_id` not found in `allowed_projects_file`
+    # is looked up as a real git repository somewhere under this root
+    # (`shared.project_discovery`, the same walk `scripts/discover_projects.py`
+    # runs) instead of being refused outright.
+    #
+    # This relaxes -- for whoever sets it -- one specific layer of the
+    # defense-in-depth chain `docs/project-onboarding.md` documents (layer 7,
+    # "existência do project_id na allowlist do agente", the one that still
+    # holds even if the gateway itself is compromised): the boundary moves
+    # from "this exact project_id was registered by hand" to "this project_id
+    # names a real repo somewhere under this one directory tree". It does
+    # NOT reach the gateway's own, separate `resolve_project_reference` gate
+    # (`gateway/app/services/store.py`) -- a project still has to be
+    # registered in the gateway's `registry.json` before ChatGPT can name it
+    # at all; this setting only removes the SECOND, executor-local
+    # registration step for anything already inside the root.
+    #
+    # Deliberately per-operator, not the shipped default: an operator who
+    # wants CodexBridge to reach any current or future project under one
+    # directory sets this once; an operator who wants a short, curated,
+    # explicit list leaves it unset and keeps using `allowed_projects_file`
+    # alone, exactly as before this setting existed.
+    auto_project_root: str | None = None
     codex_bin: str = "codex"
     # WK-20260830-chatgpt-entry-provider-and-delivery, issue #41a.
     claude_bin: str = "claude"
@@ -59,4 +84,34 @@ def load_agent_projects(path: str) -> dict[str, ProjectRegistration]:
         return {}
     payload = AgentProjectConfig.model_validate(json.loads(file_path.read_text(encoding="utf-8")))
     return {project.project_id: project for project in payload.projects}
+
+
+def resolve_auto_project(project_id: str, root: str, *, max_depth: int = 6) -> ProjectRegistration | None:
+    """Fallback lookup for a `project_id` the static allowlist does not know.
+
+    Only ever consulted when `AgentSettings.auto_project_root` is set (see
+    its own docstring for the security tradeoff this makes). Reuses
+    `shared.project_discovery`'s own id-assignment, so the id this resolves
+    always matches what `scripts/discover_projects.py` would have suggested
+    for the same directory -- an operator who ran that script and read
+    "hub" gets the same directory back when they later just say "hub".
+
+    Returns `None` on no match, a root that is not a real directory, or a
+    match that -- despite `walk_for_git_repos` never following a symlink or
+    ascending -- somehow resolves outside `root`; the last check is
+    defense in depth on the one line that actually hands a path back to a
+    caller that is about to run a coding agent against it.
+    """
+    root_path = Path(root).expanduser()
+    if not root_path.is_dir():
+        return None
+    resolved_root = root_path.resolve()
+    index = build_project_id_index(root_path, max_depth)
+    match = index.get(project_id)
+    if match is None:
+        return None
+    resolved_match = match.resolve()
+    if resolved_match != resolved_root and resolved_root not in resolved_match.parents:
+        return None
+    return ProjectRegistration(project_id=project_id, name=match.name, path=str(match))
 

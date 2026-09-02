@@ -12,6 +12,7 @@ from gateway.app.core.users import (
     AuthenticatedPrincipal,
     authenticate,
     load_user_registry,
+    lookup_user,
     verify_password,
 )
 
@@ -260,3 +261,118 @@ def test_authenticated_principal_checks_scopes_and_projects() -> None:
     assert not principal.has_scope("codexbridge.task.submit")
     assert principal.can_access_project("p1")
     assert not principal.can_access_project("p2")
+
+
+# --------------------------------------------------------------------------
+# Adversarial review (issue #4 council): the registry loader fails closed
+# --------------------------------------------------------------------------
+
+
+def test_a_malformed_registry_fails_closed_instead_of_raising(tmp_path) -> None:
+    """A hand-edit that leaves invalid JSON must refuse every credential, not raise.
+
+    The request path (`authenticate`, `lookup_user`) reaches `load_user_registry`;
+    an unhandled `json.JSONDecodeError` there surfaces as an unauthenticated
+    `500 internal_error retryable:true` on `/auth/sign-in` and `/auth/me` — a new
+    distinguishing channel and a "keep hammering" signal. `load_user_registry`
+    must swallow it and return `{}` (fail closed), so `authenticate` answers the
+    uniform unknown-user refusal at the registry's fallback cost.
+    """
+    path = tmp_path / "users.json"
+    path.write_text('{"users": [ truncated mid-edit', encoding="utf-8")
+
+    assert load_user_registry(str(path)) == {}
+    outcome = authenticate(str(path), "alice", "s3cret")
+    assert not outcome.ok and outcome.user is None
+
+
+def test_a_shape_pydantic_refuses_fails_closed(tmp_path) -> None:
+    """A structurally-valid JSON whose entries lack required fields also fails closed."""
+    path = tmp_path / "users.json"
+    path.write_text(json.dumps({"users": [{"user_id": "alice"}]}), encoding="utf-8")
+
+    assert load_user_registry(str(path)) == {}
+    assert not authenticate(str(path), "alice", "s3cret").ok
+
+
+def test_a_duplicate_user_id_refuses_the_whole_registry(tmp_path) -> None:
+    """Last-write-wins on a colliding key silently rebinds a live token's privileges.
+
+    `current_principal` re-resolves a token's `user_id` against the registry on
+    every request, so a second `alice` entry — say one carrying `roles:["admin"]`
+    — would inherit the first alice's already-issued tokens. The loader refuses a
+    registry it cannot make unambiguous rather than pick the last entry.
+    """
+    first = _user(user_id="alice", email="alice@example.com", roles=[])
+    second = _user(
+        user_id="alice", email="other@example.com", roles=["admin"], scopes=["codexbridge.admin"]
+    )
+    path = _registry_file(tmp_path, first, second)
+
+    assert load_user_registry(path) == {}, "a duplicate user_id must refuse the registry"
+    assert not authenticate(path, "alice", "s3cret").ok
+
+
+def test_a_user_id_colliding_with_another_email_refuses_the_registry(tmp_path) -> None:
+    """A `user_id` equal to another account's e-mail is the same collision."""
+    victim = _user(user_id="ops", email="ops@example.com")
+    attacker = _user(user_id="ops@example.com", email="mallory@example.com", roles=["admin"])
+    path = _registry_file(tmp_path, victim, attacker)
+
+    assert load_user_registry(path) == {}
+
+
+def test_a_case_variant_collision_is_refused(tmp_path) -> None:
+    """The collision is case-insensitive, because resolution is.
+
+    `lookup_user` folds the input with `.lower()` first, so an attacker whose
+    `user_id` is `"OPS@EXAMPLE.COM"` resolves to the victim's `ops@example.com`
+    e-mail even though the two never byte-match. Detecting the collision on the
+    raw key would miss exactly this, and leave the escalation open.
+    """
+    victim = _user(user_id="Ops", email="ops@example.com", roles=["admin"])
+    attacker = _user(user_id="OPS@EXAMPLE.COM", email="mallory@example.com", roles=[])
+    path = _registry_file(tmp_path, victim, attacker)
+
+    assert load_user_registry(path) == {}
+    assert lookup_user(path, "OPS@EXAMPLE.COM") is None
+
+
+def test_a_non_pbkdf2_hash_does_not_set_the_derivation_cost(tmp_path) -> None:
+    """An argon2/scrypt string in the registry must not dictate the PBKDF2 target.
+
+    `verify_password` only ever derives `pbkdf2_sha256`, so an `argon2id$N$...`
+    entry is never actually verified — reading its second field as a PBKDF2 round
+    count let one migrated hash impose `N` rounds on every unauthenticated
+    attempt. `argon2id$99000000$...` is worth 0, like an unparseable hash, so the
+    registry falls back to its cost rather than to 99 million rounds.
+    """
+    from gateway.app.core.users import _iterations_of, _registry_iterations
+
+    assert _iterations_of("argon2id$99000000$c2FsdA$ZGln") == 0
+    registry = load_user_registry(
+        _registry_file(tmp_path, _user(password_hash="argon2id$99000000$c2FsdA$ZGln"))
+    )
+    # No parseable pbkdf2 cost present -> fallback, not the argon2 number.
+    assert _registry_iterations(registry) == 600000
+
+
+def test_an_over_ceiling_pbkdf2_hash_is_unusable_and_uncosted(tmp_path) -> None:
+    """A typo'd pbkdf2 round count cannot turn one line into an authentication DoS.
+
+    Above `_MAX_ITERATIONS` the hash is refused by `verify_password` (the account
+    cannot sign in) and worth 0 to `_iterations_of` (it does not set the
+    derivation target either) — so an attempt that names the account does not
+    spend the absurd count, and the decoy/padding cost falls back to the
+    registry's real ceiling rather than the absurd one. The hash is hand-built
+    with a dummy digest so the test never itself derives 99 million rounds.
+    """
+    from gateway.app.core.users import _iterations_of, _registry_iterations, verify_password
+
+    absurd = "pbkdf2_sha256$99000000$c2FsdA$ZGln"
+    assert _iterations_of(absurd) == 0
+    assert verify_password("anything", absurd) is False
+
+    registry = load_user_registry(_registry_file(tmp_path, _user(password_hash=absurd)))
+    # No usable pbkdf2 cost present -> fallback, not 99 million and not the ceiling.
+    assert _registry_iterations(registry) == 600000

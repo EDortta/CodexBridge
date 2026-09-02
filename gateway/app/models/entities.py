@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from gateway.app.db.base import Base
@@ -17,6 +17,162 @@ class ExecutorModel(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     connected: Mapped[bool] = mapped_column(Boolean, default=False)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    # Which Bridge Node this connection belongs to (issue #73). Nullable so
+    # `0009_control_plane.sql`'s ALTER stays portable; every row is backfilled
+    # by that same migration, and the application treats a null as a pre-#73
+    # row to repair at startup rather than as "no node".
+    node_id: Mapped[str | None] = mapped_column(String(128), ForeignKey("nodes.id"), nullable=True)
+
+
+class NodeModel(Base):
+    """A registered CodexBridge installation — issue #73's Bridge Node.
+
+    Distinct from `ExecutorModel` on purpose. #73 warns against "conflating
+    `node`, `executor`, `engine` and `project` into one entity": the node is
+    the machine and its capabilities, the executor is the authenticated
+    connection that carries work to it. They are 1:1 today (seeded that way by
+    `0009_control_plane.sql`) and the schema does not require them to stay so.
+
+    `capabilities_observed_at` and `inventory_observed_at` exist because #42
+    requires last-known capabilities to be persisted "with freshness
+    timestamp" and stale data to be "visibly marked". Freshness is derived
+    from these at read time — the same posture `store.executor_is_live` takes
+    toward `ExecutorModel.connected`, and for the same reason: a stored
+    boolean survives a restart that invalidated it.
+    """
+
+    __tablename__ = "nodes"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(255))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    os: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    arch: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    capabilities_json: Mapped[str] = mapped_column(Text, default="{}")
+    capabilities_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    inventory_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    health_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WorkspaceBindingModel(Base):
+    """A logical Project as it exists on one Node's disk (issue #73).
+
+    This is what makes "the same project on two machines at two paths"
+    representable, which a column on `projects` could not be — #73: "A project
+    MUST NOT be structurally owned by a node or by GitHub."
+
+    `local_path` is sensitive operational data. #73 allows it only on
+    "appropriately authorized operator surfaces"; it must never reach
+    `ProjectStatus`, `Session`, `Mission` or any MCP tool
+    (`docs/api/README.md`, "Fields that must never ship").
+
+    `state` is the OBSERVED world (is this workspace usable right now), which
+    is not the same question as the operator's decision — that one lives in
+    `DiscoveredResourceModel.state`. Collapsing the two would lose the
+    difference between "I revoked this" and "the disk went away".
+    """
+
+    __tablename__ = "workspace_bindings"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    node_id: Mapped[str] = mapped_column(String(128), ForeignKey("nodes.id"))
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    local_path: Mapped[str] = mapped_column(String(2048))
+    head: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    dirty: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    state: Mapped[str] = mapped_column(String(32), default="active")
+    last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ScmAssociationModel(Base):
+    """Project <-> source-control repository, as an association rather than an
+
+    attribute. #73 requires GitHub to be "an external project/repository
+    source and association, not the owner of the project model", and requires
+    a local project with no remote to be "represented honestly as
+    unassociated rather than rejected" — which a non-null column on `projects`
+    would make impossible.
+
+    `confidence` is the direct consequence of #73's "Do not silently infer a
+    trusted association only because directory and repository names happen to
+    match": an unconfirmed guess is recorded as `observed`, never as
+    `confirmed`, and only an operator moves it.
+    """
+
+    __tablename__ = "scm_associations"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    provider: Mapped[str] = mapped_column(String(32), default="github")
+    remote_url: Mapped[str] = mapped_column(String(2048))
+    repo_identity: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    confidence: Mapped[str] = mapped_column(String(32), default="observed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ProjectAuthorizationModel(Base):
+    """What a node may actually do to a project (issue #73's authorization plane).
+
+    Separate from the binding because the two are written by different actors:
+    a node announces a binding, an operator (or a standing discovery-root
+    grant) writes an authorization. #73: "A node cannot grant itself project
+    authorization merely by reporting a discovery."
+
+    `granted_by` is what keeps the automatic half auditable: `root-config:
+    <path>` for a capability that came from a discovery root's
+    `auto_authorize` (revoked by editing that root), `operator:<user_id>` for
+    an explicit decision. A grant with no attributable origin is not a grant.
+    """
+
+    __tablename__ = "project_authorizations"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    node_id: Mapped[str] = mapped_column(String(128), ForeignKey("nodes.id"))
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    capabilities_json: Mapped[str] = mapped_column(Text, default="[]")
+    granted_by: Mapped[str] = mapped_column(String(255))
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DiscoveredResourceModel(Base):
+    """Something a node can see that Control has not necessarily adopted.
+
+    The entity that makes "Discovery is not authorization" structural rather
+    than a convention: a node writes rows here and nothing else, so reporting
+    a directory can never, by construction, produce the right to operate it.
+
+    `state` carries all five values of `shared.protocol.DiscoveredState`.
+    #73 forbids collapsing them into one boolean, and each pair it would merge
+    loses a real distinction — notably `denied` vs `discovered` (without it a
+    refused candidate returns to the adoption queue on every reconnect) and
+    `stale` vs absent (the row and its history survive a project that moved).
+
+    `resource_key` is the node's own identifier for the candidate and is
+    deliberately NOT a foreign key: a candidate exists precisely before there
+    is a `projects` row to point at. `kind` leaves room for the
+    processes/services #73 anticipates without a schema change.
+    """
+
+    __tablename__ = "discovered_resources"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    node_id: Mapped[str] = mapped_column(String(128), ForeignKey("nodes.id"))
+    kind: Mapped[str] = mapped_column(String(32), default="project")
+    resource_key: Mapped[str] = mapped_column(String(255))
+    project_id: Mapped[str | None] = mapped_column(String(128), ForeignKey("projects.id"), nullable=True)
+    evidence_json: Mapped[str] = mapped_column(Text, default="{}")
+    state: Mapped[str] = mapped_column(String(32), default="discovered")
+    root_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ProjectModel(Base):
@@ -213,6 +369,126 @@ class ConversationReadStateModel(Base):
     last_read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ArtifactModel(Base):
+    """A retained file this gateway can hand to CodexBridgeMobile — issue #11.
+
+    Nothing in this build *produces* one: there is no ingestion path, no upload
+    endpoint and no executor message that writes a row here (see
+    `gateway/app/services/artifact_types.py`). Every artifact served today was
+    created through `store.create_artifact`, which means a test fixture or an
+    operator script. The catalogue endpoints are honest about that rather than
+    reporting an always-empty list as if a producer existed.
+
+    `storage_path` is the trap on this table, exactly as `ProjectModel.path` is
+    on that one: it is a path relative to `settings.artifacts_root` and it never
+    appears in a response (`docs/api/README.md` §"Fields that must never ship").
+    `gateway/app/services/artifact_storage.py` is the only code that turns it
+    into a real file, and it is what confines it to the root.
+    """
+
+    __tablename__ = "artifacts"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    # `artifact_types.ARTIFACT_TYPES` / `.ARTIFACT_ORIGINS`. Stored as text
+    # rather than a database enum for the same reason every other status column
+    # here is: the vocabulary is the contract's, and widening a database enum is
+    # a migration where widening a frozenset is not.
+    type: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(String(255))
+    version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    # Lowercase hex SHA-256 of the bytes. Reported *before* a download so a
+    # client can verify what it received — issue #11's "checksums and signing
+    # metadata are included before download/install".
+    sha256: Mapped[str] = mapped_column(String(64))
+    origin: Mapped[str] = mapped_column(String(32))
+    content_type: Mapped[str] = mapped_column(String(255), default="application/octet-stream")
+    # NEVER serialized. See the class docstring.
+    storage_path: Mapped[str] = mapped_column(String(512))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Retention metadata, and load-bearing: past this instant the gateway
+    # refuses to mint a download token or serve the bytes (`409 conflict`),
+    # while the catalogue still lists the row so a client can say why. Null
+    # means "kept until an operator removes it".
+    retained_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AndroidBuildModel(Base):
+    """APK metadata for one artifact — issue #11's Android half.
+
+    One row per `apk` artifact, keyed by the artifact's own id: an Android build
+    *is* an artifact plus this metadata, so inventing a second identifier would
+    give the mobile client two ids for one thing and a mapping to keep. That is
+    why `GET /api/v1/builds/android/{buildId}` takes an `ArtifactId`.
+
+    `signing_fingerprint` is the SHA-256 certificate fingerprint in the
+    colon-separated form `apksigner` prints, normalized on write
+    (`artifact_types.normalize_fingerprint`) so one certificate has one
+    spelling. It is not a credential: a certificate fingerprint is public by
+    construction, and publishing it is what lets an operator refuse an APK
+    signed by something else before installing it.
+    """
+
+    __tablename__ = "android_builds"
+
+    artifact_id: Mapped[str] = mapped_column(String(128), ForeignKey("artifacts.id"), primary_key=True)
+    package_name: Mapped[str] = mapped_column(String(255))
+    version_name: Mapped[str] = mapped_column(String(64))
+    version_code: Mapped[int] = mapped_column(Integer)
+    environment: Mapped[str] = mapped_column(String(32))
+    min_sdk_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
+    signing_fingerprint: Mapped[str] = mapped_column(String(128))
+
+
+class ArtifactDownloadTokenModel(Base):
+    """A short-lived bearer credential for the bytes of exactly one artifact.
+
+    Stored **hashed**, the same way `OAuthAccessTokenModel` is and through the
+    same `shared.security.hash_token`: a reader of the database must not be able
+    to download anything. The plaintext exists once, in the response to
+    `POST /api/v1/artifacts/{artifactId}/download-token`.
+
+    Four columns make it narrow. `artifact_id` — presenting it on another
+    artifact is refused, so a token minted for a public report cannot fetch a
+    signed APK. `user_id` — the download re-reads that account at request time
+    and re-checks project visibility, so an account disabled or narrowed a
+    minute after minting cannot still pull the bytes, the same rule
+    refresh-token rotation already applies. `expires_at` — minutes, not hours
+    (`settings.artifact_download_token_ttl_seconds`). `grant_id` — which
+    sign-in minted it, so `POST /api/v1/auth/revoke` can delete exactly this
+    grant's download credentials: a sign-out that left an APK streaming is the
+    failure that endpoint exists to prevent, and revoking *by actor* instead
+    let a replayed dead token kill a live grant's downloads (found by a council
+    round). Null for the grantless browser-OAuth session, which is a value.
+
+    The count in this paragraph is the columns, not the narrowings — the router
+    module counts five, because a re-read of the account covers two of them.
+    They are consistent; they are counting different things, and saying so here
+    is cheaper than the next reader reconciling them.
+
+    It is deliberately **not** single-use. Issue #11 asks for range and
+    resumable downloads in the same breath as short-lived authorization, and a
+    token consumed by the first request makes a resumed download impossible: the
+    client would have to re-authenticate mid-transfer, which is exactly what a
+    download token exists to avoid. The lifetime is the control, and it is short
+    for that reason.
+    """
+
+    __tablename__ = "artifact_download_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(String(128), ForeignKey("artifacts.id"))
+    user_id: Mapped[str] = mapped_column(String(255))
+    # Nullable on purpose: the browser OAuth flow issues access tokens that
+    # belong to no grant, and null here means "minted by a grantless session",
+    # not "unknown".
+    grant_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class TaskLogModel(Base):
     __tablename__ = "task_logs"
 
@@ -225,6 +501,18 @@ class TaskLogModel(Base):
 
 
 class AuditEventModel(Base):
+    # Declared in the model as well as in `migrations/0011_event_subscriptions.sql`
+    # so a **fresh** install gets it: `main.py` bootstraps a new database with
+    # `Base.metadata.create_all`, which knows nothing about the migrations
+    # directory, so an index that lived only in SQL would exist on upgraded
+    # deployments and be missing on new ones — the harder of the two to notice,
+    # because it is the one nobody ran a migration for (council round 1, the
+    # second caller). `create_all(checkfirst=True)` does not add an index to a
+    # table that already exists, which is exactly why 0009 has to carry it too.
+    __table_args__ = (
+        Index("audit_events_entity_type_id_idx", "entity_type", "id"),
+    )
+
     __tablename__ = "audit_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -233,6 +521,41 @@ class AuditEventModel(Base):
     event_type: Mapped[str] = mapped_column(String(128))
     payload_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class NotificationPreferenceModel(Base):
+    """Which events one actor wants to be notified about — issue #13.
+
+    Recorded intent, not a delivery mechanism. This build has no push transport —
+    reported to the client as `pushDeliveryAvailable: false` in the preferences
+    body, not by `GET /api/version`, whose `capabilities` map has no push key —
+    and these rows do
+    **not** filter `GET /api/v1/events/stream`: a client that subscribed to the
+    stream asked for the stream, and silently withholding events from it because
+    of a preference set on another device is how a mobile client misses a
+    decision it was waiting for. See `gateway/app/api/routes/notifications.py`.
+
+    One row per actor, keyed by `user_id` — the id from `users.json`, never an
+    email. There is no `revision`/`ETag`: the only writer of a row is the actor
+    it belongs to, through a `PUT` that replaces the document wholesale, so
+    there is no concurrent third party for an optimistic check to protect
+    against (`ConversationModel` is this schema's other revision-less table, for
+    the same kind of reason).
+    """
+
+    __tablename__ = "notification_preferences"
+
+    user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    # JSON list of `event_types.ALL_EVENT_TYPES` members, validated at the route
+    # before it is written: an unvalidated list here would be a store of
+    # arbitrary caller text echoed back to that caller later.
+    event_types_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    # No `server_default`: `"0"` renders as a quoted literal that Postgres
+    # refuses for a boolean column, and every other boolean in this schema
+    # (`ExecutorModel.enabled`, `TaskModel.run_when_available`) sets its default
+    # in Python and in the migration rather than through SQLAlchemy's DDL.
+    push_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class MessageReceiptModel(Base):

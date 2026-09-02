@@ -7,15 +7,19 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.api.idempotency import purge_expired
 from gateway.app.api.rate_limit import RateLimitDependency, client_key
 from gateway.app.api.routes import auth as auth_routes
-from gateway.app.api.routes import decisions, missions, probes, projects, sessions
+from gateway.app.api.routes import decisions, missions, nodes as nodes_routes, probes, projects, sessions
+from gateway.app.api.routes import artifacts as artifacts_routes
 from gateway.app.api.routes import conversations as conversations_routes
 from gateway.app.api.routes import epics as epics_routes
+from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import issues as issues_routes
+from gateway.app.api.routes import notifications as notifications_routes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.core.agent_auth import TokenSource, resolve_executor_token
 from gateway.app.core.config import settings
@@ -42,10 +46,12 @@ from gateway.app.db.base import Base
 from gateway.app.db.schema_guard import check_schema
 from gateway.app.db.session import SessionLocal, engine, get_session
 from gateway.app.mcp.server import handle_mcp_call
+from gateway.app.models.entities import TaskModel
 from gateway.app.services import metrics, store
 from gateway.app.services.audit import record_event
 from gateway.app.services.agent_hub import AgentHub
-from shared.protocol import EXECUTOR_TOKEN_HEADER, AgentEnvelope, AgentMessageType, TaskState
+from gateway.app.services.notify import notify_task_finished
+from shared.protocol import EXECUTOR_TOKEN_HEADER, AgentEnvelope, AgentMessageType, NodeAnnouncement, TaskState
 from shared.security import sanitize_log_line, secure_compare
 
 
@@ -135,6 +141,28 @@ app.include_router(issues_routes.router, dependencies=[Depends(RateLimitDependen
 # projects, sessions/decisions/missions and issues. Same limiter, same
 # authorization plumbing as epics and issues above.
 app.include_router(conversations_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# The artifact catalogue, Android build metadata and the download flow (issue
+# #11). The limiter matters on `/artifacts/{id}/download` in particular: it is
+# the one route on this surface that authenticates with a token minted for it
+# rather than with a session bearer, and it streams bytes off disk.
+app.include_router(artifacts_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# The mobile event stream and its polling fallback (issue #13). Same limiter as
+# every other /api router — and note what the limiter does *not* bound here: it
+# counts requests per window, while one accepted request to `/events/stream`
+# becomes a connection held open for minutes. `routes/events.py:StreamSlots` is
+# what bounds that; the limiter still guards the rate of opening attempts.
+app.include_router(events_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# Notification-subscription preferences (issue #13): recorded intent for a push
+# transport this build does not have. See `routes/notifications.py`.
+app.include_router(notifications_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# Bridge Node fleet visibility (issue #73, Stage 2). Same limiter; guarded by
+# the fleet-wide `permissions.NODES_READ` action rather than the
+# project-scoped `visible_projects` pattern the routers above use.
+app.include_router(nodes_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:
@@ -595,6 +623,13 @@ async def handle_task_ack(session: AsyncSession, envelope: AgentEnvelope) -> Non
         await session.commit()
         return
 
+    # Set only by the "reconnect with no record" branch below, the one path
+    # through this function that can land a task in a terminal state
+    # (CANCELLED) — task.ack otherwise only ever carries pause/resume/restart
+    # control acks. Notified after the shared commit at the end of this
+    # function, same ordering as the TASK_RESULT branch (issue #70).
+    finished_task: TaskModel | None = None
+
     resolved_state: TaskState | None = None
     if accepted:
         try:
@@ -646,7 +681,7 @@ async def handle_task_ack(session: AsyncSession, envelope: AgentEnvelope) -> Non
         # pinned by an id nothing will ever acknowledge again
         # (`gateway/app/services/agent_hub.py`, `mark_task_finished` is the
         # only remover).
-        await store.update_task_state(
+        finished_task = await store.update_task_state(
             session,
             task_id,
             TaskState.CANCELLED,
@@ -680,6 +715,8 @@ async def handle_task_ack(session: AsyncSession, envelope: AgentEnvelope) -> Non
         },
     )
     await session.commit()
+    if finished_task is not None:
+        await notify_task_finished(session, finished_task, settings)
 
 
 async def handle_task_cancelled(session: AsyncSession, envelope: AgentEnvelope) -> None:
@@ -694,7 +731,7 @@ async def handle_task_cancelled(session: AsyncSession, envelope: AgentEnvelope) 
     `hub.running_tasks`, not just that the agent sent it.
     """
     task_id = envelope.payload["task_id"]
-    await store.update_task_state(session, task_id, TaskState.CANCELLED)
+    task = await store.update_task_state(session, task_id, TaskState.CANCELLED)
     await record_event(
         session,
         "task",
@@ -703,6 +740,9 @@ async def handle_task_cancelled(session: AsyncSession, envelope: AgentEnvelope) 
         {"executor_id": envelope.executor_id},
     )
     await session.commit()
+    # After the commit: the task's own state is already final, so a
+    # notification failure here cannot roll anything back (issue #70).
+    await notify_task_finished(session, task, settings)
     await hub.mark_task_finished(envelope.executor_id, task_id)
 
 
@@ -765,11 +805,62 @@ async def agent_ws(
         while True:
             raw = await websocket.receive_json()
             envelope = AgentEnvelope.model_validate(raw)
+            if envelope.executor_id != executor_id:
+                # `envelope.executor_id` is a field the CLIENT writes into the
+                # message body. `executor_id` is the one that presented a
+                # machine token at the handshake. Believing the first let any
+                # connected node write another node's row -- forging its
+                # reported capabilities, or refreshing its liveness so a dead
+                # node reads healthy -- which is precisely the fleet surface
+                # #73 Stage 2 exists to make trustworthy.
+                #
+                # The guard lives here, once, rather than in each branch: #16
+                # already fixed this for `task.ack` alone (`handle_task_ack`),
+                # and the branches added since inherited the same trust. One
+                # check before the dispatch means the next message type cannot
+                # reintroduce it.
+                logging.getLogger(__name__).warning(
+                    "executor %s sent an envelope claiming executor_id %s; dropping it",
+                    sanitize_log_line(executor_id),
+                    sanitize_log_line(envelope.executor_id),
+                )
+                continue
             async with SessionLocal() as session:
                 is_new = await store.store_message_receipt(session, envelope.message_id, envelope.executor_id, envelope.type.value)
                 if not is_new:
                     continue
-                if envelope.type == AgentMessageType.HEARTBEAT:
+                if envelope.type == AgentMessageType.HELLO:
+                    # Issue #73 Stage 2. Backward compatibility matters here: an
+                    # agent from before this change sends `{"version": "0.1.0"}`,
+                    # which validates as a `NodeAnnouncement` only by accident
+                    # (Pydantic ignores the unknown key and every field has a
+                    # default) -- so the old shape is handled explicitly rather
+                    # than left to that accident: `version` is read as
+                    # `agent_version` when the payload carries no `agent_version`
+                    # of its own. A HELLO that still fails validation after that
+                    # rewrite is logged and the loop CONTINUES: a gateway that
+                    # hangs up on the previous agent release turns a deploy into
+                    # an outage, so this branch must never close the socket or
+                    # raise out of the receive loop.
+                    payload = dict(envelope.payload)
+                    if "version" in payload and "agent_version" not in payload:
+                        payload["agent_version"] = payload.pop("version")
+                    try:
+                        announcement = NodeAnnouncement.model_validate(payload)
+                    except ValidationError:
+                        logging.getLogger(__name__).warning(
+                            "executor %s sent a HELLO payload that failed NodeAnnouncement "
+                            "validation; ignoring it and keeping the connection open",
+                            envelope.executor_id,
+                        )
+                    else:
+                        # The authenticated id, never the claimed one -- the
+                        # guard at the top of the loop has already refused any
+                        # envelope where they differ.
+                        hello_executor = await session.get(store.ExecutorModel, executor_id)
+                        if hello_executor is not None:
+                            await store.record_node_announcement(session, hello_executor, announcement)
+                elif envelope.type == AgentMessageType.HEARTBEAT:
                     await store.mark_executor_connected(session, envelope.executor_id, True)
                 elif envelope.type == AgentMessageType.TASK_ACK:
                     await handle_task_ack(session, envelope)
@@ -783,13 +874,17 @@ async def agent_ws(
                     )
                 elif envelope.type == AgentMessageType.TASK_RESULT:
                     final_state = TaskState(envelope.payload["final_state"])
-                    await store.store_result(session, envelope.payload["task_id"], envelope.payload, final_state)
+                    task = await store.store_result(session, envelope.payload["task_id"], envelope.payload, final_state)
                     # `mark_task_finished` dispatches the next queued task
                     # itself now (`AgentHub.mark_task_finished`) — this used
                     # to be the one branch that remembered to do it by hand,
                     # which is exactly the shape design-standards.md §3 warns
                     # about: the other callers that free a slot did not.
                     await hub.mark_task_finished(envelope.executor_id, envelope.payload["task_id"])
+                    # After both of the above: the task's own state is
+                    # already committed, so a notification failure here
+                    # cannot roll anything back (issue #70).
+                    await notify_task_finished(session, task, settings)
                 elif envelope.type == AgentMessageType.TASK_CANCELLED:
                     await handle_task_cancelled(session, envelope)
     except WebSocketDisconnect:

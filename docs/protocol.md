@@ -99,6 +99,39 @@ Mensagens (`AgentMessageType` em `shared/protocol.py`):
 Não existe mensagem `task.progress`. O progresso é inferido pelo fluxo de
 `task.log`, cada uma com `offset` incremental.
 
+### Payload do `hello`: `NodeAnnouncement`
+
+Até a Stage 2 da #73 o `hello` levava `{"version": "0.1.0"}` e o gateway **não
+tinha branch para ele** — a mensagem era persistida como recibo e descartada.
+Agora ela carrega um `NodeAnnouncement` (`shared/protocol.py`):
+
+```json
+{
+  "agent_version": "0.1.0",
+  "os": "Linux",
+  "arch": "x86_64",
+  "engines": [
+    {"engine": "codex",  "implemented": true,  "available": true,  "version": "codex-cli 1.4.2"},
+    {"engine": "claude", "implemented": true,  "available": false, "detail": "not found on PATH"},
+    {"engine": "gemini", "implemented": false, "available": false, "detail": "no runner implemented"}
+  ],
+  "capabilities": ["read", "test"],
+  "max_concurrent_tasks": 1,
+  "discovery_root_count": 1
+}
+```
+
+Sem `node_id`: o nó é aquele para o qual o `executor_id` autenticado aponta. Sem
+caminho: `discovery_root_count` é contagem, não as raízes. `capabilities` é o que
+a configuração da máquina permitiria, nunca uma concessão sobre projeto — ver
+`docs/control-plane.md`.
+
+**Compatibilidade:** um agente de release anterior segue enviando `{"version":
+...}`. O gateway lê essa forma como `agent_version` e um payload que não valide
+gera `WARNING` e **não derruba a conexão** — um gateway que desliga o agente da
+release anterior transforma deploy em interrupção.
+
+
 Campos comuns:
 
 * `message_id`
@@ -106,6 +139,27 @@ Campos comuns:
 * `sent_at`
 * `type`
 * `payload`
+
+## Identidade: o handshake manda, o envelope não
+
+`AgentEnvelope.executor_id` é campo que o **cliente escreve** no corpo da
+mensagem; o `executor_id` do `/agent/ws` é o que apresentou token de máquina no
+handshake. O laço de recepção compara os dois **antes** de despachar e descarta
+o envelope quando divergem, com `WARNING`.
+
+A verificação vive num ponto só, e não em cada branch, por histórico: a #16 já
+tinha corrigido isso para `task.ack` isoladamente, e todo tipo de mensagem
+acrescentado depois herdou a confiança de novo. Sem a guarda, um nó autenticado
+podia anunciar-se **como outro** — forjando as capacidades relatadas de uma
+máquina alheia, ou renovando a liveness dela para que um nó morto aparecesse
+saudável, que é exatamente a superfície de frota que a Stage 2 existe para
+tornar confiável.
+
+Descartar, não redirecionar: reescrever o id reivindicado para o autenticado
+aceitaria em silêncio, como declaração do remetente, uma mensagem que ele não
+fez sobre si. E descartar não derruba a conexão — derrubar transformaria um
+agente com bug em interrupção, e daria a um atacante um jeito de desconectar
+um nó.
 
 ## Idempotência
 

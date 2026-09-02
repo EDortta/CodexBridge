@@ -51,6 +51,12 @@ ISSUES_WRITE_SCOPE = "codexbridge.issues.write"
 # CANCEL_SCOPE: writing a project plan and starting a discussion about it are
 # different capabilities an operator may grant separately.
 CONVERSATIONS_WRITE_SCOPE = "codexbridge.conversations.write"
+# Changing one's own notification-subscription preferences (issue #13). Distinct
+# from every scope above for the same reason they are distinct from each other:
+# an operator may want a phone that can watch the event stream (READ_SCOPE)
+# without that phone being able to rewrite what the account gets notified about.
+# Reading the preferences needs only READ_SCOPE; this scope guards the write.
+NOTIFICATIONS_MANAGE_SCOPE = "codexbridge.notifications.manage"
 
 READ = "read"
 OPERATIONAL = "operational"
@@ -190,6 +196,17 @@ MISSIONS_READ_ALL_PROJECTS = Action(
     summary="See missions in every project, not only the actor's own.",
 )
 
+# Issue #73 Stage 2: Bridge Nodes are fleet-wide, not scoped to a project --
+# there is no per-node visible-projects filter the way `PROJECTS_READ` has, so
+# this follows `SESSIONS_READ_ALL_PROJECTS`/`MISSIONS_READ_ALL_PROJECTS` and is
+# administrative rather than a new scope of its own.
+NODES_READ = Action(
+    name="nodes.read",
+    category=ADMINISTRATIVE,
+    scope=ADMIN_SCOPE,
+    summary="List Bridge Nodes and read one, across the whole fleet.",
+)
+
 EPICS_READ = Action(
     name="epics.read",
     category=READ,
@@ -232,6 +249,29 @@ EPICS_LINK_ISSUE = Action(
     summary="Attach an issue to an epic.",
 )
 
+ARTIFACTS_READ = Action(
+    name="artifacts.read",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="List artifacts and Android builds and read one, within the actor's projects.",
+)
+
+# Minting a download token is a read, not an operational action: it changes
+# nothing an executor is doing, and what it authorizes is reading bytes the
+# actor may already see the metadata of. It is a *separate* action from
+# `artifacts.read` even though both require `READ_SCOPE`, because a client
+# decides whether to show a Download control separately from whether to show
+# the catalogue — the same relationship `sessions.read` and `sessions.readLogs`
+# already have. A deployment that later wants to withhold bytes while still
+# showing metadata splits the scope here, and `GET /api/v1/auth/me` reports the
+# split without a client change.
+ARTIFACTS_DOWNLOAD = Action(
+    name="artifacts.download",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="Mint a short-lived authorization to download an artifact's bytes.",
+)
+
 CONVERSATIONS_READ = Action(
     name="conversations.read",
     category=READ,
@@ -253,6 +293,28 @@ CONVERSATIONS_POST_MESSAGE = Action(
     summary="Post a message to a conversation.",
 )
 
+EVENTS_READ = Action(
+    name="events.read",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="Read the event backlog and open the live event stream, within the actor's projects.",
+)
+
+NOTIFICATIONS_READ = Action(
+    name="notifications.read",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="Read this actor's own notification-subscription preferences.",
+)
+
+NOTIFICATIONS_MANAGE = Action(
+    name="notifications.manage",
+    category=OPERATIONAL,
+    scope=NOTIFICATIONS_MANAGE_SCOPE,
+    summary="Change this actor's own notification-subscription preferences.",
+)
+
+
 # Order is the reported order. Grouped by class, read first, so a client that
 # renders the list without sorting produces something sensible.
 CATALOGUE: tuple[Action, ...] = (
@@ -266,6 +328,10 @@ CATALOGUE: tuple[Action, ...] = (
     EPICS_READ,
     ISSUES_READ,
     CONVERSATIONS_READ,
+    ARTIFACTS_READ,
+    ARTIFACTS_DOWNLOAD,
+    EVENTS_READ,
+    NOTIFICATIONS_READ,
     SESSIONS_STOP,
     SESSIONS_PAUSE,
     SESSIONS_RESUME,
@@ -277,10 +343,12 @@ CATALOGUE: tuple[Action, ...] = (
     EPICS_LINK_ISSUE,
     CONVERSATIONS_CREATE,
     CONVERSATIONS_POST_MESSAGE,
+    NOTIFICATIONS_MANAGE,
     SESSIONS_READ_ALL_PROJECTS,
     DECISIONS_READ,
     DECISIONS_DECIDE,
     MISSIONS_READ_ALL_PROJECTS,
+    NODES_READ,
 )
 
 

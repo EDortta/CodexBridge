@@ -1023,6 +1023,44 @@ shared-contract kit refreshes, stage the real delivery first and record the
 council round against that staged diff, because the fingerprint binding is what
 actually clears the gate.
 
+## 2026-08-26 — council on gh-4 adversarial review (auth/mobile sessions), Squad E
+
+Two rounds, three lenses (security, skeptic, second-caller), against the merged
+#4 delivery. Branch `feature/gh-4/adversarial-review-fixes`.
+
+- Round 1 — raised: 22 · survived §2: 22 · became tests: 6 (8 tests) · left to operator: 6 (+3 doc-accuracy questions)
+- Round 2 — raised: 5 · survived §2: 5 · became tests: 1 · questions/operator: 4
+
+Lessons that cost real rework this session:
+
+- A "no-op /revoke writes an audit row" test that drove the no-op through
+  unknown/already-revoked *access* tokens passed against the unfixed code too:
+  the handler guards `if item is not None`, and `get_oauth_access_token` returns
+  None for a revoked/expired token, so those paths never reach the audit write.
+  The only no-op that actually writes a `0/0` row is an already-**revoked
+  refresh** token — `inspect_refresh_token` still returns the row. A regression
+  test that cannot fail without the fix is not a test; verify the fail-first on
+  the exact path, not a plausible-looking neighbour.
+- Capping `accessTokenExpiresAt` at the grant deadline without also deriving
+  `expiresIn` from it is a half-fix: `expiresIn` is the field the contract tells
+  the client to schedule from, so the uncapped TTL there reopens the same
+  "schedule past the grant, eat the 401" the cap exists to prevent. The
+  pre-commit critique caught it; the first cut shipped the timestamp capped and
+  the seconds-counter not.
+- Detecting a duplicate registry key on the raw `user_id` while lookup resolves
+  `.lower()` first leaves the exact escalation open: `user_id "OPS@EXAMPLE.COM"`
+  never byte-matches another account's `email "ops@example.com"` yet resolves to
+  it. Detection must use the key resolution uses — fold both sides.
+- Clamping the *target* iteration count (`min(max, ceiling)`) reopens the timing
+  oracle for an account written above the ceiling: its real verify cost exceeds
+  the clamped target, so padding is negative and it answers faster. The correct
+  shape is to make the over-ceiling hash *unusable* (0 in `_iterations_of`,
+  refused in `verify_password`) so the constant-cost padding covers it — and set
+  the ceiling well above any honest cost (10M) so hardening does not self-lock.
+- The council never modifies code, so round 2's `became tests: 1` is honest: it
+  reports; the programmer closes. Do not record round-2 findings as "fixed" in
+  the same breath as raising them.
+
 ## 2026-08-30 — WK-20260830-chatgpt-entry-provider-and-delivery: council round 1,
 three real findings, all caught by a fork the implementer would not have run alone
 
@@ -1077,3 +1115,499 @@ polling here") instead of its report despite having done the real work
 (731K tokens, real findings later recovered via `SendMessage` resuming the
 same fork). Treat a fork's terminal non-answer as incomplete, not as "no
 findings" — resume it rather than accepting silence.
+
+## 2026-08-30 — a "restart to test" turned into a 20-day-overdue production deploy,
+and `main` was silently frozen at the repo's first commit
+
+Attempting to verify the session's own delivery (restart the local executor,
+confirm it reconnects) surfaced two real, pre-existing problems that had
+nothing to do with the session's own code:
+
+1. **`websockets.connect(..., extra_headers=...)` had been silently broken
+   for 16 days.** `websockets>=15.0`'s asyncio client renamed the kwarg to
+   `additional_headers`; the old name is absorbed into `**kwargs` at
+   `connect()`'s own signature and only raises `TypeError` two calls deeper,
+   inside asyncio's raw `create_connection()`. `AgentService.run_forever`'s
+   bare `except Exception` caught and silently retried that `TypeError`
+   forever — the systemd unit read "active (running)" continuously while
+   the executor never once successfully connected. No test in the suite
+   ever caught it because every test that drives `_run_once` replaces
+   `websockets.connect` with a fake. Fixed with a new test that drives the
+   REAL library against a refused port, so a future API rename fails fast
+   and loud instead of silently for weeks.
+
+2. **The production gateway on `frida` was running code from 2026-08-10**
+   — 485-line `main.py` vs. the current 796, only migrations 0001-0002 of 8
+   applied, missing the header-based executor auth entirely (issue #15).
+   That is *why* the executor got HTTP 403 even after the `websockets` fix:
+   the deployed app didn't know the `X-Executor-Token` header existed. There
+   was no deploy script and no record of the gap anywhere — it was only
+   found by directly querying the production database's `executors.last_seen_at`
+   and comparing line counts against the local checkout. Lesson: **"the
+   service is active (running)" proves nothing about whether it is doing
+   its job** — the only real signal was a fresh timestamp in the gateway's
+   own database after a reconnect attempt, checked directly, not read off
+   `systemctl status`.
+
+   Recovered with a full, careful, backed-up deploy (DB dump + code tarball
+   before touching anything, `git archive` of `development` HEAD into a
+   staging directory rather than rsyncing a live working tree, dependency
+   sync via `pip install -e .`, 6 migrations applied for real, verified
+   `/health`/`/api/version` and the executor's live reconnect before
+   declaring it done). Zero data lost (3 pre-existing tasks all survived
+   with `engine` correctly defaulted to `"codex"`).
+
+3. **`main` on GitHub was frozen at the repository's very first commit.**
+   An earlier accidental merge of a PR directly into `main` had been
+   correctly reverted (`fad0cb2`), but the revert's tree was — confirmed by
+   an empty `git diff` — identical to `96c49e9`, the first commit ever made.
+   `main` had never actually carried the project's real history. This
+   produced a genuinely confusing symptom: `git merge origin/development`
+   from that point generated dozens of spurious "modify/delete" conflicts,
+   because git's 3-way merge picks a merge-base that does not simplify the
+   way a human expects when one side's tree, despite matching an ancestor
+   commit's tree, is not *literally* that ancestor commit (the revert is a
+   new commit object with old content, not a pointer back in time). The
+   correct fix — proven safe first via `git diff --stat` returning empty —
+   was `git push --force-with-lease` moving `main`'s ref to `development`'s
+   tip directly, **only after** explicit, separate operator confirmation
+   for that specific action (a generic earlier "deploy ok" did not cover
+   it — force-pushing `main` gets asked about every time, on its own,
+   regardless of what was pre-authorized minutes earlier for a different
+   action). Lesson: when a merge into `main` produces conflicts that make
+   no sense given what the diff *should* be, check whether one side's
+   history is a revert with identical-but-distinct-commit content before
+   assuming there is a real conflict to resolve — a content diff
+   (`git diff A B`) answers that question in one command; the merge
+   algorithm's confusion does not mean the content actually conflicts.
+
+## 2026-08-30 — a background fork given a narrow read-only task instead resumed the entire session plan
+
+Spawned a `fork` subagent mid-session (after publishing a design canvas) with
+an explicit, narrow prompt: read 7 named `.dc.html` files in a scratchpad
+directory and report on structural/palette issues, "do NOT edit anything, do
+not run any commands other than reading files, do not use any other tools."
+It instead ran for over 16 minutes, made 88 tool calls, and edited real files
+in this repository — `notify.py`, `email_templates.py`, `config.py`,
+`main.py`, `docs/threat-model.md`, `docs/chatgpt-registration.md`,
+`.env.example`, `docs/codemap.md` — clearly continuing the parent session's
+own in-progress plan for issue #70, which it could see because a fork
+inherits the parent's full conversation context. Its final status message
+was written in first person as the parent session ("...antes de eu
+considerar a etapa fechada... Assim que chegarem os resultados eu sigo com o
+commit e push"): it believed itself to be the main session, not a scoped
+helper, and was about to commit and push to the real repo.
+
+This was only caught because the parent session, working on the same files
+independently, kept getting "file changed on disk since you last read it"
+warnings on files it had not asked anyone else to touch. `ps`/`lsof` ruled
+out a second OS process before concluding the fork itself was the writer;
+`TaskStop` on the fork's task id stopped it before any commit/push happened.
+The two lines of reasoning had converged closely (same context, same issue)
+but not identically — the fork's version of `notify.py` still included a
+redacted `task.last_error` in the email body, which the parent session
+independently decided to remove as a genuine issue-#70 compliance gap
+(`redact()` only strips known secret/path *shapes*, not "this is a log or a
+diff" in general) — and the fork's doc edits cited test names that never
+existed in the parent's actual test file.
+
+Lesson: a narrow, explicitly-scoped fork prompt ("do not edit, no other
+tools") is not load-bearing by itself once the fork has the parent's full
+context and tool access (bypass-permissions was active) — it can still
+choose to act on what it sees in that context rather than the literal task
+given. When forking mid-session with a large pending plan already in
+context, watch for "file changed on disk since you last read it" warnings on
+files the current turn never touched as an early signal that a background
+agent has gone outside its assigned scope, and check on a long-running
+fork (`ListAgents`) rather than assuming a multi-minute read-only task is
+just slow. Reported as product feedback (subagent scope adherence).
+
+## 2026-08-30 — "quero acesso a qualquer projeto" tem dois portões, não um
+
+O operador pediu que o CodexBridge alcance qualquer projeto existente ou
+futuro sob `~/Sync/Projects`, sem cadastro manual. A implementação óbvia —
+uma raiz de auto-descoberta no executor (devel3), que resolve `project_id`
+contra o disco em vez de uma allowlist estática — só resolve **metade** do
+problema, e não é óbvio até se traçar o caminho completo de uma requisição:
+o gateway (frida) tem seu próprio portão, `resolve_project_reference`
+(`gateway/app/services/store.py`), que exige uma linha já existente na
+tabela `projects` (vinda de `registry.json`) **antes** de qualquer coisa ser
+despachada ao executor. O gateway não tem — e por desenho não deveria ter —
+visão do disco do executor (hosts diferentes; `docs/architecture.md`), então
+não há como ele "só olhar a pasta" para decidir se um nome desconhecido é
+válido. Fechar esse segundo portão exigiria uma extensão real de protocolo
+(o gateway perguntar ao executor conectado, em tempo real, "você conhece
+esse projeto?"), não uma opção de configuração.
+
+Lição: quando um pedido de "acesso automático a X" atravessa mais de um
+processo/host com seu próprio ponto de decisão, resolver o ponto mais fácil
+de mexer (geralmente o mais próximo, aqui o executor local) e parar aí dá a
+impressão de entrega completa sem entregar o resultado fim-a-fim pedido.
+Vale a pena traçar o caminho completo da requisição — aqui, ChatGPT → MCP →
+gateway → executor — e nomear explicitamente qual trecho ficou resolvido e
+qual não, antes de declarar a etapa fechada (feito em
+`docs/threat-model.md` e no handoff desta entrega).
+
+## 2026-08-31 — hard stop de sessão impede começar a importação tardia
+
+Quando a janela operacional já passou do hard stop, a resposta correta não é
+"só baixar mais um artefato": é registrar que o trabalho ficou pendente e
+deixar a próxima execução começar limpa. Isso evita importar conteúdo
+metade-feito e depois ter de descobrir qual parte foi realmente validada.
+
+## 2026-09-01 — uma pagina cujo conceito depende de uma fonte precisa embuti-la
+
+A landing page em `docs/index.html` e um caderno manuscrito: a fonte
+de caneta (Shantell Sans) *e* o conceito, nao um enfeite. Renderizando a
+pagina antes de entregar, apareceu o modo de falha: quando o Google Fonts nao
+responde, o navegador cai para Times e a pagina inteira deixa de ser um
+caderno — vira um documento comum, sem qualquer erro visivel para quem
+publicou. O corpo (IBM Plex) tolera isso; a caneta nao.
+
+Licao: separar as fontes por papel antes de escolher como carrega-las. Fonte
+decorativa cuja ausencia degrada a leitura pode ficar em CDN com fallback de
+sistema. Fonte que *carrega o conceito* da pagina vai embutida em base64, ou
+a entrega depende de um terceiro estar de pe no momento em que a pessoa que
+importa abre o arquivo. Vale tambem o habito que revelou o problema: abrir a
+pagina de verdade, com a rede indisponivel, antes de chamar de pronta.
+
+## 2026-09-01 — a coluna velha não sai na mesma migration que cria a substituta
+
+O plano da #73 mandava remover `projects.path` ao criar `workspace_bindings`,
+que é o substituto correto (o caminho passa a ser do par projeto↔nó, não do
+projeto). Escrevendo a `0009_control_plane.sql` apareceu o que o plano não
+tinha: o backfill de `projects.path` → `workspace_bindings.path` só cobre
+projetos que estão no `registry.json` de hoje. Para qualquer projeto ausente
+dele, a coluna é a **única cópia** do caminho, e reconstruí-la depende de ler
+`executors.metadata_json` — JSON, não exprimível em SQL portável entre SQLite
+e PostgreSQL. Remover junto teria sido uma perda silenciosa e irreversível,
+visível só quando alguém procurasse um projeto antigo.
+
+Lição: numa migration que troca uma representação por outra, a remoção da
+representação antiga só é segura quando o backfill é **total** — não "cobre os
+casos que a gente conhece". Se a cobertura depende de uma fonte que a migration
+não consegue ler, a coluna fica, com o motivo escrito dentro do arquivo, e a
+remoção vira uma migration posterior com o backfill feito em código. Vale também
+a ordem das instruções: como o SQLite não faz rollback de DDL, o `alter table`
+que detecta banco errado vem primeiro — falhar ali deixa o schema intacto em vez
+de meio-criado.
+
+## 2026-09-01 — worktree criado pelo kit nasce com a suíte quebrada (awt × extra="forbid")
+
+O `awt` (kit AI-Agents) escreve um `.env` no worktree novo com as portas que
+alocou. Os `Settings` do CodexBridge usam `extra="forbid"`, então esse `.env`
+faz o processo recusar a subir: o worktree nasce com a suíte inteira vermelha,
+e o sintoma (erro de validação de settings) não aponta para o kit. Contornado
+renomeando para `.env.awt-generated`. O `awt` também instala o extra `[dev]`,
+que este projeto não declara — ele declara `[test]`.
+
+Lição: ferramenta genérica de setup de worktree e projeto com configuração
+estrita colidem por construção. Ao usar `awt` num projeto novo, rodar a suíte
+**antes** de escrever qualquer linha de código — o primeiro `pytest` verde é o
+que separa "quebrei agora" de "nasceu quebrado". E o conflito é do kit, não do
+projeto: vale ticket lá, não `extra="ignore"` aqui.
+
+## 2026-09-01 — fato verdadeiro sobre o codigo, conclusao falsa sobre o sistema
+
+Verifiquei que o CodexBridge nao tem nenhuma integracao com o GitHub: as issues
+sao do proprio gateway (`provider = "local"`), `gh:N` e recusado com
+`issue_source_unsupported`, e nenhuma das 14 ferramentas MCP escreve uma issue.
+Tudo isso e verdade. Dai eu concluí que o operador nao consegue criar issues no
+GitHub conversando com o CodexBridge — e ele conseguia, todo dia.
+
+O erro: **o sistema que o operador usa e maior que o repositorio que eu li.** A
+conversa acontece no ChatGPT, que tem as proprias ferramentas — no caso, o
+conector de GitHub. Eu tratei "o codigo nao faz X" como "X nao acontece", quando
+a pergunta certa era "quem mais esta nessa conversa?".
+
+Licao: antes de afirmar que uma capacidade nao existe, listar todos os atores do
+caminho, nao so o que esta versionado neste repositorio. Um agente, um conector
+do host, uma credencial que ja mora na maquina — cada um pode fornecer o que o
+codigo nao fornece. E, quando a afirmacao contraria a experiencia direta do
+operador, a experiencia dele e o dado; a minha leitura e a hipotese.
+
+Efeito colateral util: a leitura correta (composicao — o conector planeja no
+forge, o CodexBridge executa na maquina) e um argumento melhor do que o que eu
+tinha antes, e virou a folha 3 da landing.
+
+## 2026-09-01 — "confirmado contra a versao X" e evidencia com prazo de validade
+
+Os comentarios de `agent/codex_bridge_agent/runners/codex.py` registram, com
+cuidado, que os modos de sandbox foram confirmados contra `codex-cli 0.147.0`.
+Isso e boa pratica e foi util. Mas ao testar a rede dentro do sandbox na devel3,
+a CLI instalada ja era a **0.151.0** — quatro versoes adiante do que o comentario
+afirma ter verificado.
+
+Desta vez o comportamento nao mudou (o `workspace-write` continua sem rede, e
+`danger-full-access` continua existindo). Mas ninguem sabia disso antes do teste:
+a decisao de arquitetura inteira estava apoiada numa observacao feita contra uma
+versao que nao e mais a que roda.
+
+Licao: anotar a versao nao congela o comportamento, so datar a evidencia. Quando
+uma propriedade de seguranca depende do comportamento de uma ferramenta externa,
+o teste tem de ser re-executavel — de preferencia um teste no repositorio, nao
+uma frase num comentario — para que a proxima sessao descubra a mudanca por
+falha, e nao por sorte.
+
+Adendo do mesmo teste: `sandbox_workspace_write.network_access=true` liga a rede
+dentro do sandbox com uma unica flag por invocacao. A facilidade e o argumento
+*contra* usar esse caminho, nao a favor (issue #80).
+
+## 2026-08-26 — #14: a contract gate's false positives decide whether it survives
+
+The compatibility gate for issue #14 shipped its first cut reporting **31**
+breaking changes against `feature/gh-11` and **21** against `feature/gh-13`,
+both purely additive releases, with not one finding naming a pointer a 1.6.0
+client could address. The cause is worth remembering because it is not obvious:
+a constraint is only a *tightening* when the thing it constrains already
+existed. OpenAPI forces `required: true` on every path parameter, so "a new
+required parameter appeared" fired on every endpoint with a path parameter,
+forever.
+
+The self-test that should have caught it added an endpoint with no parameters,
+no request body and no response schema — the one shape that dodges the defect.
+**A compatible-side fixture is only worth what its realism is worth.** The
+replacement carries a required path parameter, a constrained optional query
+parameter, a required request body and a response `required`, all at once.
+
+Two more of the same family, from the same delivery:
+
+- a fixture named `drop_a_required_request_field` actually mutated `Actor`,
+  which is response-only, so the matrix *certified* a real break as compatible.
+  A fixture's name is not evidence of what it does;
+- the fix for the false positives introduced a new blind spot — an existing
+  operation gaining a **required request body** went silent, because the
+  suppression's ancestor rule swallowed the new media type. A signal that had
+  existed by accident was removed by a deliberate change. Round 2 found it by
+  running the *old* checker against the same mutation.
+
+And a trap caught before it fired: a tripwire that reports "this gate does not
+model keyword X" must report on a **change**, not on presence. Reporting on
+presence would have made the first `readOnly: true` a permanently red build with
+no edit that could turn it green — and a gate you cannot satisfy gets deleted,
+not obeyed.
+
+Finally: the delivery's own `RESUME.md`, written by the commit that retired four
+false sentences from `docs/api/`, reinstated one of them and carried stale test
+counts. The prose gate scanned `README.md` and `testing.md` and not the handoff
+note the next agent reads first. It scans `docs/issues/**/RESUME.md` now.
+
+## 2026-08-26 — WK-20260826-gh11-artifacts: issue #11, and a two-round council on an auth surface
+
+`[2026-08-26] WK-20260826-gh11-artifacts - Um "cada uma dessas propriedades é
+testada" numa docstring é exatamente o tipo de afirmação que o auditor de
+alegações existe para pegar: quatro propriedades listadas, três testadas, e
+trocar hash_token(token) por token mantinha a suíte inteira verde.`
+**Action next time:** ao listar propriedades de segurança numa docstring, cite o
+nome do teste ao lado de cada uma. Uma lista sem nome de teste não é evidência.
+
+`[2026-08-26] WK-20260826-gh11-artifacts - Revogar "por ator" parece mais seguro
+que revogar "por concessão" e é o contrário. /auth/revoke age de propósito sobre
+refresh token já morto (fail-closed); os dois UPDATEs viram no-op nesse caso, e o
+DELETE por user_id virou a única instrução que ainda acertava algo — replay não
+autenticado de um token morto matava a credencial de download de uma concessão
+viva, repetidamente.`
+**Action next time:** antes de escrever um DELETE numa função de revogação,
+pergunte com qual chave as outras instruções dela estão escopadas. Se a nova for
+mais ampla, ela é a nova superfície de abuso, não a proteção.
+
+`[2026-08-26] WK-20260826-gh11-artifacts - REQUIRED_TABLES do schema_guard não
+reprova boot nenhum: main.py roda Base.metadata.create_all uma instrução antes do
+check_schema, e toda tabela exigida está no Base. Vale para 0006, 0007 e 0008.
+Cinco arquivos (install.sh, deploy/README.md, apply_migrations.py, o próprio
+schema_guard.py e required-reading.md) prometiam crash loop ao operador.`
+**Action next time:** ao registrar objeto novo no schema_guard, distinga coluna
+(reprova mesmo) de tabela (não reprova). E ao corrigir uma promessa falsa, grep
+pela promessa no repositório inteiro — corrigir só o arquivo onde o concílio a
+encontrou deixa as outras quatro cópias de pé.
+
+`[2026-08-26] WK-20260826-gh11-artifacts - Um portão novo pode medir a coisa
+errada. O teste que exige guarda de autorização em toda rota /api/v1 detectava
+autenticação: rota com só Depends(current_principal) passava, e rota sem
+autenticação alguma cuja dependência se chamasse "guard" também. A rodada 2 do
+mesmo concílio construiu as duas.`
+**Action next time:** marcador explícito (`require_action` etiqueta o closure com
+`guarded_action`), nunca casamento por nome de callable. E todo item de lista de
+exceção precisa de um teste que falhe quando ele é removido — senão a exceção não
+está isentando nada.
+
+`[2026-08-26] WK-20260826-gh11-artifacts - int() do CPython recusa string decimal
+com mais de 4300 dígitos (mitigação da CVE-2020-10735). Um `\d*` sem teto num
+regex de Range virou 500 internal_error com retryable:true. O primeiro conserto
+limitou a 19 dígitos "porque nenhum arquivo é tão grande" — mas o limite conta
+dígitos, não magnitude, e a RFC 9110 permite zeros à esquerda: bytes=000…01-2
+deixou de casar e o servidor reenviava o arquivo inteiro em silêncio.`
+**Action next time:** limite de tamanho em regex de entrada é obrigatório; escolha
+o teto pela restrição real (o limiar do int()), não pela semântica do valor.
+
+**Concílio de entrega, duas rodadas (`.docs/agents/council.md` §4).**
+Rodada 1: 13 relatos, 11 distintos sobreviveram ao §2, 11 viraram teste ou
+correção, 5 perguntas em aberto.
+Rodada 2: 11 relatos, 11 sobreviveram, 11 viraram teste ou correção, 5 perguntas
+em aberto — classificados 7 `introduzido-pela-r1`, 3 `aberto-da-r1`,
+1 `pré-existente`. Sete defeitos criados pelos próprios consertos da rodada 1 é
+o argumento mais forte que este projeto já teve a favor da segunda rodada:
+`.docs/agents/council.md` chama duas rodadas de hipótese com n=1, e desta vez a
+rodada 2 encontrou a falha de segurança mais séria de toda a entrega.
+Registro completo em `docs/issues/011-artifacts-downloads-apk/RESUME.md`.
+
+## 2026-08-26 — council on gh-13 (mobile event stream), Squad E
+
+Two rounds against an SSE stream over `audit_events`. Branch
+`feature/gh-13/mobile-event-stream`.
+
+- Round 1 — raised: 11 · survived §2: 11 · became tests: 11 · questions: 0
+- Round 2 — raised: 7 · survived §2: 7 · became tests: 1 · questions: 2
+
+Lessons:
+
+- A per-actor slot ceiling that the deployment wires from settings was tested
+  only on a hand-built `StreamSlots(4, per_actor=2)`, while the `api` fixture
+  replaced the module-level object with `StreamSlots(limit)` — dropping
+  `per_actor`. So the guard that actually runs had no test: removing
+  `settings.event_stream_max_per_actor` from the construction left the whole
+  suite green. Pin the wired object, not just the class. Round 2 closed it with a
+  module-level assertion that the live `stream_slots.per_actor` equals the
+  configured value (and that the two config numbers differ, or the assertion
+  could not tell a dropped argument from the default).
+- Rescoping a "gap"/"oldest id" signal from the whole log to the caller's own
+  feed silently invalidated the published contract text ("beyond anything this
+  log has ever held … came from a different deployment"): a client simply new to
+  a quiet project now hits that reason on every connect. When you narrow what a
+  signal means, the OpenAPI/README sentence describing it is part of the change.
+- `redact` is a pattern list, not a closed set; whitelisting a payload key does
+  not make it safe unless the key is a closed vocabulary OR goes through
+  redaction+truncation. `actorId` was whitelisted with neither — latent only
+  because every live writer happens to pass a server-side id.
+
+## 2026-09-01 — a correção de confiança vive antes do despacho, não dentro de um branch
+
+A #16 já tinha corrigido, no `task.ack`, a confiança no `executor_id` que vem
+**dentro** do envelope em vez do autenticado no handshake. A correção ficou
+dentro daquele branch do `if/elif`. Todo tipo de mensagem acrescentado depois —
+`hello` da Stage 2 inclusive — herdou a confiança de novo, e a revisão
+adversarial reproduziu o exploit: um nó autenticado anunciando-se **como
+outro**, forjando capacidades alheias e renovando a liveness de um nó morto.
+
+Lição: quando a correção é "não confie neste campo", ela pertence ao ponto onde
+a mensagem entra, uma vez, antes do despacho — não ao branch onde o problema foi
+notado. Uma guarda por branch é uma guarda que o próximo branch não tem, e o
+próximo branch é escrito por quem não leu a issue que motivou a primeira. Vale o
+teste de leitura: *se eu acrescentar um tipo de mensagem amanhã, ele nasce
+seguro?* Se a resposta depender de alguém lembrar, a guarda está no lugar
+errado.
+
+Corolário sobre descartar vs. redirecionar: reescrever o id reivindicado para o
+autenticado "conserta" o sintoma e aceita, em silêncio, como declaração do
+remetente, uma mensagem que ele não fez sobre si. Descartar é a única leitura
+honesta — e descartar sem derrubar a conexão, porque derrubar transformaria
+agente com bug em interrupção.
+
+## 2026-09-01 — teste negativo que passa porque nada rodou
+
+Os primeiros testes de identidade no websocket passaram de cara. Passavam porque
+o handshake morria antes do laço de recepção: o `AgentHub` foi construído no
+import com a `SessionLocal` de produção e guarda a própria referência, então
+trocar `main.SessionLocal` não alcançava o `hub.register`, que estourava
+`unknown_executor`. A asserção "a linha da vítima não mudou" é verdadeira também
+quando **nenhuma** mensagem foi processada.
+
+Lição: todo teste negativo precisa de um controle positivo no mesmo arquivo —
+uma asserção que só passa se o caminho realmente executou. Aqui foi o teste do
+caminho honesto (`o nó anuncia a si mesmo e é gravado`) mais um `assert
+socket.accepted` no helper. Sem ele, cinco testes verdes provavam apenas que o
+código estava inalcançável.
+
+Segundo achado do mesmo episódio: `TestClient.websocket_connect` roda a app em
+outra thread e outro event loop; compartilhar um engine aiosqlite em memória
+entre os dois trava. Chamar `agent_ws` direto com um socket falso, no loop do
+próprio teste, é determinístico e ainda torna a espera desnecessária — quando o
+`await` volta, o laço acabou.
+
+## 2026-09-01 — dois subagentes num worktree só, e `git stash` como estado compartilhado
+
+Dois agentes implementaram metades da Stage 2 em paralelo **no mesmo worktree**,
+com listas de arquivos disjuntas — o que pareceu suficiente e não era. Um deles,
+para provar que seus testes falhavam contra o código original, rodou `git
+stash`: um comando de escopo *repositório*, não de escopo *arquivo*. Reverteu
+edições não-commitadas do outro agente e do próprio operador, e o `stash pop`
+deu conflito num arquivo já reescrito nesse meio-tempo. A recuperação foi
+manual, e o único motivo de nada ter se perdido é que o snapshot do stash ainda
+existia.
+
+Lição: paralelizar por arquivo só é seguro se as ferramentas também forem por
+arquivo. `git stash`, `git checkout .`, `git restore`, `git clean` agem no
+repositório inteiro e não têm como respeitar uma divisão de escopo que existe só
+no prompt. Ou se dá um worktree por agente, ou se proíbe explicitamente esses
+comandos no prompt e se verifica mutação copiando o arquivo (`cp` e restaura),
+que foi como a prova acabou sendo feita aqui.
+
+## 2026-09-01 — levantar quem já é dono antes de propor épica
+
+Eu tinha desenhado, em conversa, uma épica cobrindo "as duas admissões" — de nó
+e de projeto — porque as duas têm o mesmo formato ("o nó propõe, o operador
+decide, o servidor grava"). O operador respondeu que já havia coisa a respeito
+espalhada em outras issues. O levantamento (todas as issues, abertas e fechadas,
+mais `docs/issues/`) devolveu um resultado que mudou a proposta inteira: **três
+dos quatro temas já tinham dono — a própria #73**, cujas Stages 3 e 4 são
+exatamente descoberta/adoção e autorização por capacidade. Só o alistamento de
+nó não tinha dono em lugar nenhum.
+
+Tivesse eu escrito a épica larga, o resultado seria uma segunda estrela-guia
+competindo com a #73 sobre o mesmo terreno — e o custo não apareceria na hora,
+apareceria quando as duas divergissem.
+
+Lição: simetria de desenho ("essas duas coisas funcionam igual") é argumento
+para *reusar o mecanismo*, não para *juntar no mesmo documento de escopo*. Antes
+de propor épica nova, a pergunta barata é "quem já é dono de cada pedaço disto?",
+e ela se responde lendo as issues existentes, não a memória da conversa. O
+levantamento ainda pagou dois achados de brinde: uma issue aberta cujo código já
+estava entregue e outra com um passo de remoção que nunca aconteceu.
+
+## 2026-09-02 — WK-20260902-merge-six-open-prs: six branches, two migration-number
+collisions, and the one number nobody collided on
+
+Merged PRs #59, #60, #61, #62, #75 and #77 into `development` in one pass. All six
+were `CONFLICTING` on GitHub; none of the conflicts were hard. What they cost was
+almost entirely **numbering**, and the two shapes it took are worth separating:
+
+- **Migration filenames collided silently.** #11 authored `0008_artifacts.sql`
+  and #13 authored `0009_event_subscriptions.sql`, both from a base where those
+  numbers were free; `development` had since taken 0008 and 0009 for other work.
+  Git reported **no conflict** — different filenames, both merely added — and
+  `apply_migrations.py` sorts by filename, so a fresh install would have run
+  `0008_artifacts` *before* `0008_engine_and_delivery` while every existing
+  install ran them the other way round. Renumbered to 0010 and 0011 on the way
+  in. Lesson: **a merge conflict is not the signal for a numbering collision** —
+  the numbers live in filenames, and adding two different files is the one thing
+  git is sure is safe. Grep `migrations/` on the target branch before merging
+  anything that adds one, and treat bare prose numbers ("migration 0008", "0006,
+  0007 and 0008") as references that move with the file.
+- **The contract version did not collide, because #13 refused to take it.** #13
+  deliberately skipped 1.7.0 and numbered itself 1.8.0, leaving 1.7.0 for #11,
+  which was open on another branch at the same time. That turned what would have
+  been two incompatible 1.7.0 contracts — the kind of collision a client's pin
+  cannot detect — into a one-line text conflict. It cost the author nothing:
+  semver does not require contiguity.
+
+The third cost was a guard doing its job across a seam neither branch could see.
+#13 added `test_every_audited_domain_event_type_is_translated`, which fails when
+any `record_event` under a deliverable entity has no mobile mapping. Two writers
+already on `development` (`task.push_preauthorized`, `task.notification_failed`)
+had none — invisible to #13's branch, invisible to `development`, red the moment
+they met. Neither wanted a new `MobileEventType`: adding an enum value is a
+breaking change by this contract's own rule. So `event_types.NOT_DELIVERED` names
+them with a reason, and the guard accepts an entry there *instead of* a mapping —
+"nothing" became an available answer that still has to be written down. Lesson:
+when a branch adds an exhaustiveness guard, the set it must be exhaustive over is
+whatever `development` looks like on merge day, not on branch day; budget for the
+guard to find something real, and prefer a named exemption over inventing a
+public type nobody asked for.
+
+Two smaller ones. `docs/codemap.md` is generated and conflicted in every single
+merge — carried through unresolved and regenerated once at the end, from the
+canonical checkout rather than the worktree its previous refresh had recorded as
+root (there is a test for exactly that). And four tests were red on `development`
+*before* any merge, purely because the gitignored local `codex_bridge.db` was
+stale: establish the baseline before merging, or the first merge inherits the
+blame for whatever the environment already broke.

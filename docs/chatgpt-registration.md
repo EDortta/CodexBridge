@@ -41,8 +41,18 @@ de um servidor MCP para o app. Duas formas de saber que uma tarefa terminou:
    exatamente o filtro que torna "o que terminou desde que perguntei" uma
    chamada só, em vez de listar tudo e filtrar na conversa.
 
-O e-mail de conclusão (a outra metade — funciona com o app fechado) é uma
-etapa separada, pendente de configuração SMTP no `frida`; ver
+O e-mail de conclusão (a outra metade — funciona com o app fechado) já está
+implementado (`gateway/app/services/notify.py`, issue #70): quando uma
+tarefa chega a um estado terminal, o gateway manda um e-mail com identidade
+visual própria (`gateway/app/services/email_templates.py`) para o
+destinatário fixo em `CODEX_BRIDGE_NOTIFICATION_TO`. Fica desligado por
+padrão — exige `CODEX_BRIDGE_NOTIFICATION_EMAIL_CONFIG_FILE` **e**
+`CODEX_BRIDGE_NOTIFICATION_TO` configurados no `frida`; sem os dois, é um
+no-op silencioso, nunca um erro. Cobre `TASK_RESULT` (concluída/falhou),
+`task.cancelled` e o cancelamento por reconexão órfã (issue #17) — só a
+varredura de recuperação no startup (`recover_tasks_after_startup`, que
+resolve tarefas expiradas ou perdidas após uma queda do gateway) ainda não
+dispara e-mail, um resíduo declarado do finding F27 do concílio. Ver
 `docs/threat-model.md` e o work item
 `WK-20260830-chatgpt-entry-provider-and-delivery`.
 

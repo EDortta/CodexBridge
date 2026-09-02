@@ -86,9 +86,19 @@ read a single `requestBody` or `responses` block. An endpoint that returns a
 shape this document does not describe — FastAPI's default `{"detail": ...}` with
 HTTP 422, for instance, which matches no field of `Error` — passes this gate.
 
-Body-level conformance is issue #14's scope. Until it lands, read a green run as
-*"the same endpoints exist on both sides"*, never as *"the implementation matches
-the contract"*.
+Body-level conformance is a **separate** gate,
+`tests/contract/test_declared_examples_are_real.py` (issue #14). It validates
+live response bodies against the schemas declared here, checks that no response
+carries a top-level field this document omits, and checks every declared example
+against the schema it illustrates. It reaches only what it can drive without a
+credential — the operations that declare `security: []` — so **authenticated
+endpoints' bodies are still unchecked against this document**; they are covered
+in `tests/integration` against expectations written in Python, which is the
+weaker form, because two independent statements of one contract drift.
+
+Read a green route-drift run as *"the same endpoints exist on both sides"*,
+never as *"the implementation matches the contract"*. `docs/api/testing.md`
+has the table of which gate guards which pair.
 
 ---
 
@@ -103,8 +113,25 @@ The public namespace is `/api/v1`.
   patch versions move within a namespace.
 - **Every change to the document moves `info.version`.** A client that pins
   `1.0.0` must receive the same bytes tomorrow; leaving the version still while
-  the content changes is what makes a pin meaningless. Nothing enforces this
-  today — see "Getting the contract to the mobile repository".
+  the content changes is what makes a pin meaningless.
+- `x-minimum-supported-version` names the oldest **published** version this
+  build still promises to serve. `scripts/check_contract_compatibility.py`
+  compares the working document against the published copy of that version and
+  fails the build on any change the next section forbids. Raising the floor
+  drops the promise to every client still on the older pin, and needs the same
+  conversation with the mobile team that a deprecation does — so it must be the
+  oldest published version unless `x-minimum-supported-version-raised` records
+  why not, naming the mobile release that stopped using it. That is not
+  bureaucracy: raising the floor is also the cheapest way to silence this gate
+  permanently, and a one-line diff should not be able to do that unremarked.
+
+What is enforced, and what is still on trust: the digest of a published version
+is enforced (a version edited after publication fails
+`tests/contract/test_published_contract_artifact.py`), and so is the absence of
+a mechanically visible break against the floor. **`info.version` moving on every
+change is not enforced** — a byte change with the version left still fails the
+publish check, which is satisfied by republishing under the same number. See
+"Getting the contract to the mobile repository".
 
 ### The `/api/version` carve-out
 
@@ -128,10 +155,27 @@ stop working because of it:
 - renaming anything, in either direction;
 - narrowing a type, tightening a constraint (`maxLength`, `pattern`, `required`),
   or making an optional request field required;
+- **a field of a *response* leaving that schema's `required` list.** A generated
+  client makes a required field non-nullable and reads it unconditionally, so
+  "it might not be there now" breaks it. On a request-only schema the same edit
+  is a relaxation — the gate reports both and names the direction, because a
+  JSON pointer cannot tell which a shared schema is, and most here are shared;
+- **changing a `default`.** A client that omits the field gets different
+  behaviour with no code change on either side and no error to notice;
+- **changing which credential an operation accepts** — a different scheme, or a
+  scope a client's token does not carry. An endpoint that stops being
+  unauthenticated is the same rule at its limit;
+- **requiring a request body where the operation accepted none**, or pointing an
+  operation at an already-required component parameter;
 - changing the meaning of an existing field while keeping its name and type
   — the most dangerous kind, because no schema diff catches it;
 - changing the HTTP status or the `code` returned for an existing failure;
 - changing default sort order, or the identity/lifetime of a pagination cursor.
+
+The five bold rules were added by issue #14 alongside the gate that enforces
+them. They were always true; nothing stated them, so nothing could be held to
+them. `scripts/check_contract_compatibility.py` transcribes **this** list, and
+`docs/api/testing.md` records which of these it can and cannot see.
 
 ### What is not breaking
 
@@ -169,7 +213,14 @@ by the contract itself, not by a filter applied late:
   the contents of `users.json` or `registry.json`;
 - **server filesystem paths.** `ProjectModel.path` is the canonical trap: it is
   the project's real path on the executor and it is an internal field. Projects
-  are addressed by `ProjectId` and nothing else;
+  are addressed by `ProjectId` and nothing else. `ArtifactModel.storage_path`
+  (issue #11) is the second one: a path relative to `CODEX_BRIDGE_ARTIFACTS_ROOT`,
+  never serialized, never composable by a client — the bytes are reached through
+  a minted download token, and `gateway/app/services/artifact_storage.py` is the
+  only code that turns the stored value into a real file. The migration, the
+  model, the artifacts router and the tests all cite *this* section as the rule
+  that forbids it, and a council round found the citation pointing at a list
+  that did not contain it;
 - executor hostnames, internal IPs, ports, or anything that would let a client
   reach an executor without going through the gateway;
 - raw stack traces and raw driver errors. These map to `internal_error` plus a
@@ -907,6 +958,16 @@ decisions" as issue links and issue #7 applied to `dependencies` /
 `relatedEntities`: no backing entity, no field. See
 `gateway/app/services/conversation_types.py`'s module docstring.
 
+**Issue #11 has now shipped that entity, and the member is still absent.** The
+reason changed rather than expired: adding a member to a response enum is a
+breaking change (§"What is a breaking change" above), so widening
+`ConversationContextType` is a declared change to the conversations surface,
+not something issue #11's diff performs on the way past
+(`design-standards.md` §7). Whoever wants it adds the member, the resolver
+branch through `store.get_artifact_for_projects`, and the test that a
+reference to an artifact in an invisible project answers `404` — in one
+change, under its own issue.
+
 This does not remove artifacts from the feature: "attachment references
 through artifact/file identifiers" is a *message* concept.
 `Message.attachments` carries opaque artifact/file ids on each message,
@@ -992,6 +1053,422 @@ different-fingerprint call is answered `409`, never silently replayed. This
 is issue #10's "message creation is idempotent for offline retries"
 acceptance criterion, and the mechanism that also prevents the duplicate
 messages the issue's own test coverage requirement names.
+
+---
+
+## Artifacts, downloads and Android builds (issue #11)
+
+`GET /api/v1/artifacts`, `GET .../{artifactId}`,
+`POST .../{artifactId}/download-token`, `GET .../{artifactId}/download`,
+`GET /api/v1/builds/android`, `GET .../{buildId}`.
+
+An **artifact** is a retained file this gateway can hand to
+CodexBridgeMobile: type, project, name, version, size, origin, checksum,
+creation time and retention window. An **Android build** is not a second
+entity — it is an artifact of type `apk` plus its APK metadata, keyed by the
+artifact's own id, so `GET /api/v1/builds/android/{buildId}` takes an
+`ArtifactId` and a client never holds two identifiers for one file.
+
+### Nothing in this build produces an artifact
+
+There is no ingestion path: no executor message, no upload endpoint, no build
+hook writes an `artifacts` row. Every artifact this API can serve was created
+by a direct call to `store.create_artifact`, which today means a test fixture
+or an operator script. Ingestion is a future issue; the catalogue, the
+authorization and the download lifecycle are this one's.
+
+That is said out loud for the same reason "Counts read one entity, not three"
+is: a mobile client reading these endpoints on this deployment gets an empty
+list, and an empty list is worth knowing the reason for.
+`capabilities.artifactDownloads` is `true` because the **endpoints are
+served**, not because artifacts exist — the flag answers "does this server
+speak the artifact API", which is the question a client that would otherwise
+meet a `404` is asking.
+
+### The bytes are not behind the session token
+
+`POST .../{artifactId}/download-token` mints a short-lived bearer credential
+for exactly one artifact. `GET .../{artifactId}/download` accepts **that**
+credential and nothing else: it never looks at a session token and never
+consults the permission catalogue.
+
+The split exists because the phone does not do the transfer. Android hands a
+multi-megabyte download to the system downloader — a separate process with no
+access to the app's session — and giving it the session bearer would put the
+credential that can approve a sensitive task into a component whose only job is
+fetching a file.
+
+**The credential travels in `Authorization: Bearer`, never in the URL.** The
+design note for this issue floated `?token=…`; this codebase has already been
+burned by exactly that (issue #15: an executor's machine token reached the
+gateway log through a query string) and `security-standards.md` §2 forbids it —
+a query string reaches access logs, proxies, browser history and `Referer`. So
+the mint response carries a *path* with no credential in it, and the token
+separately.
+
+Five things narrow the credential, each named with the test that pins it —
+`gateway/app/api/routes/artifacts.py` carries the same list, and the two must
+not drift:
+
+- **bound to the artifact** — presenting it on another artifact is refused, so
+  a token for a public report cannot fetch a signed APK
+  (`test_artifacts.py::test_a_token_minted_for_one_artifact_is_refused_on_another`);
+- **bound to the minting account, re-read at download time** — an account the
+  operator disables (`::test_a_token_whose_account_was_disabled_stops_working`)
+  or narrows (`::test_a_token_stops_at_the_projects_the_account_still_has`)
+  after minting cannot still pull the bytes. Same rule refresh rotation already
+  applies to a grant;
+- **expires in minutes** — `CODEX_BRIDGE_ARTIFACT_DOWNLOAD_TOKEN_TTL_SECONDS`,
+  default 300, clamped to `[30, 3600]`
+  (`::test_an_expired_token_is_refused_with_the_typed_error`);
+- **dies with the sign-in that minted it** — `POST /api/v1/auth/revoke` deletes
+  the download tokens of that grant, because a sign-out that leaves an APK
+  streaming is the failure that endpoint exists to prevent
+  (`test_auth.py::test_signing_out_kills_a_download_token_minted_before_it`).
+  Scoped to the **grant**, not the actor: signing out of ChatGPT must not abort
+  a transfer the phone started, and an unauthenticated replay of a dead refresh
+  token must not reach a live grant's credentials;
+- **stored hashed** — through the same `shared.security.hash_token` the OAuth
+  access tokens use, so a reader of the database cannot download anything
+  (`::test_the_download_token_is_never_stored_in_the_clear`).
+
+Every refusal on the download endpoint is the same `401` with the same message
+— absent, unknown, expired, minted for another artifact, belonging to an
+account since disabled or narrowed, or killed by a sign-out. Distinguishing
+them tells a holder of a token they were never given whether it was ever real,
+and which artifact it was for. A revoked token's row is *deleted*, so it
+reaches the endpoint as "unknown" and needs no branch of its own.
+
+**A `401` here means "mint a new download token", not "refresh the session".**
+Everywhere else on this API it means the second thing, so a client running its
+usual refresh-and-retry interceptor on this response will loop. The contract
+says so in two machine-readable places: the operation declares its own
+`artifactDownloadToken` security scheme rather than `bearerAuth`, and its `401`
+is `DownloadTokenRejected` rather than the shared `Unauthenticated`.
+
+### The token is deliberately not single-use
+
+Issue #11 asks for range and resumable downloads in the same breath as
+short-lived authorization, and those two pull in opposite directions. A token
+consumed by the first request makes a resumed transfer impossible: the
+downloader would have to re-authenticate mid-stream, which is the thing this
+endpoint exists to avoid. **The lifetime is the control**, and it is short for
+that reason. `test_a_token_survives_reuse_inside_its_lifetime` pins the choice
+so it stays a decision on the record rather than becoming an accident.
+
+### Range requests
+
+A single `bytes=` range is honoured: `206` with `Content-Range` when it is
+satisfiable, `416` with `Content-Range: bytes */<size>` when it is well formed
+and starts past the end. Anything else — an unknown unit, a malformed value,
+more than one range, an inverted range — is **ignored** and the whole
+representation is served with `200`, which RFC 9110 §14.2 explicitly permits.
+Answering `416` to a header a client sent speculatively would break that client
+for no gain.
+
+### Retention is load-bearing, not a decorative timestamp
+
+Past `retainedUntil` the catalogue still lists the artifact — a client showing
+a stale entry deserves an explanation rather than a mystery `404` — and reports
+`retained: false`. Minting a token and serving the bytes both answer `409`. A
+retention field that only ever described something would be the always-null
+field this document refuses to publish, and `retained` is computed from the
+server's clock because a client comparing timestamps would disagree with the
+server that actually refuses the download.
+
+### Checksums and signing metadata come before the download
+
+`sha256` is on every artifact in the list, on the detail, and on the mint
+response. `android.signingFingerprint` is on every APK in the list and the
+detail — **not** on the mint response, which carries only what a downloader
+needs to fetch and verify bytes (`sizeBytes`, `sha256`, `contentType`). An
+earlier cut of this paragraph said "all three"; a council round checked the
+response and it has no `android` block, so a client reading the signer from it
+would have got nothing. Read the fingerprint from the catalogue, which is where
+the decision to download is made anyway. That is
+issue #11's acceptance criterion read literally: *before* download or install
+means in the catalogue, not only in the transfer, because a client decides
+whether to start a 60 MB download from what the list already told it. The
+download itself repeats the digest in `X-Artifact-Sha256`, unchanged by
+`Range`, so a client streaming to disk can verify without holding the
+catalogue response.
+
+A certificate fingerprint is public by construction and is not a credential:
+publishing it is what lets an operator refuse an APK signed by anything other
+than their own key.
+
+### The stored path never leaves the server
+
+`ArtifactModel.storage_path` is this table's `ProjectModel.path` — see
+§"Fields that must never ship". It is relative to `CODEX_BRIDGE_ARTIFACTS_ROOT`
+and is excluded from every response by construction, not by a filter applied
+late. `gateway/app/services/artifact_storage.py` is the only code that turns it
+into a real file, and it checks confinement twice:
+
+- **lexically, at the write** — an absolute path, a backslash, a colon, a `..`
+  or `.` segment, an empty segment or any character outside
+  `[A-Za-z0-9][A-Za-z0-9._-]*` is refused, so a traversing path never enters
+  the table;
+- **after resolution, at the read** — the candidate and the root are both
+  resolved and anything landing outside the root is refused. `Path.resolve`
+  follows symlinks, which is what catches a link planted inside the root
+  pointing at `/etc/shadow` — something no amount of string checking can see.
+
+A confined path with no regular file behind it is a typed `404` that names the
+artifact and never the path. Same answer for a path that stopped resolving
+inside the root: the caller has no business learning that a path exists at all,
+and the operator has the `requestId`.
+
+### Authorization
+
+Two catalogued actions, both at read scope: `artifacts.read` (list and read,
+including the Android endpoints) and `artifacts.download` (mint a download
+token). They are separate even though both require `codexbridge.read`, because
+a client decides whether to show a Download control separately from whether to
+show the catalogue — the same relationship `sessions.read` and
+`sessions.readLogs` already have. `GET /api/v1/auth/me` reports the split, so a
+deployment that later withholds bytes while still showing metadata needs no
+client change.
+
+Project scope is the same rule as sessions and conversations: applied to the
+query, never to the loaded rows, and an artifact in a project the caller cannot
+see answers a `404` that is byte-identical to the answer for an id that does
+not exist.
+
+### Deploy needs migration 0010
+
+`migrations/0010_artifacts.sql` creates `artifacts`, `android_builds` and
+`artifact_download_tokens`, plus the three indexes the catalogue's ordering and
+the token sweep read. Apply it with `python3 scripts/apply_migrations.py`.
+
+`schema_guard.REQUIRED_TABLES` names all three, and **that is documentation, not
+a boot gate** — a council round checked. `gateway/app/main.py` runs
+`Base.metadata.create_all` one statement before `check_schema`, and all three
+tables are declared on `Base`, so a gateway started against a database missing
+them creates them itself and the guard sees them present. This is true of every
+one of `REQUIRED_TABLES`' entries, not just #11's, and
+`tests/unit/test_schema_guard.py::test_required_tables_cannot_fire_at_boot_today`
+pins it so this paragraph cannot quietly become false again.
+
+What that costs, concretely: a deployment that skips the migration runs on the
+`create_all` schema instead of the shipped one — **no indexes**, a `content_type`
+column without its default, and no `schema_migrations` row for 0010, so a later
+migration's bookkeeping starts from a wrong premise. Nothing warns. Whether
+`check_schema` should move ahead of `create_all` (or `create_all` stop covering
+migration-owned tables) is a change to how every migration in this project is
+gated, not something issue #11 decides on the way past — it is flagged for the
+operator in `docs/issues/011-artifacts-downloads-apk/RESUME.md`.
+
+## Events and notifications (issue #13)
+
+`GET /api/v1/events/stream` (Server-Sent Events), `GET /api/v1/events` (the
+same events as an ordinary paged read), and `GET`/`PUT
+/api/v1/notifications/preferences`.
+
+### Why SSE, and why the polling endpoint is not a consolation prize
+
+SSE rather than WebSocket for three reasons, none of them "we had no
+WebSocket" — the gateway already speaks one at `/agent/ws`:
+
+- **Authentication.** Everything on this contract authenticates with
+  `Authorization: Bearer`. A browser or mobile WebSocket cannot set that
+  header on the handshake, so a WebSocket stream would need a second
+  authentication scheme: a token in the URL (forbidden — see
+  `.docs/agents/security-standards.md`) or a bespoke post-handshake auth
+  frame. SSE rides the scheme that already exists.
+- **Resume is in the transport.** `Last-Event-ID` is part of SSE. Issue #13's
+  "resume from the last acknowledged event" is the mechanism SSE was designed
+  around, with no application protocol on top.
+- **One direction is all this needs.** Nothing here asks the client to send
+  anything on the channel.
+
+`GET /api/v1/events` delivers the *same* events with the *same* ids. A client
+on a network that kills long-lived connections, or one in a background state
+where the platform will not hold a socket open, polls it and loses nothing.
+Both transports are first-class, and a client may move between them mid-stream
+because the position means the same thing on both.
+
+### The resume position is a public integer, not a cursor
+
+Every other collection here pages with an opaque signed cursor. This one does
+not, and that is deliberate rather than an oversight: the position is
+`Last-Event-ID`, which SSE puts on the wire and the client sends back
+verbatim. Wrapping the same position in an opaque cursor for the polling
+endpoint would publish two names for one place and make the two transports
+incompatible — a client could not hand a stream position to the fallback. The
+same reasoning `GET /api/v1/sessions/{sessionId}/logs` already applies to an
+append-only log.
+
+The id is monotonic but **not contiguous**: the underlying log also holds
+records that are never delivered as events. A skipped number is not a lost
+event. Loss is reported explicitly, and only explicitly — see below.
+
+`page.nextAfter` is the last id the page **loaded**, not the last id it
+returned. With a `type` filter the two differ, and reporting the last returned
+id would make the next request re-scan rows the filter already rejected —
+forever, when nothing in the tail matches.
+
+### No silent loss, in both directions
+
+Resume is `id > position`, so an event cannot be delivered twice or skipped
+while its record exists. The only way to lose one is for the record itself to
+be gone, and that is announced rather than papered over: the stream emits a
+`stream.gap` frame **before** delivering anything, and `GET /api/v1/events`
+returns a `gap` object beside its items. Delivering first and mentioning the
+gap afterwards would let a client act on a partial view believing it was
+continuous.
+
+Two reasons, and the second one matters as much as the first:
+
+- `beyond_retention` — the position's record is gone and the log moved past
+  it. `oldestAvailableId` says where to restart, because "you lost some" with
+  no position leaves a client guessing.
+- `cursor_ahead` — the position is beyond anything this log has ever held: a
+  position from another deployment, or a database restored from a backup older
+  than the client. Unsignalled, the stream would simply never deliver again,
+  which is the same silence in the other direction and much harder to diagnose
+  from a phone.
+
+Note what this build's retention actually does:
+`store.purge_expired_audit_events` deletes authentication rows and nothing
+else, so no domain event has ever been purged here and `beyond_retention`
+cannot be reached today. The signal exists so that a future retention policy
+over domain rows — an operator's decision, not this code's — cannot cause a
+silent loss the day it is switched on.
+
+### Authorization is by project, and it is re-checked while the stream runs
+
+A stream opened at 09:00 and still open at 17:00 authorized once, and
+everything after that was delivered on an eight-hour-old decision. This one
+re-resolves the bearer token on **every poll**: a revoked token, an expired
+token, a disabled account and a project removed from the actor's
+`allowedProjects` all take effect within one poll interval. The first three end
+the stream with `stream.closed` and `reason: unauthenticated`; the fourth
+simply stops delivering that project. **A client must not treat an open
+connection as proof it is still authorized.**
+
+Project scope is enforced on the query, like everywhere else here, so a page is
+never a filtered-down view of rows the caller was allowed to load. `?project=`
+only ever *narrows*: naming a project outside `allowedProjects` matches
+nothing.
+
+An event whose project cannot be derived is delivered to **nobody**,
+administrators included. `audit_events` has no project column — a row's project
+comes from the entity it names — and an event that belongs to no project cannot
+honestly be shown as belonging to one. Fail closed: an entity type nothing
+teaches the derivation about is invisible until someone does.
+
+### Authentication and security events are not on this surface at all
+
+Sign-in, failed sign-in and credential revocation are recorded in the same
+audit log these events are derived from. They are **excluded by construction**,
+not by a filter someone has to remember: they carry a user id where a project
+would be, so they are outside the set of entity types this surface can deliver.
+Streaming them would tell any token holder — including one belonging to a
+different person — when the operator signs in. Notification-preference changes
+are excluded the same way.
+
+### The summary is a whitelist; the stored payload never ships
+
+The internal audit payload is written by thirty-five call sites that were never
+audited for what they may contain: `actor_email`, `requested_by_email`,
+free-text `reason` and `error` strings from an executor, `context` blobs.
+§"Fields that must never ship" applies to every byte of it and no existing
+sanitizer covers a response body.
+
+So it is never passed through. Each event type names the handful of payload
+keys it may read, free text goes through the same `redact` the session-log
+endpoint uses and is truncated to a notification line, and a key nobody
+whitelisted does not leave the process. Adding a field to an audit payload
+therefore cannot leak it — the default is exclusion. Treat `summary` as a
+notification line, never as data: fetch the entity for authoritative state.
+
+### One change is one event, not three
+
+A session, a mission and a decision are three vocabularies over the same
+underlying row (§"Missions (issue #7)"). This surface does not triple every
+event to match. It emits one, with `entity.kind` naming the vocabulary that
+fits what happened — `decision` for the approval lifecycle, `session` for the
+run's own — and the id is the same id, so `GET /api/v1/sessions/{id}` and
+`GET /api/v1/missions/{id}` both accept it.
+
+One audit record forks on its content: a submission held for approval is a
+`decision.requested`, and every other submission is a `session.created`. Both
+are the same recorded row, so the fork lives in one place rather than in a
+second writer nobody would remember to call.
+
+### `MobileEventType` is closed, and already declares what #11 will emit
+
+A client may switch over it exhaustively, which makes adding a value a
+breaking change under §"What is a breaking change". `artifact.created`,
+`artifact.updated` and `androidBuild.status_changed` are therefore declared
+**now**, by a build that produces none of them — there is no artifact or
+Android build record until issue #11. Declaring them costs a client nothing
+(they never arrive) and saves a `v2` when they do. A `?type=` filter naming one
+is accepted and matches nothing, rather than answering `400`; rejecting it
+would make the declared values unusable, which is the opposite of why they were
+declared.
+
+### Notification preferences are a hook, not a filter
+
+`GET`/`PUT /api/v1/notifications/preferences` is one document per actor,
+always the caller's own — there is no `userId` parameter and no administrator
+override, because a preference document is personal data and an endpoint that
+could read another account's would be a disclosure with no product behind it.
+
+**There is no push transport in this build.** `pushDeliveryAvailable` is
+`false` and nothing reads these rows to decide delivery. They are stored so the
+choice survives a reinstall and so a later push integration has something to
+read.
+
+**They do not filter `GET /api/v1/events/stream`.** A client that opened the
+stream asked for the stream; withholding events from it because of a preference
+set on another device is how a phone silently misses the decision its operator
+was waiting for — and the failure would be indistinguishable from a quiet
+system. Narrow a live connection with that endpoint's `?type=` instead, which
+is per-connection state and cannot change underneath it.
+
+**A session that predates the scope grant keeps a token that cannot write.** A
+principal's scopes are snapshotted into the token row at sign-in, and
+`POST /api/v1/auth/refresh` rotates with `granted & user.scopes &
+server_allowlist` — an intersection, so it can only ever narrow. Adding
+`codexbridge.notifications.manage` to an account therefore does **not** reach a
+phone that is already signed in: it keeps answering `403` on this endpoint,
+through every refresh, until the absolute session lifetime expires or the user
+signs in again. That is the deliberate behaviour of a rotation that never
+escalates — a stolen refresh token must not be able to widen itself — and the
+cost is stated here rather than discovered. An operator granting a new scope to
+an existing user should expect to tell them to sign in again; a client seeing
+`403` on an action `GET /api/v1/auth/me` also reports as not allowed should
+offer re-authentication, not an error.
+
+`PUT` is a whole-document replacement, so it is idempotent by construction:
+there is no `Idempotency-Key` (nothing to duplicate) and no `ETag`/`If-Match`
+(the only writer of a row is the actor it belongs to, so there is no concurrent
+third party for an optimistic check to protect against — the same reasoning
+§"No `revision`, no `ETag`, no `If-Match`" gives for conversations). Reading
+needs only `codexbridge.read`; writing needs
+`codexbridge.notifications.manage`, separate on purpose so an operator can
+grant a phone the stream without granting it the ability to rewrite what the
+account is notified about.
+
+### Limits, and what the rate limiter does not bound
+
+The limiter counts requests per window. One accepted request to
+`/events/stream` becomes a connection held open for minutes that takes a
+database session on every poll, so the endpoint that is cheapest per request is
+the one that can exhaust the pool the rest of the API shares. The gateway
+therefore bounds how many streams it holds open at once and answers `503` with
+`Retry-After` at that ceiling — refusing rather than queueing, because a
+refused client reconnects with its `Last-Event-ID` and loses nothing while a
+queued one holds the connection it was refused for. Each stream's lifetime is
+bounded too, and ends with `stream.closed` and `reason: max_duration`; every
+ending is a reconnect, and every reconnect is exact.
+
+`?type=` is validated before the first byte. Once a `text/event-stream` body
+has started there is no status code left to change, and a client that
+misspelled a filter would otherwise see an open, empty, permanently silent
+connection instead of a `400`.
 
 ---
 
@@ -1196,16 +1673,38 @@ python3 scripts/apply_migrations.py
 
 ## Getting the contract to the mobile repository
 
-Today there is none: the document lives in this repository and a consumer copies
-it by hand. Nothing publishes it, nothing checksums it, and nothing detects that
-a copy has diverged — so the drift gate protects the *gateway ↔ document* pair
-and leaves the *document ↔ mobile client* pair, which is the pair this epic
-exists for, unguarded.
+`scripts/publish_contract.py` writes the document to `contract/<version>/` with
+a `manifest.json` carrying its SHA-256, and refreshes `contract/index.json`. The
+mechanics, the consumer-side fetch-and-verify commands and the immutability rule
+are in **[`testing.md`](./testing.md)**.
 
-That gap is issue #14's scope ("publish a machine-consumable contract artifact
-for the mobile project", "the mobile repository can consume a pinned contract
-version"). It is recorded here rather than left implicit so that nobody reads
-the `info.version` field as a working pin before #14 lands.
+**The producing half is done; the consuming half is not.** This repository now
+publishes a pinnable, checksummed artifact and refuses to let it drift.
+`EDortta/CodexBridgeMobile` does **not** consume it yet: it has no `contract/`
+directory, fetches nothing, verifies no digest, and still cites this document by
+hand. And **no branch carries `contract/` yet** — not `development`, and `main`
+has no `docs/api/` at all; it exists only on the branch that introduced it.
+Nothing here is a pin until this work merges *and* the mobile build does the
+verifying, and the second half is a change in the other repository.
+
+`tests/contract/test_published_contract_artifact.py` fails when the published
+copy falls behind the document, and separately when a version that was already
+published no longer hashes to its own manifest — two failures with opposite
+remedies, which is why they are reported apart.
+
+Before this existed the document lived here and a consumer copied it by hand:
+nothing published it, nothing checksummed it, and nothing detected a diverged
+copy, so the drift gate protected the *gateway ↔ document* pair and left the
+*document ↔ mobile client* pair — the pair this epic exists for — unguarded.
+
+**One hole is left open on purpose, and it is not small.** Republishing an
+edited document under the *same* `info.version` rewrites both the copy and its
+manifest, so the digest agrees again and every gate goes green while the bytes
+behind a number a client pinned have changed. Only the version-control history
+shows it. Enforcing "every change moves `info.version`" in the publisher is the
+fix; it was left out here because doing it would have forced a version bump that
+belongs to the endpoint work in flight, not to this gate. Until then: **review
+any diff that touches `contract/` without adding a directory.**
 
 ---
 
@@ -1228,6 +1727,11 @@ CI runs the same suite on every push and pull request
 only when a human remembered to — which is the same reliability as no gate at
 all, and it went unnoticed until adversarial review pointed at the empty
 `.github/` directory.
+
+`tests/contract` holds six gates — one per file in it — each guarding one pair,
+and a green run on one says nothing about the others. The table naming them, and
+what each one cannot see, is in [`testing.md`](./testing.md) — read it before
+concluding from a green build that the implementation matches the contract.
 
 Changing an endpoint means changing this document **first**. The drift test
 exists so that "the implementation and the contract disagree" is a red test and

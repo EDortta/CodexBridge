@@ -85,6 +85,69 @@ async def test_dispatch_failure_returns_task_result(tmp_path: Path) -> None:
     assert result.payload["error"] == "codex-not-found"
 
 
+@pytest.mark.asyncio
+async def test_an_unregistered_project_is_still_refused_when_auto_project_root_is_unset(tmp_path: Path) -> None:
+    """Default behavior, unchanged by the new opt-in setting existing at
+    all: with `auto_project_root` unset (the shipped default), an unknown
+    `project_id` is refused exactly as before."""
+    service = AgentService(AgentSettings())
+    assert service.settings.auto_project_root is None
+    websocket = DummyWebSocket()
+    envelope = AgentEnvelope(
+        message_id="dispatch-2",
+        executor_id="devel3",
+        sent_at=datetime.now(timezone.utc),
+        type=AgentMessageType.TASK_DISPATCH,
+        payload={
+            "task_id": "task-2",
+            "project_id": "not-registered",
+            "instruction": "Analyze repository",
+            "mode": "analyze",
+            "timeout_seconds": 60,
+        },
+    )
+
+    await service._handle_dispatch(websocket, envelope)
+
+    result = AgentEnvelope.model_validate_json(websocket.messages[-1])
+    assert result.payload["error"] == "unknown_project"
+
+
+@pytest.mark.asyncio
+async def test_auto_project_root_resolves_a_project_the_static_allowlist_does_not_know(tmp_path: Path) -> None:
+    """WK-20260830-chatgpt-entry-provider-and-delivery: with the opt-in root
+    set, a project_id absent from `service.projects` is still resolved as
+    long as a matching real repo exists under that root -- proven here by
+    reaching past `unknown_project` into the runner (which then fails for an
+    unrelated, expected reason: no real `codex` binary in this test)."""
+    project_dir = tmp_path / "auto-found"
+    (project_dir / ".git").mkdir(parents=True)
+
+    service = AgentService(AgentSettings(auto_project_root=str(tmp_path)))
+    assert "auto-found" not in service.projects  # not statically registered -- must come from the fallback
+    service.runners._runners["codex"] = FailingRunner()
+    websocket = DummyWebSocket()
+    envelope = AgentEnvelope(
+        message_id="dispatch-3",
+        executor_id="devel3",
+        sent_at=datetime.now(timezone.utc),
+        type=AgentMessageType.TASK_DISPATCH,
+        payload={
+            "task_id": "task-3",
+            "project_id": "auto-found",
+            "instruction": "Analyze repository",
+            "mode": "analyze",
+            "timeout_seconds": 60,
+        },
+    )
+
+    await service._handle_dispatch(websocket, envelope)
+
+    result = AgentEnvelope.model_validate_json(websocket.messages[-1])
+    assert result.payload["error"] != "unknown_project"
+    assert result.payload["error"] == "codex-not-found"
+
+
 class _RecordingConnect:
     """Captures how the agent opens the socket, then ends the loop.
 
