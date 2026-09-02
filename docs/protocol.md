@@ -66,11 +66,11 @@ Upgrade: websocket
 X-Executor-Token: <token de máquina>
 ```
 
-Compatibilidade: a forma antiga `?token=...` **continua aceita por uma release**,
-para que gateway e agente possam ser publicados em momentos diferentes. Quando ela
-é usada, o gateway emite um `WARNING` de depreciação — sem o valor do token. O
-header vence quando os dois estão presentes, para que um agente já corrigido não
-seja rebaixado por um parâmetro remanescente em proxy ou unit file.
+A forma antiga `?token=...` **foi removida** (a release de compatibilidade que
+#15 concedeu já passou). Token só na URL agora é o mesmo que token nenhum: o
+handshake fecha com `4401`, antes de qualquer consulta ao registro. Um executor
+que ainda mande o parâmetro precisa ser atualizado — o agente envia o header
+desde a mesma release (`agent/codex_bridge_agent/service.py`).
 
 Códigos de fechamento no handshake:
 
