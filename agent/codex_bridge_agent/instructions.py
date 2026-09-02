@@ -62,6 +62,47 @@ def _number_candidates(number: str) -> set[str]:
     return candidates
 
 
+_LEADING_NUMBER = re.compile(r"^(\d{1,6})-")
+
+
+def list_used_issue_numbers(project_root: Path) -> set[int]:
+    """Every `NNN` already in use under `docs/issues/`, across the three
+
+    layouts `resolve_issue_text` tolerates above (a bare numbered file, a
+    whole numbered folder, and a numbered file nested one level under
+    `<epic>/issues/`). WK-20260902-issue-materialize / issue #78: used by
+    `agent/codex_bridge_agent/issue_materialize.py` to pick the next free
+    number when publishing a new epic or issue -- the SAME layout
+    understanding as `resolve_issue_text`, so a number this picks can never
+    collide with, or be ambiguous against, something that function would
+    later resolve. This is an enumeration (every used number), while
+    `resolve_issue_text` is a lookup (does one specific number exist) --
+    different shapes of query over the same directory, kept in this one
+    module rather than duplicated into a second scanner elsewhere.
+    """
+    docs_issues = project_root / "docs" / "issues"
+    used: set[int] = set()
+    if not docs_issues.is_dir():
+        return used
+    for entry in docs_issues.iterdir():
+        # Layout B (a numbered folder) and Layout C (a bare numbered file)
+        # are both direct children of docs/issues/, so one pass over
+        # `iterdir()` catches both.
+        match = _LEADING_NUMBER.match(entry.name)
+        if match:
+            used.add(int(match.group(1)))
+    for path in docs_issues.glob("*/issues/*.md"):
+        # Layout A: docs/issues/<epic-slug>/issues/NNN-<slug>.md. The pattern
+        # itself contains no literal `[`/`]`, so a status-suffixed filename
+        # like `NNN-slug-[ready].md` matches this glob normally -- brackets
+        # only need special handling where they appear INSIDE a pattern
+        # string, never inside a matched filename.
+        match = _LEADING_NUMBER.match(path.name)
+        if match:
+            used.add(int(match.group(1)))
+    return used
+
+
 def resolve_issue_text(project_root: Path, issue_ref: str) -> str:
     """Returns the raw text of the issue `issue_ref` names, or raises
 

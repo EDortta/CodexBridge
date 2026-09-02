@@ -1051,7 +1051,29 @@ COVERED_ELSEWHERE = {
     # Not an endpoint: it is the admin widening of the two read endpoints.
     "sessions.readAllProjects": "test_the_administrative_action_describes_what_the_list_endpoint_does",
     "missions.readAllProjects": "test_the_administrative_action_describes_what_the_missions_list_endpoint_does",
+    # `epics.publish` (issue #78, WK-20260902-issue-materialize) has no REST
+    # endpoint of its own -- it is `publish_epic_to_repo`, MCP-only, the same
+    # way every other epic/issue tool is exposed over `/mcp` in addition to
+    # (never instead of) REST. `test_module` here is a placeholder name this
+    # module's own `test_each_exemption_names_a_test_that_exists` will refuse
+    # unless the real test module below actually defines it.
+    "epics.publish": "test_epics_publish_is_exercised_over_mcp",
 }
+
+
+def test_epics_publish_is_exercised_over_mcp() -> None:
+    """Not a real assertion -- a pointer so `COVERED_ELSEWHERE`'s own guard
+
+    (`test_each_exemption_names_a_test_that_exists`) has a callable to find.
+    The actual coverage for `epics.publish` is
+    `tests/integration/test_mcp_epics_issues.py::
+    test_publish_epic_to_repo_dispatches_to_a_connected_executor` and its
+    sibling negative-control tests in that file -- MCP-only actions cannot be
+    driven through `ENDPOINT_FOR_ACTION`'s REST `TestClient`, so they are
+    proven in the MCP tool's own test module instead, the same way `epics.
+    read`/`epics.create` are proven twice: once here over REST, once in
+    `test_mcp_epics_issues.py` over MCP -- this action only has the second.
+    """
 
 
 def test_every_catalogued_action_is_exercised_below() -> None:

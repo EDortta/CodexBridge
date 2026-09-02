@@ -720,6 +720,57 @@ async def handle_task_cancelled(session: AsyncSession, envelope: AgentEnvelope) 
     await hub.mark_task_finished(envelope.executor_id, task_id)
 
 
+async def handle_issue_materialize_result(session: AsyncSession, envelope: AgentEnvelope) -> None:
+    """Handles one `issue.materialize_result` from the `/agent/ws` message loop.
+
+    Issue #78, Commit 2. Unlike `TASK_RESULT`, there is no `TaskModel` row
+    behind this message and no executor concurrency slot to release
+    (`publish_epic_to_repo`, `gateway/app/mcp/server.py`, sent this directly
+    via `hub.send`) -- only `store.apply_epic_materialization` to run on
+    success, or an audit event on a typed failure. Standalone for the same
+    reason `handle_task_cancelled` is: directly testable against a
+    constructed envelope, without driving a real websocket through it.
+    """
+    payload = envelope.payload
+    epic_id = payload.get("epic_id")
+    if epic_id is None:
+        logging.getLogger(__name__).warning(
+            "issue.materialize_result with no epic_id from executor %s", envelope.executor_id
+        )
+        return
+
+    if not payload.get("ok", False):
+        await record_event(
+            session, "epic", epic_id, "epic.materialize_failed",
+            {"executor_id": envelope.executor_id, "error": payload.get("error")},
+        )
+        await session.commit()
+        return
+
+    epic = await store.apply_epic_materialization(
+        session,
+        epic_id=epic_id,
+        epic_path=payload["epic_path"],
+        epic_revision=int(payload["epic_revision"]),
+        written_paths=payload.get("written_paths", {}),
+        issue_revisions=payload.get("issue_revisions", {}),
+    )
+    if epic is None:
+        logging.getLogger(__name__).warning(
+            "issue.materialize_result for unknown epic %s from executor %s", epic_id, envelope.executor_id
+        )
+        return
+    await record_event(
+        session, "epic", epic_id, "epic.materialized",
+        {
+            "executor_id": envelope.executor_id,
+            "epic_path": payload["epic_path"],
+            "file_count": len(payload.get("written_paths", {})),
+        },
+    )
+    await session.commit()
+
+
 @app.websocket("/agent/ws")
 async def agent_ws(
     websocket: WebSocket,
@@ -810,5 +861,7 @@ async def agent_ws(
                     await notify_task_finished(session, task, settings)
                 elif envelope.type == AgentMessageType.TASK_CANCELLED:
                     await handle_task_cancelled(session, envelope)
+                elif envelope.type == AgentMessageType.ISSUE_MATERIALIZE_RESULT:
+                    await handle_issue_materialize_result(session, envelope)
     except WebSocketDisconnect:
         await hub.unregister(executor_id)

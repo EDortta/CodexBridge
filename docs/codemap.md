@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-epic-update-and-move`
-> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-epic-update-and-move map`
+> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-issue-materialize`
+> Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge--WK-20260902-issue-materialize map`
 
 ## Summary
 
-- 127 file(s) · 1222 symbol(s) indexed
-- Languages: config (2), python (123), shell (2)
+- 133 file(s) · 1272 symbol(s) indexed
+- Languages: config (2), python (129), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -39,6 +39,7 @@ agent/
     git_delivery.py  — "The commit/push step a completed task's own `delivery` block authorizes."
     git_tools.py
     instructions.py  — "Resolves `issue_ref` to file content, and builds the provider prompt with"
+    issue_materialize.py  — "Writes one epic's rendered markdown to disk -- issue #78, Commit 2c."
     runners/
       __init__.py
       base.py  — "The provider-neutral surface the executor dispatches a task through."
@@ -104,6 +105,7 @@ gateway/
       conversation_types.py  — "Closed vocabulary for conversation context references, and their error."
       email_templates.py  — "Branded HTML for every CodexBridge transactional email."
       google_calendar.py  — "A Google Calendar client for reminders, built to be tested without ever"
+      issue_render.py  — "Pure markdown renderer for epic materialization -- issue #78, Commit 2a."
       issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
       metrics.py
       notify.py  — "Out-of-band completion notification by email."
@@ -140,6 +142,7 @@ tests/
     test_decisions.py  — "Operational decisions — issue #6."
     test_dispatch_payload_engine_and_delivery.py  — "`AgentHub.dispatch_next` forwards engine/issue_ref/delivery to the executor."
     test_epics_issues.py  — "Epics and issues — issue #8."
+    test_issue_materialize_result.py  — "`issue.materialize_result` handling in the `/agent/ws` message loop --"
     test_mcp_epics_issues.py  — "The epics/issues MCP tools -- issue #78."
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
     test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
@@ -156,6 +159,7 @@ tests/
     test_agent_auth.py  — "Credential resolution for the `/agent/ws` handshake — issue #15."
     test_agent_auto_project.py  — "`agent.codex_bridge_agent.config.resolve_auto_project` -- the opt-in"
     test_agent_service.py
+    test_agent_service_materialize.py  — "`AgentService._handle_materialize` -- the `ISSUE_MATERIALIZE` handler on"
     test_apply_migrations.py  — "The migration runner, exercised against real throwaway databases."
     test_capability_vocabulary.py  — "The capability vocabulary issue #73's authorization plane is built on."
     test_claude_runner.py  — "ClaudeRunner's pure logic: command assembly, NDJSON extraction, sandbox mapping."
@@ -166,6 +170,8 @@ tests/
     test_git_delivery.py  — "`git_delivery.deliver_changes` against real throwaway git repos."
     test_google_calendar.py  — "`gateway.app.services.google_calendar`, without ever touching Google."
     test_instructions.py  — "`resolve_issue_text` and `build_task_instruction`."
+    test_issue_materialize.py  — "`materialize_epic` and the shared numbering scanner -- issue #78, Commit 2c."
+    test_issue_render.py  — "`render_epic_markdown` -- issue #78, Commit 2a."
     test_main_import.py
     test_notify.py  — "`gateway.app.services.notify` -- the task-finished completion email."
     test_policy.py
@@ -206,8 +212,18 @@ tests/
 
 - **`IssueResolutionError`** *(class)* — "A typed reason `issue_ref` could not be turned into file content."
   - `__init__(self, code)` *(method)*
+- `list_used_issue_numbers(project_root)` — "Every `NNN` already in use under `docs/issues/`, across the three"
 - `resolve_issue_text(project_root, issue_ref)` — "Returns the raw text of the issue `issue_ref` names, or raises"
 - `build_task_instruction()` — "Assembles the final provider prompt, keeping the operator's own words"
+
+### `agent/codex_bridge_agent/issue_materialize.py`
+
+> Writes one epic's rendered markdown to disk -- issue #78, Commit 2c.
+
+- **`MaterializeError`** *(class)* — "A typed reason a `MaterializeRequest` could not be written."
+  - `__init__(self, code)` *(method)*
+- **`MaterializeOutcome`** *(class)*
+- `materialize_epic(project_root, request)` — "Writes `request.files` under `project_root/docs/issues/`, allocating"
 
 ### `agent/codex_bridge_agent/runners/base.py`
 
@@ -598,6 +614,7 @@ tests/
 - `mcp_endpoint(request, authorization, session)` *(async function)*
 - `handle_task_ack(session, envelope)` *(async function)* — "Handles one `task.ack` from the `/agent/ws` message loop."
 - `handle_task_cancelled(session, envelope)` *(async function)* — "Handles one `task.cancelled` ack from the `/agent/ws` message loop."
+- `handle_issue_materialize_result(session, envelope)` *(async function)* — "Handles one `issue.materialize_result` from the `/agent/ws` message loop."
 - `agent_ws(websocket, executor_id, token, x_executor_token)` *(async function)*
 
 ### `gateway/app/mcp/server.py`
@@ -677,6 +694,14 @@ tests/
 - `cancel_reminder()` *(async function)*
 - `check_access(config)` *(async function)* — "Confirms the configured credential can actually read the configured"
 
+### `gateway/app/services/issue_render.py`
+
+> Pure markdown renderer for epic materialization -- issue #78, Commit 2a.
+
+- `epic_directory_slug(epic)` — "The `<epic-slug>-[<status>]` component of the epic's directory name."
+- `issue_relative_key(issue)` — "The `issues/<issue_id>/<task-slug>-[<status>].md` key for one issue."
+- `render_epic_markdown(epic, issues)` — "Relative path -> content, for every file one epic materializes to."
+
 ### `gateway/app/services/issue_types.py`
 
 > Closed vocabularies for epics and issues, and the error they fail with.
@@ -755,6 +780,7 @@ tests/
 - `list_issues_page(session)` *(async function)*
 - `update_issue(session, issue_id)` *(async function)*
 - `link_issue_to_epic(session)` *(async function)* — "Attach `issue_id` to `epic_id`. Both must already exist in one project."
+- `apply_epic_materialization(session)` *(async function)* — "Records a successful `ISSUE_MATERIALIZE_RESULT` -- issue #78, Commit 2."
 - `create_conversation(session)` *(async function)* — "Create a conversation from an already-resolved, already-authorized context."
 - `get_conversation(session, conversation_id)` *(async function)*
 - `get_conversation_for_projects(session, conversation_id, project_ids)` *(async function)* — "A conversation the caller may see, or None. Mirrors `get_epic_for_projects`."
@@ -829,6 +855,7 @@ tests/
 - **`ProjectRegistration`** *(class)*
 - **`ExecutorRegistration`** *(class)*
 - **`DeliveryRequest`** *(class)* — "What the requester authorized the executor to do with git, once a task"
+- **`MaterializeRequest`** *(class)* — "What `ISSUE_MATERIALIZE` asks the executor to write to disk, for one"
 - **`SubmitTaskRequest`** *(class)*
 - **`ContinueSessionRequest`** *(class)*
 - **`AgentEnvelope`** *(class)*
@@ -1032,6 +1059,7 @@ tests/
 - `test_me_reports_the_actor_and_its_projects(api)` *(async function)*
 - `test_me_marks_an_admin_as_seeing_every_project(api)` *(async function)*
 - `test_me_separates_read_operational_and_administrative(api)` *(async function)* — "The three classes the issue asks for, reported per action."
+- `test_epics_publish_is_exercised_over_mcp()` — "Not a real assertion -- a pointer so `COVERED_ELSEWHERE`'s own guard"
 - `test_every_catalogued_action_is_exercised_below()` — "A new action must extend the table, or it ships unchecked."
 - `test_each_exemption_names_a_test_that_exists()` — "An exemption pointing at nothing is an exemption with no coverage behind it."
 - `test_the_guard_flags_a_new_administrative_action(monkeypatch)` — "The guard is only worth having if it fires — so fire it."
@@ -1206,11 +1234,27 @@ tests/
 - `test_update_epic_rejects_an_unknown_status(api)` *(async function)*
 - `test_a_reader_cannot_update_an_epic(api)` *(async function)*
 
+### `tests/integration/test_issue_materialize_result.py`
+
+> `issue.materialize_result` handling in the `/agent/ws` message loop --
+
+- `factory()` *(async function)*
+- `test_a_successful_result_records_materialized_path_on_epic_and_issue(factory)` *(async function)* — "Positive control for the failure/unknown-epic tests below."
+- `test_a_failed_result_does_not_touch_materialized_path(factory)` *(async function)*
+- `test_a_result_for_an_unknown_epic_does_not_raise(factory)` *(async function)*
+- `test_a_result_with_no_epic_id_is_ignored_not_raised(factory)` *(async function)*
+- `test_apply_epic_materialization_ignores_non_issue_keys_and_unknown_issue_ids(factory)` *(async function)* — "Positive control: the real issue id updates; two adversarial-ish"
+
 ### `tests/integration/test_mcp_epics_issues.py`
 
 > The epics/issues MCP tools -- issue #78.
 
 - **`DummyHub`** *(class)*
+  - `is_connected(self, executor_id)` *(method)*
+  - `dispatch_next(self, executor_id)` *(async method)*
+  - `send(self, executor_id, envelope)` *(async method)*
+- **`RecordingHub`** *(class)* — "A hub with a caller-controlled set of connected executors, recording"
+  - `__init__(self, connected)` *(method)*
   - `is_connected(self, executor_id)` *(method)*
   - `dispatch_next(self, executor_id)` *(async method)*
   - `send(self, executor_id, envelope)` *(async method)*
@@ -1240,6 +1284,12 @@ tests/
 - `test_move_issue_to_epic_with_a_stale_expected_revision_is_refused(env)` *(async function)*
 - `test_move_issue_to_epic_from_a_foreign_project_is_unknown_epic(env)` *(async function)*
 - `test_a_retried_move_does_not_move_the_issue_twice(env)` *(async function)*
+- `test_publish_epic_to_repo_dispatches_to_a_connected_executor(env)` *(async function)* — "Positive control for the two `_not_connected`/`_not_onboarded` tests below."
+- `test_publish_epic_to_repo_with_no_connected_executor_is_a_typed_error(env)` *(async function)*
+- `test_publish_epic_to_repo_for_a_project_no_executor_allows_is_project_not_onboarded(env)` *(async function)*
+- `test_publish_epic_to_repo_unknown_epic_is_404(env)` *(async function)*
+- `test_publish_epic_to_repo_republish_carries_existing_path(env)` *(async function)*
+- `test_publish_epic_to_repo_requires_write_scope(env)` *(async function)*
 
 ### `tests/integration/test_mcp_reminders.py`
 
@@ -1605,6 +1655,18 @@ tests/
 - `test_handle_dispatch_sends_workspace_write_for_a_write_mode_task(tmp_path)` *(async function)*
 - `test_handle_dispatch_honours_the_machine_level_read_only_override(tmp_path)` *(async function)* — "A write-mode task still only gets `read-only` when this executor's own"
 
+### `tests/unit/test_agent_service_materialize.py`
+
+> `AgentService._handle_materialize` -- the `ISSUE_MATERIALIZE` handler on
+
+- **`DummyWebSocket`** *(class)*
+  - `__init__(self)` *(method)*
+  - `send(self, payload)` *(async method)*
+- `test_materialize_writes_files_and_reports_success(tmp_path)` *(async function)* — "Positive control for the three failure-mode tests below."
+- `test_materialize_for_an_unknown_project_reports_a_typed_error(tmp_path)` *(async function)*
+- `test_materialize_with_a_malformed_payload_reports_a_typed_error(tmp_path)` *(async function)*
+- `test_materialize_republish_with_a_missing_existing_path_reports_a_typed_error(tmp_path)` *(async function)*
+
 ### `tests/unit/test_apply_migrations.py`
 
 > The migration runner, exercised against real throwaway databases.
@@ -1787,6 +1849,30 @@ tests/
 - `test_a_prefix_of_a_longer_number_is_not_matched(tmp_path)` — "Globbing "65-*" must not accidentally match a "650-..." folder."
 - `test_build_task_instruction_without_an_issue_has_no_untrusted_block()`
 - `test_build_task_instruction_separates_operator_words_from_issue_content()`
+
+### `tests/unit/test_issue_materialize.py`
+
+> `materialize_epic` and the shared numbering scanner -- issue #78, Commit 2c.
+
+- `test_list_used_issue_numbers_covers_all_three_layouts(tmp_path)`
+- `test_list_used_issue_numbers_empty_when_docs_issues_missing(tmp_path)`
+- `test_materialize_epic_allocates_the_next_free_number(tmp_path)`
+- `test_allocate_dir_retries_past_a_real_collision(tmp_path)` — "Direct test of the atomic-creation retry loop itself -- the exact"
+- `test_allocate_file_retries_past_a_real_collision(tmp_path)` — "Same mechanism, for an issue file -- `os.open(..., O_CREAT|O_EXCL)`"
+- `test_materialize_epic_survives_a_numbering_race_end_to_end(tmp_path, monkeypatch)` — "`materialize_epic` wired end-to-end against a numbering scan that"
+- `test_materialize_epic_refuses_a_traversing_existing_path(tmp_path)`
+- `test_materialize_epic_refuses_a_missing_existing_path(tmp_path)`
+- `test_materialize_epic_republish_updates_in_place_and_adds_new_issues(tmp_path)`
+
+### `tests/unit/test_issue_render.py`
+
+> `render_epic_markdown` -- issue #78, Commit 2a.
+
+- `test_epic_directory_slug_bakes_title_and_status_suffix_together()`
+- `test_issue_relative_key_embeds_the_issue_id_as_a_correlation_segment()`
+- `test_render_epic_markdown_exact_bytes_for_epic_and_two_issues()`
+- `test_render_epic_markdown_with_no_issues_and_no_description()`
+- `test_render_epic_markdown_is_deterministic_regardless_of_input_order()`
 
 ### `tests/unit/test_main_import.py`
 

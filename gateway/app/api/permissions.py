@@ -239,6 +239,19 @@ EPICS_LINK_ISSUE = Action(
     summary="Attach an issue to an epic.",
 )
 
+# Issue #78, WK-20260902-issue-materialize: dispatches a write to the
+# PROJECT's own repository (via a connected executor), not just this
+# gateway's database -- still classified OPERATIONAL, same scope as every
+# other epic/issue write, because the authority being exercised is the same
+# "change this project's plan" one; it is the DESTINATION that is new, not
+# the permission.
+EPICS_PUBLISH = Action(
+    name="epics.publish",
+    category=OPERATIONAL,
+    scope=ISSUES_WRITE_SCOPE,
+    summary="Materialize an epic and its issues as versioned files in the project's own repository.",
+)
+
 CONVERSATIONS_READ = Action(
     name="conversations.read",
     category=READ,
@@ -283,6 +296,7 @@ CATALOGUE: tuple[Action, ...] = (
     ISSUES_CREATE,
     ISSUES_UPDATE,
     EPICS_LINK_ISSUE,
+    EPICS_PUBLISH,
     CONVERSATIONS_CREATE,
     CONVERSATIONS_POST_MESSAGE,
     SESSIONS_READ_ALL_PROJECTS,

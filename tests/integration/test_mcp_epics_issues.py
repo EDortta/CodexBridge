@@ -36,7 +36,7 @@ from gateway.app.db.base import Base
 from gateway.app.db.session import get_session
 from gateway.app.mcp.server import handle_mcp_call
 from gateway.app.services import store
-from shared.protocol import ISSUE_REF_PATTERN, ExecutorRegistration, ProjectRegistration
+from shared.protocol import AgentMessageType, ISSUE_REF_PATTERN, ExecutorRegistration, ProjectRegistration
 
 
 class DummyHub:
@@ -48,6 +48,28 @@ class DummyHub:
 
     async def send(self, executor_id: str, envelope):
         pass
+
+
+class RecordingHub:
+    """A hub with a caller-controlled set of connected executors, recording
+
+    every `send`. Used only by the `publish_epic_to_repo` tests below --
+    every other tool in this file is indifferent to `is_connected`, so the
+    module-wide `DummyHub` (always disconnected) stays the default.
+    """
+
+    def __init__(self, connected: set[str]):
+        self.connected = set(connected)
+        self.sent: list[tuple[str, object]] = []
+
+    def is_connected(self, executor_id: str) -> bool:
+        return executor_id in self.connected
+
+    async def dispatch_next(self, executor_id: str):
+        return None
+
+    async def send(self, executor_id: str, envelope) -> None:
+        self.sent.append((executor_id, envelope))
 
 
 # p1 only, holds codexbridge.issues.write -- the ISSUES_WRITE_SCOPE both
@@ -153,11 +175,11 @@ async def env(users_file, monkeypatch):
     await engine.dispose()
 
 
-async def _call(env, principal, tool_name: str, arguments: dict) -> dict:
+async def _call(env, principal, tool_name: str, arguments: dict, hub=None) -> dict:
     async with env.factory() as session:
         response = await handle_mcp_call(
             {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool_name, "arguments": arguments}},
-            session, DummyHub(), principal,
+            session, hub if hub is not None else DummyHub(), principal,
         )
     return response["result"]["structuredContent"]
 
@@ -563,3 +585,117 @@ async def test_a_retried_move_does_not_move_the_issue_twice(env):
 #     not change what create_epic/create_issue's own idempotency tests prove
 #     -- see this module's tests #2/#3 above, left unmodified by this PR.
 # --------------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------------
+# 13. publish_epic_to_repo -- issue #78, WK-20260902-issue-materialize.
+#     Covers `permissions.EPICS_PUBLISH` for
+#     tests/integration/test_auth.py::test_epics_publish_is_exercised_over_mcp.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_publish_epic_to_repo_dispatches_to_a_connected_executor(env):
+    """Positive control for the two `_not_connected`/`_not_onboarded` tests below."""
+    epic = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "Bridge epic"})
+    await _call(env, ALICE, "create_issue", {
+        "project": "p1", "epic_id": epic["epic_id"], "title": "First slice",
+    })
+    assert epic["materialized_path"] is None
+    assert epic["materialized_revision"] is None
+
+    hub = RecordingHub(connected={"T1"})
+    result = await _call(env, ALICE, "publish_epic_to_repo", {"epic_id": epic["epic_id"]}, hub=hub)
+
+    assert result["status"] == "dispatched"
+    assert result["executor_id"] == "T1"
+    assert result["existing_path"] is None
+    assert result["file_count"] == 3  # README.md + epic.md + one issue file
+
+    assert len(hub.sent) == 1
+    sent_executor_id, envelope = hub.sent[0]
+    assert sent_executor_id == "T1"
+    assert envelope.type == AgentMessageType.ISSUE_MATERIALIZE
+    assert envelope.payload["epic_id"] == epic["epic_id"]
+    assert envelope.payload["project_id"] == "p1"
+    assert envelope.payload["existing_path"] is None
+    assert set(envelope.payload["files"]) == {
+        "README.md", "epic.md",
+    } | {k for k in envelope.payload["files"] if k.startswith("issues/")}
+    assert any(k.startswith("issues/") for k in envelope.payload["files"])
+
+
+@pytest.mark.asyncio
+async def test_publish_epic_to_repo_with_no_connected_executor_is_a_typed_error(env):
+    epic = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "Bridge epic"})
+
+    hub = RecordingHub(connected=set())  # T1 allows p1 but is not connected
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, ALICE, "publish_epic_to_repo", {"epic_id": epic["epic_id"]}, hub=hub)
+    assert raised.value.status_code == 409
+    assert raised.value.detail.startswith("executor_not_connected")
+    assert hub.sent == []
+
+
+@pytest.mark.asyncio
+async def test_publish_epic_to_repo_for_a_project_no_executor_allows_is_project_not_onboarded(env):
+    # p3 is registered but no executor's allowed_projects names it -- T1 (the
+    # only executor in this fixture) allows only p1/p2.
+    unclaimed = AuthenticatedPrincipal(
+        user_id="carol", email="carol@example.com",
+        allowed_projects=["p3"], scopes=["codexbridge.read", "codexbridge.issues.write"],
+    )
+    async with env.factory() as session:
+        await store.upsert_registry(
+            session, executors=[],
+            projects=[ProjectRegistration(project_id="p3", name="Projeto Tres", path="/srv/p3", max_timeout_seconds=3600)],
+        )
+    epic = await _call(env, unclaimed, "create_epic", {"project": "p3", "title": "Bridge epic"})
+
+    hub = RecordingHub(connected={"T1"})
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, unclaimed, "publish_epic_to_repo", {"epic_id": epic["epic_id"]}, hub=hub)
+    assert raised.value.status_code == 409
+    assert raised.value.detail.startswith("project_not_onboarded")
+    assert hub.sent == []
+
+
+@pytest.mark.asyncio
+async def test_publish_epic_to_repo_unknown_epic_is_404(env):
+    hub = RecordingHub(connected={"T1"})
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, ALICE, "publish_epic_to_repo", {"epic_id": "does-not-exist"}, hub=hub)
+    assert raised.value.status_code == 404
+    assert raised.value.detail == "unknown_epic"
+
+
+@pytest.mark.asyncio
+async def test_publish_epic_to_repo_republish_carries_existing_path(env):
+    epic = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "Bridge epic"})
+    async with env.factory() as session:
+        await store.apply_epic_materialization(
+            session,
+            epic_id=epic["epic_id"],
+            epic_path="docs/issues/078-bridge-epic-[ready]",
+            epic_revision=epic["revision"],
+            written_paths={},
+            issue_revisions={},
+        )
+
+    hub = RecordingHub(connected={"T1"})
+    result = await _call(env, ALICE, "publish_epic_to_repo", {"epic_id": epic["epic_id"]}, hub=hub)
+
+    assert result["existing_path"] == "docs/issues/078-bridge-epic-[ready]"
+    _, envelope = hub.sent[0]
+    assert envelope.payload["existing_path"] == "docs/issues/078-bridge-epic-[ready]"
+
+
+@pytest.mark.asyncio
+async def test_publish_epic_to_repo_requires_write_scope(env):
+    epic = await _call(env, ALICE, "create_epic", {"project": "p1", "title": "Bridge epic"})
+    hub = RecordingHub(connected={"T1"})
+    with pytest.raises(HTTPException) as raised:
+        await _call(env, READER, "publish_epic_to_repo", {"epic_id": epic["epic_id"]}, hub=hub)
+    assert raised.value.status_code == 403
+    assert raised.value.detail == "missing_scope:codexbridge.issues.write"
+    assert hub.sent == []

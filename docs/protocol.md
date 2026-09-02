@@ -24,10 +24,30 @@ Ferramentas expostas:
 * `approve_codex_task`
 * `list_recent_tasks`
 * `start_development_task`
+* `create_epic`
+* `list_epics`
+* `update_epic`
+* `create_issue`
+* `list_issues`
+* `update_issue`
+* `move_issue_to_epic`
+* `publish_epic_to_repo`
 * `create_reminder`
 * `cancel_reminder`
 
-São 14 ferramentas. `create_reminder`/`cancel_reminder` (issue #71) escrevem
+`publish_epic_to_repo` (issue #78, WK-20260902-issue-materialize) materializa
+uma épica e suas issues (`EpicModel`/`IssueModel`, já expostas por
+`create_epic`/`list_epics`/`create_issue`/`list_issues`) como arquivos
+markdown versionados em `docs/issues/` do repositório do PRÓPRIO projeto —
+inclusive um projeto nunca publicado em nenhum forge. Requer um executor
+conectado que autorize o projeto da épica: sem um, falha com erro tipado
+(`project_not_onboarded`/`executor_not_connected`), nunca enfileira
+silenciosamente. `gateway/app/services/issue_render.py:render_epic_markdown`
+é uma função pura — sem I/O, sem LLM — que decide os bytes de cada arquivo
+antes de qualquer coisa cruzar para o executor; ver `## Materialização de
+épicas` abaixo para o fluxo completo sobre o canal reverso.
+
+São 22 ferramentas. `create_reminder`/`cancel_reminder` (issue #71) escrevem
 no Google Calendar do operador, não em `tasks` — nada a ver com execução de
 código. Exigem escopo `codexbridge.reminders.write` e ficam desligadas com
 erro acionável (nunca 500) quando `CODEX_BRIDGE_GOOGLE_CALENDAR_ID` ou
@@ -95,9 +115,53 @@ Mensagens (`AgentMessageType` em `shared/protocol.py`):
 * `task.restart`
 * `task.cancelled`
 * `error`
+* `issue.materialize`
+* `issue.materialize_result`
 
 Não existe mensagem `task.progress`. O progresso é inferido pelo fluxo de
 `task.log`, cada uma com `offset` incremental.
+
+## Materialização de épicas
+
+`issue.materialize`/`issue.materialize_result` (issue #78,
+WK-20260902-issue-materialize) são o par que `publish_epic_to_repo` usa —
+**fire-and-forget, no mesmo padrão de `task.dispatch`**, mas sem
+`TaskModel` por trás: não há fila nem vaga de concorrência a liberar, e "sem
+executor conectado" já é recusado de forma síncrona pela própria tool (ver
+`## MCP externo` acima), nunca despachado depois.
+
+1. O gateway renderiza os arquivos com `issue_render.render_epic_markdown`
+   (função pura — dado o mesmo `EpicModel`/lista de `IssueModel`, sempre os
+   mesmos bytes) e envia `issue.materialize` com o payload de
+   `MaterializeRequest` (`shared/protocol.py`): `epic_id`, `project_id`,
+   `slug` (o componente `<epic-slug>-[<status>]` do nome da pasta, sem o
+   `NNN`), `files` (caminho relativo à pasta da épica → conteúdo),
+   `existing_path` (não nulo numa republicação), `epic_revision`/
+   `issue_revisions` (a `revision` de cada linha no instante da renderização)
+   e o bloco `delivery` opcional (reaproveita `DeliveryRequest`/
+   `PUSHABLE_BRANCH_PATTERN`, mesmo mecanismo de `SubmitTaskRequest.delivery`).
+2. As chaves de `files` para issues carregam o id da issue como segmento do
+   caminho (`issues/<issue_id>/<slug>-[<status>].md`) — um token de
+   correlação consumido pelo executor e nunca escrito em disco (ver
+   `agent/codex_bridge_agent/issue_materialize.py`), porque `NNN` não é
+   escolhido nem aqui nem no gateway (próximo item).
+3. O EXECUTOR escolhe todo `NNN` — a mesma fronteira que `docs:NNN`/`NNN`
+   já respeita do lado da leitura (`## MCP externo`, `start_development_task`):
+   o gateway nunca aprende o path real do projeto (`docs/architecture.md`).
+   Numeração é um pool único compartilhado entre a pasta da épica e cada
+   arquivo de issue (e qualquer outra épica/issue já no disco); corrida de
+   numeração é resolvida por criação atômica (`mkdir`/`O_CREAT|O_EXCL`) com
+   nova tentativa no próximo número livre.
+4. O executor responde `issue.materialize_result`: `{epic_id, ok, epic_path,
+   epic_revision, written_paths, issue_revisions}` no sucesso (`written_paths`
+   ecoa as MESMAS chaves de `files`, resolvidas para o caminho final relativo
+   ao projeto — inclusive `README.md`/`epic.md`, sem segmento de id); ou
+   `{epic_id, ok: false, error}` na falha, nunca uma exceção crua.
+5. `gateway/app/main.py:handle_issue_materialize_result` grava
+   `materialized_path`/`materialized_revision` na épica e, para cada chave de
+   `written_paths` prefixada por `issues/`, na issue cujo id está embutido no
+   segundo segmento do caminho — sem re-derivar a correspondência a partir da
+   lista atual de issues (que pode ter mudado entre o pedido e a resposta).
 
 Campos comuns:
 

@@ -421,6 +421,40 @@ def tool_definitions() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "publish_epic_to_repo",
+            "title": "Publish epic to repo",
+            "description": (
+                "Materializa uma epica e suas issues como arquivos markdown versionados no "
+                "repositorio do proprio projeto (docs/issues/), via um executor conectado. Sem "
+                "executor conectado autorizado para o projeto da epica, falha com erro tipado -- "
+                "nunca enfileira silenciosamente. Republicar (a epica ja tem materialized_path) "
+                "atualiza a pasta existente em vez de criar outra."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "epic_id": {"type": "string", "description": "id da epica (retornado por create_epic ou list_epics)."},
+                    "executor_id": {
+                        "type": "string",
+                        "description": "Omitido: escolhido automaticamente entre os executores conectados que autorizam o projeto da epica.",
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Branch de entrega para o commit (ex 'development'). Obrigatorio se allow_push=true.",
+                    },
+                    "allow_push": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Pre-autoriza commit e push nessa branch depois de escrever os arquivos. Exige escopo de aprovacao.",
+                    },
+                    "base_branch": {"type": "string", "default": "development"},
+                    "commit_subject": {"type": "string", "maxLength": 200},
+                },
+                "required": ["epic_id"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "create_reminder",
             "title": "Create reminder",
             "description": (
