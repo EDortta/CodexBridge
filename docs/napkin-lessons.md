@@ -1563,3 +1563,51 @@ de propor épica nova, a pergunta barata é "quem já é dono de cada pedaço di
 e ela se responde lendo as issues existentes, não a memória da conversa. O
 levantamento ainda pagou dois achados de brinde: uma issue aberta cujo código já
 estava entregue e outra com um passo de remoção que nunca aconteceu.
+
+## 2026-09-02 — WK-20260902-merge-six-open-prs: six branches, two migration-number
+collisions, and the one number nobody collided on
+
+Merged PRs #59, #60, #61, #62, #75 and #77 into `development` in one pass. All six
+were `CONFLICTING` on GitHub; none of the conflicts were hard. What they cost was
+almost entirely **numbering**, and the two shapes it took are worth separating:
+
+- **Migration filenames collided silently.** #11 authored `0008_artifacts.sql`
+  and #13 authored `0009_event_subscriptions.sql`, both from a base where those
+  numbers were free; `development` had since taken 0008 and 0009 for other work.
+  Git reported **no conflict** — different filenames, both merely added — and
+  `apply_migrations.py` sorts by filename, so a fresh install would have run
+  `0008_artifacts` *before* `0008_engine_and_delivery` while every existing
+  install ran them the other way round. Renumbered to 0010 and 0011 on the way
+  in. Lesson: **a merge conflict is not the signal for a numbering collision** —
+  the numbers live in filenames, and adding two different files is the one thing
+  git is sure is safe. Grep `migrations/` on the target branch before merging
+  anything that adds one, and treat bare prose numbers ("migration 0008", "0006,
+  0007 and 0008") as references that move with the file.
+- **The contract version did not collide, because #13 refused to take it.** #13
+  deliberately skipped 1.7.0 and numbered itself 1.8.0, leaving 1.7.0 for #11,
+  which was open on another branch at the same time. That turned what would have
+  been two incompatible 1.7.0 contracts — the kind of collision a client's pin
+  cannot detect — into a one-line text conflict. It cost the author nothing:
+  semver does not require contiguity.
+
+The third cost was a guard doing its job across a seam neither branch could see.
+#13 added `test_every_audited_domain_event_type_is_translated`, which fails when
+any `record_event` under a deliverable entity has no mobile mapping. Two writers
+already on `development` (`task.push_preauthorized`, `task.notification_failed`)
+had none — invisible to #13's branch, invisible to `development`, red the moment
+they met. Neither wanted a new `MobileEventType`: adding an enum value is a
+breaking change by this contract's own rule. So `event_types.NOT_DELIVERED` names
+them with a reason, and the guard accepts an entry there *instead of* a mapping —
+"nothing" became an available answer that still has to be written down. Lesson:
+when a branch adds an exhaustiveness guard, the set it must be exhaustive over is
+whatever `development` looks like on merge day, not on branch day; budget for the
+guard to find something real, and prefer a named exemption over inventing a
+public type nobody asked for.
+
+Two smaller ones. `docs/codemap.md` is generated and conflicted in every single
+merge — carried through unresolved and regenerated once at the end, from the
+canonical checkout rather than the worktree its previous refresh had recorded as
+root (there is a test for exactly that). And four tests were red on `development`
+*before* any merge, purely because the gitignored local `codex_bridge.db` was
+stale: establish the baseline before merging, or the first merge inherits the
+blame for whatever the environment already broke.
