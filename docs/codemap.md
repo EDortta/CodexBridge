@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 177 file(s) · 1929 symbol(s) indexed
-- Languages: config (2), python (173), shell (2)
+- 178 file(s) · 1951 symbol(s) indexed
+- Languages: config (2), python (174), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
@@ -174,6 +174,7 @@ tests/
     test_enrollment.py  — "`POST /api/v1/nodes/invite` / `enroll` / `{id}/revoke` — issue #76 (minimal"
     test_epics_issues.py  — "Epics and issues — issue #8."
     test_events.py  — "The mobile event stream, its polling fallback, and notification preferences — issue #13."
+    test_forge_wiring.py  — "End-to-end wiring for a forge operation -- issue #80/#79,"
     test_issue_materialize_result.py  — "`issue.materialize_result` handling in the `/agent/ws` message loop --"
     test_mcp_epics_issues.py  — "The epics/issues MCP tools -- issue #78."
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
@@ -775,6 +776,7 @@ tests/
 - `handle_task_ack(session, envelope)` *(async function)* — "Handles one `task.ack` from the `/agent/ws` message loop."
 - `handle_task_cancelled(session, envelope)` *(async function)* — "Handles one `task.cancelled` ack from the `/agent/ws` message loop."
 - `handle_issue_materialize_result(session, envelope)` *(async function)* — "Handles one `issue.materialize_result` from the `/agent/ws` message loop."
+- `handle_forge_operation_result(session, envelope)` *(async function)* — "Handles one `forge.operation_result` from the `/agent/ws` message loop."
 - `agent_ws(websocket, executor_id, x_executor_token)` *(async function)*
 
 ### `gateway/app/mcp/server.py`
@@ -804,6 +806,7 @@ tests/
 - **`AndroidBuildModel`** *(class)* — "APK metadata for one artifact — issue #11's Android half."
 - **`ArtifactDownloadTokenModel`** *(class)* — "A short-lived bearer credential for the bytes of exactly one artifact."
 - **`TaskLogModel`** *(class)*
+- **`ForgeOperationModel`** *(class)* — "One request to act on an external forge (GitHub today) -- issue #80/#79,"
 - **`AuditEventModel`** *(class)*
 - **`NotificationPreferenceModel`** *(class)* — "Which events one actor wants to be notified about — issue #13."
 - **`MessageReceiptModel`** *(class)*
@@ -825,6 +828,7 @@ tests/
   - `send(self, executor_id, envelope)` *(async method)*
   - `dispatch_next(self, executor_id)` *(async method)*
   - `dispatch_available(self, executor_id)` *(async method)* — "Dispatches the next queued/waiting task to `executor_id`, if one is"
+  - `dispatch_forge_operation(self, operation_id)` *(async method)* — "Sends one approved forge operation to its executor, if connected."
   - `mark_task_finished(self, executor_id, task_id)` *(async method)* — "Releases the slot `task_id` held and, if the executor is still"
 - `hub_envelope(executor_id, message_type, payload)` — "Build a message for an executor."
 
@@ -968,6 +972,11 @@ tests/
 - `update_task_state(session, task_id, state, error)` *(async function)*
 - `append_log(session, task_id, offset, stream, line)` *(async function)*
 - `decide_task_approval(session, task_id, decision, reason)` *(async function)*
+- `create_forge_operation(session)` *(async function)* — "Creates a forge operation row, gated exactly like `create_task` gates a"
+- `get_forge_operation(session, operation_id)` *(async function)*
+- `decide_forge_operation(session, operation_id, decision, reason)` *(async function)* — "The human decision a forge write is born waiting for. Mirrors"
+- `mark_forge_operation_dispatched(session, operation_id)` *(async function)* — "Flips an `approved` forge operation to `dispatched`. The gate itself:"
+- `resolve_forge_operation(session, operation_id, outcome)` *(async function)* — "Resolves a forge operation from its `FORGE_OPERATION_RESULT` outcome"
 - `recover_tasks_after_startup(session)` *(async function)*
 - `get_logs(session, task_id, offset, limit)` *(async function)*
 - `store_result(session, task_id, result, final_state)` *(async function)*
@@ -1905,6 +1914,20 @@ tests/
 - `test_the_audit_index_exists_on_a_fresh_install_as_well_as_an_upgraded_one()` — "An index declared only in SQL is missing on every new database."
 - `test_the_poll_interval_is_floored_rather_than_honoured()` — "A zero interval is a busy loop against the pool every endpoint shares."
 
+### `tests/integration/test_forge_wiring.py`
+
+> End-to-end wiring for a forge operation -- issue #80/#79,
+
+- `db()` *(async function)* — "A real database and session factory, seeded with one executor/project"
+- `test_forge_write_is_born_awaiting_approval(db)` *(async function)*
+- `test_dispatch_refuses_a_write_still_awaiting_approval(db)` *(async function)* — "THE required test: a forge write cannot be dispatched without passing"
+- `test_rejected_forge_operation_never_dispatches(db)` *(async function)* — "A human `REJECTED` decision is just as terminal as never deciding at"
+- `test_issue_list_read_does_not_stop_at_the_gate(db)` *(async function)* — "Positive control for the two refusals above, and for issue #80/#79's"
+- `test_create_forge_operation_refuses_a_project_not_allowed_for_the_executor(db)` *(async function)* — "The gateway's OWN allowlist check (`executors.metadata_json`), separate"
+- `test_full_pipeline_write_completes_after_a_human_approves(db, tmp_path, monkeypatch)` *(async function)*
+- `test_executor_kill_switch_refuses_even_after_gateway_approval(db, tmp_path, monkeypatch)` *(async function)* — "The two locks are independent: a gateway approval is not, by itself,"
+- `test_project_outside_executor_local_allowlist_refuses_even_after_gateway_approval(db, tmp_path, monkeypatch)` *(async function)* — "The executor's own project allowlist is the second independent gate:"
+
 ### `tests/integration/test_issue_materialize_result.py`
 
 > `issue.materialize_result` handling in the `/agent/ws` message loop --
@@ -2415,6 +2438,11 @@ tests/
 - `test_handle_dispatch_sends_workspace_write_for_a_write_mode_task(tmp_path)` *(async function)*
 - `test_handle_dispatch_refuses_a_write_mode_when_workspace_write_is_off(tmp_path)` *(async function)* — "WK-20260902-gh73-authorization-plane, issue #73 Stage 4."
 - `test_handle_dispatch_allows_a_write_mode_when_workspace_write_is_on(tmp_path)` *(async function)* — "Positive control for the refusal above, in the same file (napkin-lessons"
+- `test_forge_operation_runs_when_allowed_and_project_is_known(tmp_path, monkeypatch)` *(async function)* — "Positive control for every refusal test below: with the kill switch on"
+- `test_forge_operation_refuses_when_executor_kill_switch_is_off(tmp_path, monkeypatch)` *(async function)* — "The machine-level trava: off by default, and independent of anything"
+- `test_forge_operation_refuses_for_a_project_outside_the_local_allowlist(tmp_path, monkeypatch)` *(async function)* — "The executor's own project allowlist is a second, independent gate --"
+- `test_forge_operation_refuses_an_invalid_payload_without_touching_gh(tmp_path, monkeypatch)` *(async function)* — "A malformed envelope (unknown `kind`) is refused at parse time, the"
+- `test_forge_operation_write_kind_reaches_gh_when_approved_and_allowed(tmp_path, monkeypatch)` *(async function)* — "Positive control proving a WRITE kind (not just the read-only"
 
 ### `tests/unit/test_agent_service_materialize.py`
 

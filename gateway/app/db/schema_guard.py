@@ -65,6 +65,8 @@ REQUIRED_TABLES: dict[str, str] = {
     # `POST /api/v1/nodes/invite` and `POST /api/v1/nodes/enroll` fail on
     # their first query with a driver error instead of at startup.
     "node_invites": "0013_node_enrollment.sql",
+    # Issue #80/#79's human approval gate for a forge write.
+    "forge_operations": "0012_forge_operations.sql",
 }
 
 # READ THIS BEFORE TRUSTING THE TABLE ABOVE.

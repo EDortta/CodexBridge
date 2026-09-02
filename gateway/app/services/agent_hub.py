@@ -207,6 +207,47 @@ class AgentHub:
                 hub_envelope(executor_id, AgentMessageType.TASK_DISPATCH.value, dispatch_payload),
             )
 
+    async def dispatch_forge_operation(self, operation_id: str) -> bool:
+        """Sends one approved forge operation to its executor, if connected.
+
+        Issue #80/#79, WK-20260902-forge-wiring-and-gate (PR B3). This IS the
+        gate on the gateway side: it reads the row's `state` and refuses --
+        raising, never silently no-op'ing -- unless it already reads
+        `"approved"` (`store.decide_forge_operation` is the only thing that
+        ever puts it there for a write; `store.create_forge_operation` does
+        for a read). A caller cannot get an envelope sent for a row still
+        `awaiting_approval` by any path through this method, which is the
+        property `tests/integration/test_forge_wiring.py` exercises directly
+        against this function -- not just against
+        `shared.policy.forge_operation_policy_level` in isolation -- because
+        that pure function has no bypass field to begin with; the real risk
+        is a bypass added HERE, or to
+        `agent.codex_bridge_agent.service.AgentService._handle_forge_operation`,
+        later.
+
+        Connectivity is checked BEFORE `store.mark_forge_operation_dispatched`
+        runs, the same ordering `dispatch_next` already uses for a task: a
+        row must never read `dispatched` when no envelope actually left this
+        process.
+        """
+        async with self.session_factory() as session:
+            row = await store.get_forge_operation(session, operation_id)
+            if row is None:
+                raise ValueError("unknown_forge_operation")
+            if row.state != "approved":
+                raise ValueError("forge_operation_not_approved")
+            if row.executor_id not in self.connections:
+                return False
+            row = await store.mark_forge_operation_dispatched(session, operation_id)
+        payload = json.loads(row.payload_json)
+        payload["operation_id"] = row.id
+        payload["project_id"] = row.project_id
+        await self.send(
+            row.executor_id,
+            hub_envelope(row.executor_id, AgentMessageType.FORGE_OPERATION.value, payload),
+        )
+        return True
+
     async def mark_task_finished(self, executor_id: str, task_id: str) -> None:
         """Releases the slot `task_id` held and, if the executor is still
         connected, immediately dispatches whatever is next in its queue.

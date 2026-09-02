@@ -125,6 +125,8 @@ Mensagens (`AgentMessageType` em `shared/protocol.py`):
 * `task.resume`
 * `task.restart`
 * `task.cancelled`
+* `forge.operation`
+* `forge.operation_result`
 * `error`
 * `issue.materialize`
 * `issue.materialize_result`
@@ -366,3 +368,73 @@ compatibilidade com agentes antigos): quando `known` é `false`, o gateway
 resolve a tarefa como `cancelled` e libera a vaga de concorrência, em vez de
 reverter para o estado que o controle assumia (que pressupõe um processo
 vivo em algum lugar, e não há nenhum).
+
+## Operações de forge e o portão humano
+
+Issue #80/#79, `WK-20260902-forge-wiring-and-gate` (PR B3). Uma operação de
+forge (abrir/comentar/fechar/listar issue no GitHub via `gh`) não é uma
+`task.dispatch`: ela roda fora do sandbox do provedor de codificação, como um
+único processo `gh` limitado no próprio executor, e carrega uma credencial
+(`GH_TOKEN`) que nunca entra no sandbox de uma sessão de codificação. Por
+isso tem envelope próprio (`forge.operation`/`forge.operation_result`) em vez
+de virar mais um modo de `task.dispatch` — os dois campos que
+`_sandbox_for`/`RunnerPool` entendem (`mode`, `engine`) não descrevem nada
+sobre uma operação de forge, e forçar um valor sentinela neles ensinaria
+esses módulos a tratar um caso que não é deles.
+
+Persistência é uma tabela própria no gateway, `forge_operations`
+(`migrations/0012_forge_operations.sql`), **não** uma linha em `tasks`: as
+colunas de `tasks` (`mode`, `instruction`, `engine`, `timeout_seconds`,
+`session_id`, `delivery_json`) descrevem uma sessão de agente de código, e
+`shared.policy.forge_operation_policy_level` é explícita que a classificação
+`SENSITIVE` de uma escrita de forge não tem — e nunca deve ter — um campo de
+bypass, ao contrário de `delivery_json`'s push (`push_is_preauthorized`).
+Ver a docstring de `ForgeOperationModel`
+(`gateway/app/models/entities.py`) e o corpo do commit desta PR para a
+justificativa completa dessa decisão, incluindo por que ela não reusa a
+superfície `/api/v1/decisions` da issue #6.
+
+Ciclo de vida de uma linha `forge_operations.state`:
+
+1. `awaiting_approval` — nasce assim toda ESCRITA (`issue_open`,
+   `issue_comment`, `issue_close`): `forge_operation_policy_level` devolveu
+   `SENSITIVE`. `issue_list` (leitura) nasce direto em `approved` — nunca
+   passa pelo portão.
+2. `approved` — um humano decidiu (`store.decide_forge_operation`, mesmo
+   vocabulário `ApprovalDecision` da issue #6: `approved`/`rejected`/
+   `revision_requested`), ou a operação era `issue_list`.
+3. `dispatched` — `AgentHub.dispatch_forge_operation` enviou o envelope
+   `forge.operation` para o executor. Esta função É o portão do lado do
+   gateway: recusa (levanta `ValueError`) para qualquer estado que não seja
+   `approved`, antes de tocar em `self.connections` ou enviar qualquer
+   coisa — não existe caminho por onde um `forge.operation` sai do gateway
+   para uma linha ainda `awaiting_approval`.
+4. `completed`/`failed` — um `forge.operation_result` voltou
+   (`gateway/app/main.py:handle_forge_operation_result`, que chama
+   `store.resolve_forge_operation`).
+
+Ou termina sem nunca despachar: `rejected`/`revision_requested`, uma decisão
+humana negativa — este protocolo não tem mensagem que reabra uma operação de
+forge para edição, a mesma lacuna que `routes/decisions.py` já documenta
+para `TaskModel`.
+
+O executor (`AgentService._handle_forge_operation`,
+`agent/codex_bridge_agent/service.py`) **não** re-deriva
+`forge_operation_policy_level` a partir do envelope, ao contrário do que
+`_handle_dispatch` faz com `evaluate_task_policy` para uma task. A diferença
+é deliberada: como a política de forge não tem campo de bypass, re-derivá-la
+no executor recusaria toda escrita incondicionalmente, mesmo depois de uma
+aprovação humana real — apagaria a funcionalidade em vez de defendê-la. O
+executor confia que o gateway só manda `forge.operation` para uma linha
+`approved`, e defende, de forma independente, só o que um gateway
+comprometido ou com bug ainda poderia mentir: o projeto está na allowlist
+local deste executor (a mesma resolução de `_handle_dispatch`, reaproveitada)
+e a trava de máquina `allow_forge_operations` (default `False`) — as duas
+travas são independentes; ambas precisam estar ligadas para `gh` rodar de
+verdade.
+
+Nesta PR (B3) o único jeito de criar/aprovar/despachar uma operação de forge
+é chamando `store.create_forge_operation`/`store.decide_forge_operation`/
+`AgentHub.dispatch_forge_operation` diretamente — não existe rota REST nem
+ferramenta MCP ainda (por isso o contrato OpenAPI não muda nesta PR). Expor
+isso para o operador via ChatGPT é B4.

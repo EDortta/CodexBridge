@@ -839,6 +839,48 @@ async def handle_issue_materialize_result(session: AsyncSession, envelope: Agent
     await session.commit()
 
 
+async def handle_forge_operation_result(session: AsyncSession, envelope: AgentEnvelope) -> None:
+    """Handles one `forge.operation_result` from the `/agent/ws` message loop.
+
+    Issue #80/#79, WK-20260902-forge-wiring-and-gate (PR B3). Standalone for
+    the same reason `handle_task_ack`/`handle_task_cancelled` are: directly
+    testable against a real session and a constructed envelope, without
+    driving a real websocket through it. There is no ownership check to
+    mirror `handle_task_ack`'s ("an executor may only ack tasks assigned to
+    it") because `store.resolve_forge_operation` does not branch on
+    `executor_id` at all -- a forge operation, unlike a task, never changes
+    which executor holds it, so there is nothing here for a forged
+    `operation_id` to redirect. A missing or unknown `operation_id` raises
+    `ValueError` from `store.resolve_forge_operation` and is logged rather
+    than crashing the message loop, the same posture
+    `handle_task_ack` takes toward a malformed payload.
+    """
+    operation_id = envelope.payload.get("operation_id")
+    if operation_id is None:
+        logging.getLogger(__name__).warning(
+            "forge.operation_result with no operation_id from executor %s", envelope.executor_id
+        )
+        return
+    try:
+        await store.resolve_forge_operation(session, operation_id, envelope.payload)
+    except ValueError:
+        logging.getLogger(__name__).warning(
+            "forge.operation_result for unknown operation %s from executor %s",
+            operation_id,
+            envelope.executor_id,
+        )
+        await session.rollback()
+        return
+    await record_event(
+        session,
+        "forge_operation",
+        operation_id,
+        "forge_operation.result_received",
+        {"executor_id": envelope.executor_id, "outcome": envelope.payload.get("outcome")},
+    )
+    await session.commit()
+
+
 @app.websocket("/agent/ws")
 async def agent_ws(
     websocket: WebSocket,
@@ -1029,5 +1071,7 @@ async def agent_ws(
                     await handle_task_cancelled(session, envelope)
                 elif envelope.type == AgentMessageType.ISSUE_MATERIALIZE_RESULT:
                     await handle_issue_materialize_result(session, envelope)
+                elif envelope.type == AgentMessageType.FORGE_OPERATION_RESULT:
+                    await handle_forge_operation_result(session, envelope)
     except WebSocketDisconnect:
         await hub.unregister(executor_id)

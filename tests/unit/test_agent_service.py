@@ -771,3 +771,192 @@ async def test_handle_dispatch_allows_a_write_mode_when_workspace_write_is_on(tm
     await service._handle_dispatch(DummyWebSocket(), _dispatch_envelope(task_id="t-unlocked", mode="implement"))
 
     assert runner.sandboxes == ["workspace-write"]
+    assert runner.sandboxes == ["read-only"]
+
+
+# --------------------------------------------------------------------------
+# `_handle_forge_operation` -- issue #80/#79, WK-20260902-forge-wiring-and-gate
+# (PR B3). Parallel to the `_handle_dispatch` tests above: this suite proves
+# the REAL handler refuses/succeeds by calling it directly with a fake
+# websocket, not by unit-testing `shared.policy.forge_operation_policy_level`
+# or `forge.github.run_forge_operation` in isolation (both already have their
+# own exhaustive suites -- `test_forge_policy.py`, `test_forge_github.py`).
+# Every negative case here is paired with a positive control in this same
+# file, per `docs/napkin-lessons.md`'s 2026-09-01 lesson.
+#
+# `github.run_gh` (not `gh_tool.run_gh`) is what gets monkeypatched, exactly
+# like `test_forge_github.py` does: it is the last seam before a real
+# subprocess, so a fake here proves this handler reaches all the way through
+# `run_forge_operation`'s own gate and revalidation without ever touching a
+# real `gh` binary or a real credential file.
+# --------------------------------------------------------------------------
+
+from agent.codex_bridge_agent.forge import github as forge_github  # noqa: E402
+from agent.codex_bridge_agent.forge.gh_tool import GhResult  # noqa: E402
+
+
+def _forge_envelope(*, operation_id: str, project_id: str, kind: str = "issue_list", **payload_fields) -> AgentEnvelope:
+    return AgentEnvelope(
+        message_id=f"forge-{operation_id}",
+        executor_id="devel3",
+        sent_at=datetime.now(timezone.utc),
+        type=AgentMessageType.FORGE_OPERATION,
+        payload={
+            "operation_id": operation_id,
+            "project_id": project_id,
+            "kind": kind,
+            "repo_identity": "acme/widgets",
+            **payload_fields,
+        },
+    )
+
+
+def _last_forge_result(websocket: "DummyWebSocket") -> AgentEnvelope:
+    result = AgentEnvelope.model_validate_json(websocket.messages[-1])
+    assert result.type == AgentMessageType.FORGE_OPERATION_RESULT
+    return result
+
+
+@pytest.mark.asyncio
+async def test_forge_operation_runs_when_allowed_and_project_is_known(tmp_path: Path, monkeypatch) -> None:
+    """Positive control for every refusal test below: with the kill switch on
+
+    and the project in this executor's own allowlist, the real handler
+    reaches all the way through `run_forge_operation` to a (faked) `gh` and
+    reports success."""
+    async def fake_run_gh(*a, **k):
+        return GhResult(returncode=0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(forge_github, "run_gh", fake_run_gh)
+    service = AgentService(AgentSettings(allow_forge_operations=True))
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+    websocket = DummyWebSocket()
+
+    await service._handle_forge_operation(
+        websocket, _forge_envelope(operation_id="op-1", project_id="codexbridge", kind="issue_list")
+    )
+
+    result = _last_forge_result(websocket)
+    assert result.payload["operation_id"] == "op-1"
+    assert result.payload["outcome"] == "succeeded"
+    assert result.payload["issues"] == []
+
+
+@pytest.mark.asyncio
+async def test_forge_operation_refuses_when_executor_kill_switch_is_off(tmp_path: Path, monkeypatch) -> None:
+    """The machine-level trava: off by default, and independent of anything
+
+    the gateway believes it approved -- this handler never re-derives
+    `forge_operation_policy_level` (see the handler's own docstring), so the
+    ONLY thing standing between an approved write and `gh` running is this
+    setting plus `run_forge_operation`'s own revalidation."""
+    calls: list[object] = []
+
+    async def fake_run_gh(*a, **k):
+        calls.append((a, k))
+        return GhResult(returncode=0, stdout="unused", stderr="")
+
+    monkeypatch.setattr(forge_github, "run_gh", fake_run_gh)
+    service = AgentService(AgentSettings(allow_forge_operations=False))
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+    websocket = DummyWebSocket()
+
+    await service._handle_forge_operation(
+        websocket, _forge_envelope(operation_id="op-2", project_id="codexbridge", kind="issue_list")
+    )
+
+    result = _last_forge_result(websocket)
+    assert result.payload["outcome"] == "refused"
+    assert result.payload["reason"] == "executor_forge_disabled"
+    assert calls == []  # gh was never invoked
+
+
+@pytest.mark.asyncio
+async def test_forge_operation_refuses_for_a_project_outside_the_local_allowlist(tmp_path: Path, monkeypatch) -> None:
+    """The executor's own project allowlist is a second, independent gate --
+
+    reused verbatim from `_handle_dispatch`'s own resolution, not reinvented.
+    Kill switch is ON here so the refusal can only be coming from the
+    project check, not from `allow_forge_operations`."""
+    calls: list[object] = []
+
+    async def fake_run_gh(*a, **k):
+        calls.append((a, k))
+        return GhResult(returncode=0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(forge_github, "run_gh", fake_run_gh)
+    service = AgentService(AgentSettings(allow_forge_operations=True))
+    service.projects = {}  # nothing registered, and no auto_project_root
+    websocket = DummyWebSocket()
+
+    await service._handle_forge_operation(
+        websocket, _forge_envelope(operation_id="op-3", project_id="not-registered", kind="issue_list")
+    )
+
+    result = _last_forge_result(websocket)
+    assert result.payload["outcome"] == "refused"
+    assert result.payload["reason"] == "unknown_project"
+    assert result.payload["attempted"] is False
+    assert calls == []  # never reached run_forge_operation at all
+
+
+@pytest.mark.asyncio
+async def test_forge_operation_refuses_an_invalid_payload_without_touching_gh(tmp_path: Path, monkeypatch) -> None:
+    """A malformed envelope (unknown `kind`) is refused at parse time, the
+
+    same way `ForgeOperationRequest` itself would refuse it on the gateway --
+    this executor re-validates rather than trusting the envelope's shape."""
+    calls: list[object] = []
+
+    async def fake_run_gh(*a, **k):
+        calls.append((a, k))
+        return GhResult(returncode=0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(forge_github, "run_gh", fake_run_gh)
+    service = AgentService(AgentSettings(allow_forge_operations=True))
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+    websocket = DummyWebSocket()
+
+    await service._handle_forge_operation(
+        websocket, _forge_envelope(operation_id="op-4", project_id="codexbridge", kind="issue_delete")
+    )
+
+    result = _last_forge_result(websocket)
+    assert result.payload["outcome"] == "refused"
+    assert result.payload["reason"] == "invalid_forge_operation_payload"
+    assert result.payload["attempted"] is False
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_forge_operation_write_kind_reaches_gh_when_approved_and_allowed(tmp_path: Path, monkeypatch) -> None:
+    """Positive control proving a WRITE kind (not just the read-only
+
+    `issue_list` used above) also completes the full pipeline once it
+    reaches this handler -- the handler itself draws no distinction between
+    read and write; that distinction is entirely the gateway-side gate's
+    job (`tests/integration/test_forge_wiring.py`)."""
+    async def fake_run_gh(*a, **k):
+        return GhResult(returncode=0, stdout="https://github.com/acme/widgets/issues/42\n", stderr="")
+
+    monkeypatch.setattr(forge_github, "run_gh", fake_run_gh)
+    service = AgentService(AgentSettings(allow_forge_operations=True))
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+    websocket = DummyWebSocket()
+
+    await service._handle_forge_operation(
+        websocket,
+        _forge_envelope(operation_id="op-5", project_id="codexbridge", kind="issue_open", title="Bug", body="Details"),
+    )
+
+    result = _last_forge_result(websocket)
+    assert result.payload["outcome"] == "succeeded"
+    assert result.payload["issue_number"] == 42

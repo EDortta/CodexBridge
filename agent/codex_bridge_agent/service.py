@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import platform
+
 import random
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ from urllib.parse import urlencode
 from uuid import uuid4
 
 import websockets
+from pydantic import ValidationError
 
 from agent.codex_bridge_agent.config import (
     AgentSettings,
@@ -17,6 +19,9 @@ from agent.codex_bridge_agent.config import (
     resolve_auto_project,
     resolve_machine_token,
 )
+from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects, resolve_auto_project
+from agent.codex_bridge_agent.forge.base import ForgeOutcome
+from agent.codex_bridge_agent.forge.github import run_forge_operation
 from agent.codex_bridge_agent.git_delivery import deliver_changes
 from agent.codex_bridge_agent.git_tools import run_git
 from agent.codex_bridge_agent.instructions import IssueResolutionError, build_task_instruction, resolve_issue_text
@@ -36,6 +41,7 @@ from shared.protocol import (
     DiscoveryReport,
     NodeAnnouncement,
     MaterializeRequest,
+    ForgeOperationRequest,
     PolicyLevel,
     SubmitTaskRequest,
     TaskMode,
@@ -184,6 +190,8 @@ class AgentService:
                         asyncio.create_task(self._handle_dispatch(websocket, envelope))
                     elif envelope.type == AgentMessageType.ISSUE_MATERIALIZE:
                         asyncio.create_task(self._handle_materialize(websocket, envelope))
+                    elif envelope.type == AgentMessageType.FORGE_OPERATION:
+                        asyncio.create_task(self._handle_forge_operation(websocket, envelope))
                     elif envelope.type == AgentMessageType.TASK_CANCEL:
                         task_id = envelope.payload["task_id"]
                         await self.runners.cancel(task_id)
@@ -671,6 +679,131 @@ class AgentService:
         await websocket.send(
             self._envelope(AgentMessageType.ISSUE_MATERIALIZE_RESULT, result_payload).model_dump_json()
         )
+    async def _handle_forge_operation(self, websocket, envelope: AgentEnvelope) -> None:
+        """Runs one `FORGE_OPERATION` envelope and reports a
+
+        `FORGE_OPERATION_RESULT`. Parallel to `_handle_dispatch` above --
+        same envelope-in/envelope-out shape, same local-allowlist project
+        resolution, same typed-error-never-traceback posture -- and
+        deliberately UNLIKE it in the one place that matters most:
+        `_handle_dispatch` re-derives `evaluate_task_policy` from the
+        envelope and refuses a SENSITIVE task that reads unapproved, as a
+        second opinion against a compromised or buggy gateway. This handler
+        does NOT re-derive `shared.policy.forge_operation_policy_level` the
+        same way, because that function has no bypass field for any write
+        kind, by design (see its own docstring in `shared/policy.py`) --
+        re-deriving it here would refuse every forge write unconditionally
+        regardless of any human decision the gateway already recorded, which
+        would not defend the gate, it would delete the feature. The gate for
+        a forge write lives entirely on the gateway side
+        (`gateway/app/services/store.py`'s `create_forge_operation`/
+        `decide_forge_operation`, and `AgentHub.dispatch_forge_operation`,
+        which never sends this envelope for a row that is not `approved`);
+        this executor trusts that decision, the same way
+        `agent.codex_bridge_agent.forge.github.run_forge_operation`'s own
+        module docstring says it does. What this handler still defends,
+        independently of anything the gateway claims: which project this
+        executor is willing to touch at all (the exact same local allowlist
+        `_handle_dispatch` resolves against -- reused, not reinvented), and
+        the machine-level `allow_forge_operations` kill switch plus the
+        field-level revalidation `run_forge_operation` itself performs
+        (`_revalidate_locally` in `forge/github.py`) -- both independent of
+        whatever the gateway believes it approved.
+        """
+        operation_id = envelope.payload.get("operation_id")
+        project_id = envelope.payload.get("project_id")
+
+        async def send_result(outcome: ForgeOutcome) -> None:
+            await websocket.send(
+                self._envelope(
+                    AgentMessageType.FORGE_OPERATION_RESULT,
+                    {"operation_id": operation_id, **outcome.to_dict()},
+                ).model_dump_json()
+            )
+
+        raw_kind = envelope.payload.get("kind")
+        raw_repo_identity = envelope.payload.get("repo_identity")
+        try:
+            operation = ForgeOperationRequest(
+                kind=raw_kind,
+                repo_identity=raw_repo_identity,
+                title=envelope.payload.get("title"),
+                body=envelope.payload.get("body"),
+                issue_number=envelope.payload.get("issue_number"),
+                state=envelope.payload.get("state"),
+            )
+        except ValidationError as exc:
+            # Never reached `forge.github.run_forge_operation` at all -- a
+            # malformed envelope from a buggy or compromised gateway, not a
+            # forge operation this executor ever tried. `attempted=False`
+            # marks that distinction; every refusal `run_forge_operation`
+            # itself can produce sets `attempted=True` (it was invoked, even
+            # when it refuses immediately -- see `forge/github.py::_refused`).
+            await send_result(
+                ForgeOutcome(
+                    attempted=False,
+                    outcome="refused",
+                    reason="invalid_forge_operation_payload",
+                    kind=raw_kind if isinstance(raw_kind, str) else None,
+                    repo_identity=raw_repo_identity if isinstance(raw_repo_identity, str) else None,
+                )
+            )
+            return
+
+        # Same allowlist resolution `_handle_dispatch` uses above: a forge
+        # operation only ever runs against a project THIS executor is
+        # configured to operate, static allowlist first and the opt-in
+        # `auto_project_root` fallback second. Reused rather than
+        # reimplemented so the two paths cannot drift on what "this
+        # executor's project" means.
+        project = self.projects.get(project_id)
+        if project is None and self.settings.auto_project_root:
+            project = resolve_auto_project(project_id, self.settings.auto_project_root)
+        if project is None:
+            await send_result(
+                ForgeOutcome(
+                    attempted=False,
+                    outcome="refused",
+                    reason="unknown_project",
+                    kind=operation.kind.value,
+                    repo_identity=operation.repo_identity,
+                )
+            )
+            return
+        root = ensure_within_root(project.path, project.path)
+
+        async def send_log(stream: str, line: str) -> None:
+            # No `TASK_LOG` stream for a forge operation: `task_logs.task_id`
+            # is a real foreign key against `tasks` on Postgres, and
+            # `operation_id` names a `forge_operations` row, never a `tasks`
+            # one -- sending it as a `task_id` would either violate that
+            # constraint or silently attach a forge operation's diagnostic
+            # line to an unrelated task. `run_forge_operation`'s gh-argv
+            # diagnostic already reaches the operator through
+            # `ForgeOutcome.stdout`/`stderr` on the final result; this is
+            # local-only, for an operator tailing the executor's own log.
+            logger.debug("forge.log[%s] %s: %s", operation_id, stream, line)
+
+        try:
+            outcome = await run_forge_operation(
+                project_root=Path(root),
+                operation=operation,
+                settings=self.settings,
+                task_id=None,
+                send_log=send_log,
+            )
+        except Exception as exc:
+            # Typed result, never a bare traceback across the wire -- same
+            # posture `_handle_dispatch` takes toward `runner.run_task`
+            # above.
+            outcome = ForgeOutcome(
+                attempted=True,
+                outcome="refused",
+                reason=f"forge_operation_failed:{exc}",
+                kind=operation.kind.value,
+                repo_identity=operation.repo_identity,
+            )
+        await send_result(outcome)
 
     def _envelope(self, message_type: AgentMessageType, payload: dict) -> AgentEnvelope:
         return AgentEnvelope(

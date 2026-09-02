@@ -1714,3 +1714,39 @@ Duas lições, e a segunda é a que custa:
 O comportamento do agente foi o certo em tudo que estava ao alcance dele:
 verificou, não fabricou, e reportou. O erro foi de sequenciamento, uma camada
 acima — e é por isso que ele aparece aqui, e não no relatório de uma PR.
+## 2026-09-02 — um portão de aprovação parecido não é o mesmo portão
+
+A #6 já tinha uma máquina de decisões inteira (`TaskModel.approval_state`,
+`store.decide_task_approval`, `/api/v1/decisions`) quando a #80/#79 precisou
+de um segundo portão humano, desta vez para uma escrita de forge. À primeira
+vista os dois parecem o mesmo problema — "uma ação SENSITIVE nasce esperando
+um humano" — e a tentação natural é reusar a máquina que já existe.
+
+Ela não reusa de graça. `TaskModel` tem `mode`, `instruction`, `engine`,
+`timeout_seconds`, `session_id`, `delivery_json` — todas colunas que
+descrevem uma sessão de agente de código dentro de um sandbox. Uma operação
+de forge não tem nenhuma dessas propriedades: é `kind` + `repo_identity` +
+alguns campos opcionais, roda fora de qualquer sandbox como uma chamada `gh`
+limitada. Pior: `shared.policy.forge_operation_policy_level` é deliberada
+("read the whole module before adding anything near this function") em não
+ter *nenhum* campo de bypass — e `decide_task_approval`'s dispatch reuse
+(`hub.dispatch_available`) manda `task.dispatch`, não `forge.operation`, pra
+um `RunnerPool` que não sabe nada sobre forge. Forçar os dois no mesmo
+caminho exigiria um discriminador `kind` em `tasks`, colunas nulas para todo
+campo que só um lado usa, e um branch em quase toda função de `store.py` que
+toca `TaskModel` — mais acoplamento do que a tabela paralela que ficou
+escolhida (`forge_operations`, `migrations/0012_forge_operations.sql`).
+
+O que valeu a pena reusar não foi o mecanismo, foi o vocabulário:
+`ApprovalDecision` (`approved`/`rejected`/`revision_requested`) e a forma
+"nasce esperando, um humano decide, uma função separada despacha depois" —
+para que um operador que já aprovou uma task antes reconheça a forma aqui,
+mesmo com a tabela sendo outra.
+
+Lição: "parece o mesmo problema" não é o teste certo para decidir se dois
+mecanismos de aprovação devem compartilhar uma tabela. O teste é se os
+CAMPOS do mecanismo existente descrevem o novo caso sem sentinela e sem
+branch condicional em quem já lê essas colunas. Quando não descrevem,
+duplicar honestamente — reusando só o vocabulário que o operador precisa
+reconhecer — é mais barato de manter do que uma coluna emprestada que dois
+domínios brigam para interpretar.
