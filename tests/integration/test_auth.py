@@ -1034,6 +1034,7 @@ ENDPOINT_FOR_ACTION = {
     "issues.create": ("POST", "/api/v1/issues"),
     "issues.update": ("PATCH", "/api/v1/issues/{id}"),
     "epics.create": ("POST", "/api/v1/epics"),
+    "epics.update": ("PATCH", "/api/v1/epics/{id}"),
     "epics.linkIssue": ("POST", "/api/v1/epics/e1/issues/{id}"),
     "conversations.read": ("GET", "/api/v1/conversations"),
     "conversations.create": ("POST", "/api/v1/conversations"),

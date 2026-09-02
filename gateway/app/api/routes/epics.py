@@ -75,6 +75,19 @@ class CreateEpicRequest(BaseModel):
     status: str | None = Field(default=None, max_length=32)
 
 
+class UpdateEpicRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=20000)
+    status: str | None = Field(default=None, max_length=32)
+
+
+# Sent as an explicit sentinel for a PATCH field the caller did not mention,
+# the same way `routes/issues.py:_UPDATE_FIELDS` does for `UpdateIssueRequest`.
+_UPDATE_FIELDS = ("title", "description", "status")
+
+
 @router.get("/projects/{project_id}/epics", tags=["epics"])
 async def list_epics(
     project_id: str,
@@ -115,6 +128,21 @@ async def list_epics(
     )
     response.headers["Cache-Control"] = "no-store"
     return {"items": [_epic_dto(epic) for epic in page], "page": info}
+
+
+@router.get("/epics/{epic_id}", tags=["epics"])
+async def get_epic_detail(
+    epic_id: str,
+    response: Response,
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.EPICS_READ)),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    epic = await store.get_epic_for_projects(session, epic_id, visible_projects(principal))
+    if epic is None:
+        raise _epic_not_found()
+    response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(epic.revision)
+    response.headers["Cache-Control"] = "no-store"
+    return _epic_dto(epic)
 
 
 @router.post("/epics", tags=["epics"], status_code=201)
@@ -184,6 +212,50 @@ async def create_epic(
         )
     response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(epic.revision)
     return body
+
+
+@router.patch("/epics/{epic_id}", tags=["epics"])
+async def update_epic(
+    epic_id: str,
+    payload: UpdateEpicRequest,
+    response: Response,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.EPICS_UPDATE)),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Change title, description or status.
+
+    This closes an asymmetry the create/read/link surface otherwise left open:
+    an epic could be created and linked to, but never itself changed, so
+    `cancelled` -- the project's own answer to "there is no delete, use
+    cancelled" -- was reachable for an issue and not for the epic grouping it.
+
+    Fields the caller does not mention are left untouched; a field explicitly
+    sent as `null` clears it. Requires `If-Match`, same rule as
+    `PATCH /api/v1/issues/{issueId}`.
+    """
+    projects = visible_projects(principal)
+    epic = await store.get_epic_for_projects(session, epic_id, projects)
+    if epic is None:
+        raise _epic_not_found()
+    concurrency.require_if_match(if_match, epic.revision)
+
+    changes = payload.model_dump(exclude_unset=True)
+    kwargs = {field: changes[field] for field in _UPDATE_FIELDS if field in changes}
+
+    try:
+        updated = await store.update_epic(
+            session,
+            epic_id,
+            actor_user_id=principal.user_id,
+            actor_email=principal.email,
+            **kwargs,
+        )
+    except IssuePlanningError as exc:
+        raise _planning_error(exc) from exc
+
+    response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(updated.revision)
+    return _epic_dto(updated)
 
 
 @router.post("/epics/{epic_id}/issues/{issue_id}", tags=["epics"])

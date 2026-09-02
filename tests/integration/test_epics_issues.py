@@ -193,6 +193,13 @@ async def test_an_epic_or_issue_in_an_invisible_project_is_not_found(api) -> Non
     theirs_epic = await make_epic(api.factory, "p2")
     theirs_issue = await make_issue(api.factory, "p2")
     assert api.get(f"/api/v1/issues/{theirs_issue.id}", headers=auth(ALICE_TOKEN)).status_code == 404
+    assert api.get(f"/api/v1/epics/{theirs_epic.id}", headers=auth(ALICE_TOKEN)).status_code == 404
+    response = api.patch(
+        f"/api/v1/epics/{theirs_epic.id}",
+        json={"status": "cancelled"},
+        headers={**auth(ALICE_TOKEN), "If-Match": f'"{theirs_epic.revision}"'},
+    )
+    assert response.status_code == 404
     # Linking reaches for both records, and both checks must hold.
     response = api.post(
         f"/api/v1/epics/{theirs_epic.id}/issues/{theirs_issue.id}",
@@ -605,3 +612,92 @@ async def test_list_epics_filters_by_status(api) -> None:
         "/api/v1/projects/p1/epics", params={"status": "open"}, headers=auth(ALICE_TOKEN)
     ).json()
     assert [item["id"] for item in body["items"]] == [open_epic.id]
+
+
+# --------------------------------------------------------------------------
+# Reading and updating epics -- WK-20260902-epic-update-and-move (issue #8).
+#
+# Before this, an epic could be created, listed and linked to, but never
+# itself changed: `cancelled` -- the project's "there is no delete, use
+# cancelled" answer -- was unreachable for an epic through any transport.
+# --------------------------------------------------------------------------
+
+
+async def test_get_epic_returns_an_etag(api) -> None:
+    epic = await make_epic(api.factory)
+    response = api.get(f"/api/v1/epics/{epic.id}", headers=auth(ALICE_TOKEN))
+    assert response.status_code == 200
+    assert response.headers["ETag"] == f'"{epic.revision}"'
+    assert response.json()["id"] == epic.id
+
+
+async def test_update_epic_requires_if_match(api) -> None:
+    epic = await make_epic(api.factory)
+    response = api.patch(
+        f"/api/v1/epics/{epic.id}", json={"status": "in_progress"}, headers=auth(ALICE_TOKEN)
+    )
+    assert response.status_code == 428
+
+
+async def test_update_epic_with_a_stale_etag_is_refused(api) -> None:
+    epic = await make_epic(api.factory)
+    response = api.patch(
+        f"/api/v1/epics/{epic.id}",
+        json={"status": "in_progress"},
+        headers={**auth(ALICE_TOKEN), "If-Match": '"999"'},
+    )
+    assert response.status_code == 412
+    assert response.json()["code"] == "stale_write"
+
+
+async def test_update_epic_changes_only_the_mentioned_fields(api) -> None:
+    """Positive control for the two If-Match negatives above."""
+    epic = await make_epic(api.factory, title="Original")
+    response = api.patch(
+        f"/api/v1/epics/{epic.id}",
+        json={"status": "cancelled"},
+        headers={**auth(ALICE_TOKEN), "If-Match": f'"{epic.revision}"'},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "cancelled"
+    assert body["title"] == "Original"
+    assert body["revision"] == epic.revision + 1
+    assert body["updatedBy"] == "alice@example.com"
+    assert response.headers["ETag"] == f'"{epic.revision + 1}"'
+
+
+async def test_update_epic_can_explicitly_clear_a_nullable_field(api) -> None:
+    async with api.factory() as s:
+        epic = await store.create_epic(
+            s, project_id="p1", title="x", description="Track it", status=None,
+            actor_user_id="alice", actor_email="alice@example.com",
+        )
+    response = api.patch(
+        f"/api/v1/epics/{epic.id}",
+        json={"description": None},
+        headers={**auth(ALICE_TOKEN), "If-Match": f'"{epic.revision}"'},
+    )
+    assert response.status_code == 200
+    assert response.json()["description"] is None
+
+
+async def test_update_epic_rejects_an_unknown_status(api) -> None:
+    epic = await make_epic(api.factory)
+    response = api.patch(
+        f"/api/v1/epics/{epic.id}",
+        json={"status": "orbiting"},
+        headers={**auth(ALICE_TOKEN), "If-Match": f'"{epic.revision}"'},
+    )
+    assert response.status_code == 400
+    assert response.json()["details"][0]["field"] == "/status"
+
+
+async def test_a_reader_cannot_update_an_epic(api) -> None:
+    epic = await make_epic(api.factory)
+    response = api.patch(
+        f"/api/v1/epics/{epic.id}",
+        json={"status": "cancelled"},
+        headers={**auth(READER_TOKEN), "If-Match": f'"{epic.revision}"'},
+    )
+    assert response.status_code == 403

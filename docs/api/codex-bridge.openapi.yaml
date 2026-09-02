@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.6.0
+  version: 1.11.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -1727,6 +1727,86 @@ paths:
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
 
+  /api/v1/epics/{epicId}:
+    get:
+      operationId: getEpic
+      tags: [epics]
+      summary: One epic
+      description: |
+        Returns an `ETag` derived from the epic's revision. Send it back as
+        `If-Match` on `PATCH`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: epicId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+      responses:
+        '200':
+          description: The epic.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Epic'
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    patch:
+      operationId: updateEpic
+      tags: [epics]
+      summary: Change title, description or status
+      description: |
+        A field the caller does not mention is left untouched; a field sent
+        explicitly as `null` is cleared. This is the one transport that can
+        move an epic to `cancelled` -- this build's answer to "there is no
+        delete" applied to epics, not only to issues.
+
+        Requires `If-Match`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: epicId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Id'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEpicRequest'
+      responses:
+        '200':
+          description: The epic after the update.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Epic'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '412': {$ref: '#/components/responses/StaleWrite'}
+        '428': {$ref: '#/components/responses/PreconditionRequired'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
   /api/v1/issues:
     post:
       operationId: createIssue
@@ -3366,6 +3446,23 @@ components:
         status:
           $ref: '#/components/schemas/EpicStatus'
           description: Defaults to `open` when omitted.
+
+    UpdateEpicRequest:
+      type: object
+      description: |
+        Every field is optional. A field the caller does not mention is left
+        unchanged; a field sent explicitly as `null` is cleared. An epic has
+        no `labels` or `dependencies`, unlike `UpdateIssueRequest`.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: [string, 'null']
+          maxLength: 20000
+        status:
+          $ref: '#/components/schemas/EpicStatus'
 
     CreateIssueRequest:
       type: object

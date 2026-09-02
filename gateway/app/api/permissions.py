@@ -211,6 +211,13 @@ EPICS_CREATE = Action(
     summary="Create an epic in one of the actor's projects.",
 )
 
+EPICS_UPDATE = Action(
+    name="epics.update",
+    category=OPERATIONAL,
+    scope=ISSUES_WRITE_SCOPE,
+    summary="Change title, description or status of an epic.",
+)
+
 ISSUES_CREATE = Action(
     name="issues.create",
     category=OPERATIONAL,
@@ -272,6 +279,7 @@ CATALOGUE: tuple[Action, ...] = (
     SESSIONS_RESTART,
     MISSIONS_CANCEL,
     EPICS_CREATE,
+    EPICS_UPDATE,
     ISSUES_CREATE,
     ISSUES_UPDATE,
     EPICS_LINK_ISSUE,

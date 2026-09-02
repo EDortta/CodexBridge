@@ -41,6 +41,19 @@ def _text_result(message: str, data: dict) -> dict:
     }
 
 
+def _strip_issue_ref(raw: object) -> str:
+    """Accept either the bare `IssueModel.id` or the `local:<id>` shape
+
+    `create_issue`/`list_issues` already return as `issue_ref` -- so a caller
+    that just listed issues can pass either field straight back in without
+    reaching for string surgery of its own.
+    """
+    text = str(raw)
+    if text.startswith("local:"):
+        return text.split(":", 1)[1]
+    return text
+
+
 async def handle_mcp_call(
     body: dict,
     session: AsyncSession,
@@ -102,6 +115,74 @@ async def handle_mcp_call(
         if not principal.can_access_project(project.id):
             raise HTTPException(status_code=403, detail="project_access_denied")
         return project
+
+    # Idempotency, extracted from A1's create_epic/create_issue (issue #78
+    # review): the reserve -> detect-replay -> release-on-error -> complete
+    # sequence was ~45 identical lines in each of those two branches, and
+    # move_issue_to_epic below would have been a third copy. These four
+    # helpers close over `session` and `principal` the same way
+    # `require_action`/`resolve_project_or_404` do, so every call site keeps
+    # the same shape it already had -- only the duplication is gone.
+    def write_fingerprint(args: dict) -> bytes:
+        """The bytes `idempotency.fingerprint` hashes, `idempotency_key` excluded.
+
+        The key itself must not be part of what makes two requests "the same
+        body" -- a caller retrying with a fresh key would otherwise fingerprint
+        differently and never see a replay.
+        """
+        return json.dumps(
+            {k: v for k, v in args.items() if k != "idempotency_key"},
+            sort_keys=True, default=str,
+        ).encode()
+
+    async def reserve_idempotent(
+        endpoint: str, key: str, fingerprint: str
+    ) -> idempotency.ReplayedResponse | idempotency.Claim:
+        # ApiError is idempotency.py's native failure (a reused key with a
+        # different body, or one still in flight) -- gateway/app/api/scope.py
+        # exempts `/mcp` from the app-wide ApiError handler, so left uncaught
+        # this becomes a raw 500 that breaks the JSON-RPC envelope.
+        try:
+            return await idempotency.reserve(
+                session, key=key, endpoint=endpoint, actor_id=principal.user_id,
+                request_fingerprint=fingerprint,
+            )
+        except ApiError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+
+    async def release_idempotent(endpoint: str, key: str, claim: idempotency.Claim) -> None:
+        await idempotency.release(
+            session, key=key, endpoint=endpoint, actor_id=principal.user_id, claim=claim
+        )
+
+    async def complete_idempotent(
+        endpoint: str, key: str, claim: idempotency.Claim, status_code: int, body: dict, fingerprint: str
+    ) -> None:
+        try:
+            await idempotency.complete(
+                session, key=key, endpoint=endpoint, actor_id=principal.user_id,
+                status_code=status_code, body=body, claim=claim, request_fingerprint=fingerprint,
+            )
+        except ApiError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+
+    def require_expected_revision(current: int, expected: object) -> None:
+        """`expected_revision` is mandatory on every planning-entity mutator
+        this file adds after A1 (`update_issue`, `update_epic`,
+        `move_issue_to_epic`): the REST side of the same domain already refuses
+        a `PATCH`/link with no `If-Match` instead of treating it as "no
+        opinion" (`gateway/app/api/concurrency.py:require_if_match`), and the
+        MCP transport must not be laxer about the same optimistic-concurrency
+        contract just because JSON-RPC has no header to forget.
+        """
+        if expected is None:
+            raise HTTPException(status_code=400, detail="expected_revision_required")
+        try:
+            expected_int = int(expected)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="expected_revision_required")
+        if expected_int != current:
+            raise HTTPException(status_code=409, detail="stale_write")
 
     def require_task_access(task) -> None:
         if principal is None:
@@ -588,25 +669,10 @@ async def handle_mcp_call(
 
         idempotency_key = arguments.get("idempotency_key")
         endpoint = "mcp:create_epic"
-        request_fingerprint = idempotency.fingerprint(
-            json.dumps(
-                {k: v for k, v in arguments.items() if k != "idempotency_key"},
-                sort_keys=True, default=str,
-            ).encode()
-        )
+        request_fingerprint = idempotency.fingerprint(write_fingerprint(arguments))
         claim = None
         if idempotency_key:
-            # ApiError is idempotency.py's native failure (a reused key with a
-            # different body, or one still in flight) -- gateway/app/api/scope.py
-            # exempts `/mcp` from the app-wide ApiError handler, so left
-            # uncaught this becomes a raw 500 that breaks the JSON-RPC envelope.
-            try:
-                outcome = await idempotency.reserve(
-                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id,
-                    request_fingerprint=request_fingerprint,
-                )
-            except ApiError as exc:
-                raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+            outcome = await reserve_idempotent(endpoint, idempotency_key, request_fingerprint)
             if isinstance(outcome, idempotency.ReplayedResponse):
                 result = _text_result(f"Epic {outcome.body['epic_id']} already existed.", outcome.body)
                 return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
@@ -624,15 +690,11 @@ async def handle_mcp_call(
             )
         except IssuePlanningError as exc:
             if claim is not None:
-                await idempotency.release(
-                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id, claim=claim
-                )
+                await release_idempotent(endpoint, idempotency_key, claim)
             raise HTTPException(status_code=400, detail=f"validation_failed:{exc.field}:{exc.code}") from exc
         except Exception:
             if claim is not None:
-                await idempotency.release(
-                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id, claim=claim
-                )
+                await release_idempotent(endpoint, idempotency_key, claim)
             raise
 
         payload = {
@@ -641,15 +703,13 @@ async def handle_mcp_call(
             "title": epic.title,
             "description": epic.description,
             "status": epic.status,
+            # Additive since A1: `update_epic` needs the caller to know the
+            # current revision to fill `expected_revision` with, the same way
+            # `ETag` lets a REST caller fill `If-Match`.
+            "revision": epic.revision,
         }
         if claim is not None:
-            try:
-                await idempotency.complete(
-                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id,
-                    status_code=201, body=payload, claim=claim, request_fingerprint=request_fingerprint,
-                )
-            except ApiError as exc:
-                raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+            await complete_idempotent(endpoint, idempotency_key, claim, 201, payload, request_fingerprint)
         result = _text_result(f"Epic {epic.id} created.", payload)
     elif tool_name == "list_epics":
         require_action(permissions.EPICS_READ)
@@ -668,12 +728,55 @@ async def handle_mcp_call(
                     "title": epic.title,
                     "description": epic.description,
                     "status": epic.status,
+                    "revision": epic.revision,
                 }
                 for epic in rows
             ],
             "has_more": has_more,
         }
         result = _text_result(f"Found {len(payload['epics'])} epics.", payload)
+    elif tool_name == "update_epic":
+        # Issue #78 / WK-20260902-epic-update-and-move: mirrors
+        # `PATCH /api/v1/epics/{epicId}` (gateway/app/api/routes/epics.py)
+        # over MCP. `expected_revision` plays the role `If-Match` plays there
+        # -- required, not optional, so this transport is not laxer than REST
+        # about the same optimistic-concurrency contract.
+        require_action(permissions.EPICS_UPDATE)
+        epic_id = str(arguments["epic_id"])
+        epic = await store.get_epic(session, epic_id)
+        # A hidden epic (unknown, or in a project this principal cannot see)
+        # answers the same `unknown_epic` a nonexistent one would -- the same
+        # probing-prevention rule `get_epic_for_projects` applies on the REST
+        # side, which is why this is 404 and not 403.
+        if epic is None or not principal.can_access_project(epic.project_id):
+            raise HTTPException(status_code=404, detail="unknown_epic")
+        require_expected_revision(epic.revision, arguments.get("expected_revision"))
+
+        # Only keys the caller actually sent reach the store -- the MCP
+        # equivalent of `UpdateEpicRequest.model_dump(exclude_unset=True)`:
+        # JSON-RPC already distinguishes an omitted key from one sent `null`,
+        # so no pydantic model is needed to preserve that distinction.
+        kwargs = {
+            field: arguments[field]
+            for field in ("title", "description", "status")
+            if field in arguments
+        }
+        try:
+            updated = await store.update_epic(
+                session, epic_id, actor_user_id=principal.user_id, actor_email=principal.email, **kwargs,
+            )
+        except IssuePlanningError as exc:
+            raise HTTPException(status_code=400, detail=f"validation_failed:{exc.field}:{exc.code}") from exc
+
+        payload = {
+            "epic_id": updated.id,
+            "project_id": updated.project_id,
+            "title": updated.title,
+            "description": updated.description,
+            "status": updated.status,
+            "revision": updated.revision,
+        }
+        result = _text_result(f"Epic {updated.id} updated.", payload)
     elif tool_name == "create_issue":
         require_action(permissions.ISSUES_CREATE)
         project = await resolve_project_or_404(arguments["project"])
@@ -692,21 +795,10 @@ async def handle_mcp_call(
 
         idempotency_key = arguments.get("idempotency_key")
         endpoint = "mcp:create_issue"
-        request_fingerprint = idempotency.fingerprint(
-            json.dumps(
-                {k: v for k, v in arguments.items() if k != "idempotency_key"},
-                sort_keys=True, default=str,
-            ).encode()
-        )
+        request_fingerprint = idempotency.fingerprint(write_fingerprint(arguments))
         claim = None
         if idempotency_key:
-            try:
-                outcome = await idempotency.reserve(
-                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id,
-                    request_fingerprint=request_fingerprint,
-                )
-            except ApiError as exc:
-                raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+            outcome = await reserve_idempotent(endpoint, idempotency_key, request_fingerprint)
             if isinstance(outcome, idempotency.ReplayedResponse):
                 result = _text_result(f"Issue {outcome.body['issue_id']} already existed.", outcome.body)
                 return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
@@ -731,15 +823,11 @@ async def handle_mcp_call(
             )
         except IssuePlanningError as exc:
             if claim is not None:
-                await idempotency.release(
-                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id, claim=claim
-                )
+                await release_idempotent(endpoint, idempotency_key, claim)
             raise HTTPException(status_code=400, detail=f"validation_failed:{exc.field}:{exc.code}") from exc
         except Exception:
             if claim is not None:
-                await idempotency.release(
-                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id, claim=claim
-                )
+                await release_idempotent(endpoint, idempotency_key, claim)
             raise
 
         payload = {
@@ -759,15 +847,12 @@ async def handle_mcp_call(
             "assignee_email": issue.assignee_email,
             "dependencies": json.loads(issue.dependencies_json or "[]"),
             "blocked_reason": issue.blocked_reason,
+            # Additive since A1, same reason as create_epic's: `update_issue`
+            # and `move_issue_to_epic` need it for `expected_revision`.
+            "revision": issue.revision,
         }
         if claim is not None:
-            try:
-                await idempotency.complete(
-                    session, key=idempotency_key, endpoint=endpoint, actor_id=principal.user_id,
-                    status_code=201, body=payload, claim=claim, request_fingerprint=request_fingerprint,
-                )
-            except ApiError as exc:
-                raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+            await complete_idempotent(endpoint, idempotency_key, claim, 201, payload, request_fingerprint)
         result = _text_result(f"Issue {issue.id} created.", payload)
     elif tool_name == "list_issues":
         require_action(permissions.ISSUES_READ)
@@ -800,12 +885,117 @@ async def handle_mcp_call(
                     "assignee_email": issue.assignee_email,
                     "dependencies": json.loads(issue.dependencies_json or "[]"),
                     "blocked_reason": issue.blocked_reason,
+                    "revision": issue.revision,
                 }
                 for issue in rows
             ],
             "has_more": has_more,
         }
         result = _text_result(f"Found {len(payload['issues'])} issues.", payload)
+    elif tool_name == "update_issue":
+        # Mirrors `PATCH /api/v1/issues/{issueId}` (gateway/app/api/routes/issues.py)
+        # over MCP. `epicId` is absent here for the same reason it is absent
+        # from the REST body: `move_issue_to_epic` (this file) /
+        # `POST /api/v1/epics/{epicId}/issues/{issueId}` (REST) is the one
+        # mechanism that moves an issue between epics.
+        require_action(permissions.ISSUES_UPDATE)
+        issue_id = _strip_issue_ref(arguments["issue_id"])
+        issue = await store.get_issue(session, issue_id)
+        if issue is None or not principal.can_access_project(issue.project_id):
+            raise HTTPException(status_code=404, detail="unknown_issue")
+        require_expected_revision(issue.revision, arguments.get("expected_revision"))
+
+        kwargs = {
+            field: arguments[field]
+            for field in (
+                "title", "description", "status", "priority", "labels",
+                "assignee_user_id", "assignee_email", "dependencies", "blocked_reason",
+            )
+            if field in arguments
+        }
+        try:
+            updated = await store.update_issue(
+                session, issue_id, actor_user_id=principal.user_id, actor_email=principal.email, **kwargs,
+            )
+        except IssuePlanningError as exc:
+            raise HTTPException(status_code=400, detail=f"validation_failed:{exc.field}:{exc.code}") from exc
+
+        payload = {
+            "issue_id": updated.id,
+            "issue_ref": f"local:{updated.id}",
+            "project_id": updated.project_id,
+            "epic_id": updated.epic_id,
+            "title": updated.title,
+            "description": updated.description,
+            "status": updated.status,
+            "priority": updated.priority,
+            "labels": json.loads(updated.labels_json or "[]"),
+            "assignee_user_id": updated.assignee_user_id,
+            "assignee_email": updated.assignee_email,
+            "dependencies": json.loads(updated.dependencies_json or "[]"),
+            "blocked_reason": updated.blocked_reason,
+            "revision": updated.revision,
+        }
+        result = _text_result(f"Issue {updated.id} updated.", payload)
+    elif tool_name == "move_issue_to_epic":
+        # Mirrors `POST /api/v1/epics/{epicId}/issues/{issueId}`
+        # (gateway/app/api/routes/epics.py:link_issue) over MCP -- the only
+        # mechanism, on either transport, that changes which epic an issue
+        # belongs to. Idempotency mirrors that REST pair's own
+        # `Idempotency-Key`; `expected_revision` mirrors its required
+        # `If-Match` on the issue's revision.
+        require_action(permissions.EPICS_LINK_ISSUE)
+        issue_id = _strip_issue_ref(arguments["issue_id"])
+        epic_id = str(arguments["epic_id"])
+        issue = await store.get_issue(session, issue_id)
+        if issue is None or not principal.can_access_project(issue.project_id):
+            raise HTTPException(status_code=404, detail="unknown_issue")
+        epic = await store.get_epic_for_projects(session, epic_id, [issue.project_id])
+        if epic is None:
+            raise HTTPException(status_code=404, detail="unknown_epic")
+
+        # Idempotency replay is checked BEFORE `expected_revision`, mirroring
+        # `link_issue`'s own order (reserve/replay, then `require_if_match`):
+        # a retried call arrives after the first one already bumped the
+        # revision, so validating `expected_revision` against the NEW current
+        # value first would turn a legitimate replay into a false
+        # `stale_write` -- the exact bug this ordering avoids.
+        idempotency_key = arguments.get("idempotency_key")
+        endpoint = "mcp:move_issue_to_epic"
+        request_fingerprint = idempotency.fingerprint(write_fingerprint(arguments))
+        claim = None
+        if idempotency_key:
+            outcome = await reserve_idempotent(endpoint, idempotency_key, request_fingerprint)
+            if isinstance(outcome, idempotency.ReplayedResponse):
+                result = _text_result(f"Issue {outcome.body['issue_id']} moved to epic {outcome.body['epic_id']}.", outcome.body)
+                return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
+            claim = outcome
+
+        try:
+            require_expected_revision(issue.revision, arguments.get("expected_revision"))
+            updated = await store.link_issue_to_epic(
+                session, issue_id=issue_id, epic_id=epic_id,
+                actor_user_id=principal.user_id, actor_email=principal.email,
+            )
+        except IssuePlanningError as exc:
+            if claim is not None:
+                await release_idempotent(endpoint, idempotency_key, claim)
+            raise HTTPException(status_code=400, detail=f"validation_failed:{exc.field}:{exc.code}") from exc
+        except Exception:
+            if claim is not None:
+                await release_idempotent(endpoint, idempotency_key, claim)
+            raise
+
+        payload = {
+            "issue_id": updated.id,
+            "issue_ref": f"local:{updated.id}",
+            "project_id": updated.project_id,
+            "epic_id": updated.epic_id,
+            "revision": updated.revision,
+        }
+        if claim is not None:
+            await complete_idempotent(endpoint, idempotency_key, claim, 200, payload, request_fingerprint)
+        result = _text_result(f"Issue {updated.id} moved to epic {updated.epic_id}.", payload)
     elif tool_name == "create_reminder":
         # WK-20260830-chatgpt-entry-provider-and-delivery, issue #71. Runs on
         # the gateway, not the executor -- see google_calendar.py's module
