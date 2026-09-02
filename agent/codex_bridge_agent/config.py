@@ -91,6 +91,17 @@ class AgentSettings(BaseSettings):
     # `gh`, not a coding-agent session -- `git_push_timeout_seconds` above
     # sets the analogous bound for git delivery.
     forge_operation_timeout_seconds: float = 60
+    # WK-20260902-forge-github-module, issue #80/#79. Where `gh_tool.run_gh`
+    # looks, under `project_root`, for the GitHub token to inject as
+    # `GH_TOKEN`. The house convention this repo already practices
+    # (`.credentials/store` in this very tree; `.gitignore:46` ignores
+    # `.credentials/*`) is that this path is a SYMLINK to the real secret
+    # kept outside the project tree -- `run_gh` refuses outright if it
+    # resolves to a regular file inside the repo, because the coding agent
+    # that runs in this same tree can read whatever the working copy holds.
+    # An operator who keeps the token under a different name points this at
+    # it without touching code.
+    forge_credential_relative_path: str = ".credentials/github-token"
 
     model_config = SettingsConfigDict(env_prefix="CODEX_BRIDGE_AGENT_", env_file=".env")
 
