@@ -28,6 +28,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 from dataclasses import dataclass
 from functools import lru_cache
@@ -35,6 +36,9 @@ from pathlib import Path
 
 import anyio.to_thread
 from pydantic import BaseModel, Field
+
+
+logger = logging.getLogger(__name__)
 
 
 class GatewayUser(BaseModel):
@@ -71,16 +75,80 @@ class AuthenticatedPrincipal(BaseModel):
         return self.is_admin() or project_id in self.allowed_projects
 
 
-def load_user_registry(path: str) -> dict[str, GatewayUser]:
+def _read_user_registry(path: str) -> dict[str, GatewayUser]:
+    """Parse the registry, or raise. The strict form behind `load_user_registry`.
+
+    Raises on malformed JSON, a shape pydantic refuses, or a **key collision**:
+    two different accounts that resolve to the same lookup key — a duplicate
+    `user_id`, a duplicate e-mail, or a `user_id` that equals another account's
+    e-mail. Last-write-wins there silently rebinds an already-issued token to
+    whichever entry loaded last, because `current_principal` re-resolves the
+    token's `user_id` against this registry on every request; a copy-pasted
+    entry with the e-mail changed and the `user_id` left alone is enough to hand
+    one account another's roles. Refusing the whole registry is the fail-closed
+    reading (`design-standards.md` §6): a registry the loader cannot make
+    unambiguous grants nobody anything until the operator disambiguates it, and
+    `unusable_registry_reason` names the collision.
+    """
     file_path = Path(path)
     if not file_path.exists():
         return {}
     payload = UserRegistry.model_validate(json.loads(file_path.read_text(encoding="utf-8")))
     users: dict[str, GatewayUser] = {}
     for user in payload.users:
-        users[user.user_id] = user
-        users[user.email.lower()] = user
+        # Keys are case-folded, and the collision check is on the folded key.
+        # `lookup_user` and `authenticate` resolve `.lower()` first, so a
+        # collision detected on the raw `user_id` would miss the case that
+        # actually escalates: a `user_id` of `"OPS@EXAMPLE.COM"` never byte-
+        # matches another account's `email` of `"ops@example.com"`, yet resolves
+        # to it at lookup. Folding both sides makes detection and resolution use
+        # the same key. The `GatewayUser` keeps its original-case fields — only
+        # the index is folded.
+        for key in (user.user_id.lower(), user.email.lower()):
+            existing = users.get(key)
+            if existing is not None and existing is not user:
+                raise ValueError(
+                    f"duplicate registry key {key!r}: it resolves both "
+                    f"{existing.user_id!r} and {user.user_id!r}. A user_id and an "
+                    "e-mail must each identify exactly one account, case-insensitively."
+                )
+            users[key] = user
     return users
+
+
+def load_user_registry(path: str) -> dict[str, GatewayUser]:
+    """The registry as a lookup dict, failing **closed** on any problem.
+
+    A registry that cannot be read — malformed mid-edit, a shape pydantic
+    refuses, a key collision — returns `{}` here, so every credential path
+    answers the uniform `401` rather than raising out of the request handler.
+    An earlier cut let the parse raise straight through `authenticate` and
+    `lookup_user`: a hand-edited `users.json` then turned `POST /auth/sign-in`
+    and `GET /auth/me` into an unauthenticated `500 internal_error` with
+    `retryable: true`, a new distinguishing channel that also told a conforming
+    client to keep hammering a gateway that could not recover. The diagnostic
+    survives in the log (a WARNING here) and in `unusable_registry_reason`, which
+    `main.py` reports at startup and the MCP path surfaces as
+    `user_registry_unavailable`.
+
+    Failing closed covers an I/O fault (`OSError`: a volume unmounted, a
+    permission flipped) the same as a parse error — a transient one becomes a
+    fleet-wide forced sign-out rather than a `500`. That is the fail-closed
+    trade, accepted deliberately: a registry the process cannot read grants
+    nobody anything, and the deployment-level fault is still named at startup and
+    on `/mcp`. Recorded as an accepted risk in the issue-#4 review.
+    """
+    try:
+        return _read_user_registry(path)
+    except Exception as error:  # malformed JSON, a shape pydantic refuses, a collision
+        logger.warning(
+            "user registry %r is unusable (%s: %s); failing closed — no account can "
+            "sign in until it is fixed.",
+            path,
+            error.__class__.__name__,
+            error,
+        )
+        return {}
 
 
 def lookup_user(path: str, username_or_email: str) -> GatewayUser | None:
@@ -120,8 +188,8 @@ def unusable_registry_reason(path: str) -> str | None:
             "(docs/installation.md)."
         )
     try:
-        registry = load_user_registry(path)
-    except Exception as error:  # malformed JSON, or a shape pydantic refuses
+        registry = _read_user_registry(path)
+    except Exception as error:  # malformed JSON, a shape pydantic refuses, a key collision
         return (
             f"the user registry {path!r} cannot be read ({error.__class__.__name__}: "
             f"{error}). No account can sign in until it parses."
@@ -267,12 +335,36 @@ def _iterations_of(encoded_hash: str) -> int:
     Zero on an unparseable hash is deliberate: `verify_password` rejects it
     immediately, having spent nothing, so the padding below has to cover the
     whole target rather than the remainder of it.
+
+    The algorithm field is checked, not just skipped over. `verify_password`
+    only ever derives `pbkdf2_sha256`, so an `argon2id$...` or `scrypt$...`
+    string is never actually verified — reading its second field as a PBKDF2
+    round count is meaningless, and an `argon2id$99000000$...` line (a plausible
+    artefact of a hash migration) would otherwise set the padding target for
+    *every* unauthenticated attempt in the deployment to 99 million rounds. A
+    hash this function cannot honestly cost is worth 0, exactly like one it
+    cannot parse.
+
+    A round count above `_MAX_ITERATIONS` is also worth 0: `verify_password`
+    refuses such a hash (the account is unusable), so it must not set the
+    derivation target either. Returning 0 keeps the two consistent — the decoy
+    and the padding both cost the registry's real ceiling, not the absurd one —
+    and `_verify_at_constant_cost` then pads the unusable account up to that same
+    target, so it is not identifiable by timing.
     """
     try:
-        _, iterations, _, _ = encoded_hash.split("$", 3)
-        return int(iterations)
+        algorithm, iterations, _, _ = encoded_hash.split("$", 3)
     except (ValueError, AttributeError):
         return 0
+    if algorithm != "pbkdf2_sha256":
+        return 0
+    try:
+        count = int(iterations)
+    except ValueError:
+        return 0
+    if count <= 0 or count > _MAX_ITERATIONS:
+        return 0
+    return count
 
 
 def _pad_derivation(iterations: int) -> None:
@@ -303,6 +395,13 @@ def _registry_iterations(registry: dict[str, GatewayUser]) -> int:
     A registry that is empty or whose hashes are unparseable falls back to the
     production cost — the file being absent must not make sign-in fast enough to
     probe.
+
+    The ceiling is enforced in `_iterations_of`, which returns 0 for a count
+    above `_MAX_ITERATIONS` (the same hash `verify_password` refuses). So one
+    account written at an absurd round count — a typo, or a migrated hash whose
+    count is in different units — contributes 0 here rather than dictating
+    seconds of CPU per sign-in across the deployment, and every value this `max`
+    sees is already within the ceiling.
     """
     counts = set()
     for user in registry.values():
@@ -337,6 +436,16 @@ def _decoy_hash(iterations: int) -> str:
 # so the fallback is expensive rather than cheap.
 _FALLBACK_ITERATIONS = 600000
 
+# The most PBKDF2 rounds any single registry entry may impose on every
+# unauthenticated sign-in attempt. Well above any honestly-generated cost —
+# ~16x the production 600 000 in `docs/installation.md`, so an operator who
+# hardens has ample headroom and does not lock themselves out — while still
+# refusing an absurd typo or a mis-unit migrated count (`…$99000000$…`) that
+# would turn one line of `users.json` into an authentication DoS. A hash above
+# this is unusable (`verify_password` refuses it, `_iterations_of` is 0); see the
+# accepted risk in `docs/security.md`. See `_registry_iterations`.
+_MAX_ITERATIONS = 10_000_000
+
 
 def verify_password(password: str, encoded_hash: str) -> bool:
     try:
@@ -345,9 +454,21 @@ def verify_password(password: str, encoded_hash: str) -> bool:
         return False
     if algorithm != "pbkdf2_sha256":
         return False
+    try:
+        rounds = int(iterations)
+    except ValueError:
+        return False
+    # A round count above the ceiling makes the account unusable rather than
+    # letting an attempt that names it spend that many rounds. `_registry_iterations`
+    # caps the decoy/padding target, but the derivation here is what an attacker
+    # who knows the account would actually trigger; refusing it closes the other
+    # half of that authentication-DoS. `_iterations_of` returns 0 for the same
+    # hash, so the constant-cost padding still covers it.
+    if rounds <= 0 or rounds > _MAX_ITERATIONS:
+        return False
     salt = _b64decode(salt_b64)
     expected = _b64decode(digest_b64)
-    derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(iterations))
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, rounds)
     return hmac.compare_digest(derived, expected)
 
 

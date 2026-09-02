@@ -56,10 +56,22 @@ from shared.protocol import (
 from shared.security import hash_token
 
 
-# `entity_type` of every row the credential lifecycle writes, and the only rows
-# `purge_expired_audit_events` is allowed to remove. A literal at each call site
-# would have made the retention window's scope a coincidence of spelling.
+# `entity_type` of every row the credential lifecycle writes. A literal at each
+# call site would have made the retention window's scope a coincidence of
+# spelling.
 AUTH_ENTITY_TYPE = "auth"
+
+# The auth event types `purge_expired_audit_events` may age out: the high-volume
+# ones, driven by an unauthenticated caller (`auth.sign_in_failed`) or by a
+# client rotating on a schedule (`auth.token_refreshed`, `auth.signed_in`).
+# `auth.credentials_revoked` is deliberately absent — it carries the theft record
+# (`reason: "refresh_token_reuse"`) and the forced-revocation record
+# (`account_unavailable`), breach evidence a spam-retention window must not
+# delete — and so is any future incident type. Named here rather than inline so
+# adding an event type is a deliberate decision about whether it is spam.
+AUTH_SWEEPABLE_EVENT_TYPES = frozenset(
+    {"auth.sign_in_failed", "auth.token_refreshed", "auth.signed_in"}
+)
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -930,13 +942,20 @@ async def revoke_auth_grant(
         .values(revoked_at=now)
     )
     revoked = {"access_tokens": max(access.rowcount, 0), "refresh_tokens": max(refresh.rowcount, 0)}
-    await record_event(
-        session,
-        AUTH_ENTITY_TYPE,
-        user_id,
-        "auth.credentials_revoked",
-        {"grant_id": grant_id, "reason": reason, **revoked},
-    )
+    # Only record when something was actually revoked. `/revoke` is idempotent
+    # and its own contract blesses the retry, so a client (or an unauthenticated
+    # caller with one recovered token) can drive this repeatedly; writing an
+    # `auth.credentials_revoked` row on every no-op call floods the audit trail
+    # with `0/0` rows that bury the real revocations — the more so now that the
+    # retention sweep no longer ages `auth.credentials_revoked` out.
+    if revoked["access_tokens"] or revoked["refresh_tokens"]:
+        await record_event(
+            session,
+            AUTH_ENTITY_TYPE,
+            user_id,
+            "auth.credentials_revoked",
+            {"grant_id": grant_id, "reason": reason, **revoked},
+        )
     await session.commit()
     return revoked
 
@@ -954,13 +973,17 @@ async def revoke_access_token(
     if item is not None and item.revoked_at is None:
         item.revoked_at = datetime.now(timezone.utc)
         revoked["access_tokens"] = 1
-    await record_event(
-        session,
-        AUTH_ENTITY_TYPE,
-        user_id,
-        "auth.credentials_revoked",
-        {"grant_id": None, "reason": reason, **revoked},
-    )
+    # Only record a real revocation — see `revoke_auth_grant`. A retry against an
+    # already-revoked or unknown access token revokes nothing and must not add a
+    # `0/0` audit row.
+    if revoked["access_tokens"] or revoked["refresh_tokens"]:
+        await record_event(
+            session,
+            AUTH_ENTITY_TYPE,
+            user_id,
+            "auth.credentials_revoked",
+            {"grant_id": None, "reason": reason, **revoked},
+        )
     await session.commit()
     return revoked
 
@@ -990,15 +1013,18 @@ async def purge_expired_audit_events(
     all — the startup sweep collected `idempotency_records` only — so a caller
     that never authenticated could grow the operator's database indefinitely.
 
-    Scoped to `entity_type == "auth"`, and that scope is the point. The window
-    is chosen to bound sign-in spam; applying it to the whole table would delete
-    `task.approved` — the record of who authorized a sensitive task — plus
-    `task.stopped_by_actor`, `task.state_changed` and `task.result`, on a table
-    that had kept everything forever. Whether an approval record may be aged out
-    at 90 days is an operator's decision about their own compliance, and it is
-    not one to make by inheritance from a spam control. Eleven `record_event`
-    call sites write here; two of them are auth, and those two are the ones an
-    unauthenticated caller can drive.
+    Scoped to `AUTH_SWEEPABLE_EVENT_TYPES`, and that scope is the point. The
+    window bounds high-volume rows — a rejected sign-in an unauthenticated caller
+    drives, and the `auth.token_refreshed`/`auth.signed_in` rows a client on a
+    schedule produces — so it ages out *only* those. An earlier cut scoped it to
+    `entity_type == "auth"`, which also deleted `auth.credentials_revoked`
+    — including `{reason:"refresh_token_reuse"}`, the single durable record that a
+    stolen refresh token was replayed on a grant, and `{reason:"account_unavailable"}`,
+    a forced revocation. A knob documented as a *spam* control must not age out
+    breach evidence, exactly as it must not age out `task.approved` (which the
+    `entity_type` filter already spared). The successful `/revoke` no-op rows that
+    used to share this scope no longer exist — `revoke_auth_grant` stopped writing
+    them (see above).
 
     A non-positive window means "keep everything", for a deployment that exports
     the table elsewhere. It is an explicit opt-in to unbounded growth.
@@ -1013,6 +1039,7 @@ async def purge_expired_audit_events(
     result = await session.execute(
         delete(AuditEventModel)
         .where(AuditEventModel.entity_type == AUTH_ENTITY_TYPE)
+        .where(AuditEventModel.event_type.in_(AUTH_SWEEPABLE_EVENT_TYPES))
         .where(AuditEventModel.created_at < cutoff),
         # The delete happens in the database, not by evaluating the predicate
         # against whatever this session happens to have loaded. Letting

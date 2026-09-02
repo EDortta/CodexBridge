@@ -875,6 +875,151 @@ async def test_revocation_is_recorded_against_the_actor(api) -> None:
     assert json.loads(events[0].payload_json)["reason"] == "signed_out"
 
 
+async def test_a_no_op_revoke_writes_no_audit_row(api) -> None:
+    """A retry the endpoint blesses must not add a `0/0` audit row.
+
+    `/revoke` is idempotent and its contract invites the retry a flaky mobile
+    connection makes. A refresh token whose grant is already revoked is still
+    *found* by `inspect_refresh_token` (it returns the row, revoked), so the
+    handler calls `revoke_auth_grant` again — revoking nothing. Recording
+    `auth.credentials_revoked` on that no-op buries the real revocations under
+    `0/0` rows, the more so now that the retention sweep no longer ages them out.
+    """
+    body = sign_in(api).json()
+    first = api.post("/api/v1/auth/revoke", json={"refreshToken": body["refreshToken"]})
+    assert first.status_code == 200 and first.json()["accessTokensRevoked"] >= 1
+
+    # The same, now-revoked refresh token again: the grant is found but already
+    # revoked, so this call revokes nothing.
+    second = api.post("/api/v1/auth/revoke", json={"refreshToken": body["refreshToken"]})
+    assert second.status_code == 200 and second.json()["accessTokensRevoked"] == 0
+
+    events = await audit_events(api.factory, "auth.credentials_revoked")
+    assert len(events) == 1, (
+        f"a no-op revoke wrote an audit row: {[json.loads(e.payload_json) for e in events]}"
+    )
+
+
+async def test_a_last_minute_rotation_does_not_outlive_the_grant_deadline(api) -> None:
+    """A rotation near the grant's end must not mint an access token past it.
+
+    The grant has an absolute lifetime (`refreshTokenExpiresAt`, carried forward
+    unchanged). Minting `access_expires_at = now + access_TTL` on the last legal
+    rotation put the access token's expiry *after* the grant deadline, and
+    `GET /auth/me` answered 200 with it past the deadline the grant is documented
+    to enforce. The access expiry is capped at the grant deadline.
+    """
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    async with api.factory() as s:
+        await store.issue_auth_grant(
+            s,
+            grant_id="g-deadline",
+            access_token="old-access",
+            refresh_token="old-refresh",
+            client_id="codexbridge-mobile",
+            user_id="alice",
+            scopes=["codexbridge.read"],
+            access_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+            refresh_expires_at=deadline,
+            event_type="auth.signed_in",
+        )
+
+    rotated = api.post("/api/v1/auth/refresh", json={"refreshToken": "old-refresh"})
+    assert rotated.status_code == 200
+    body = rotated.json()
+
+    access_exp = datetime.fromisoformat(body["accessTokenExpiresAt"].replace("Z", "+00:00"))
+    refresh_exp = datetime.fromisoformat(body["refreshTokenExpiresAt"].replace("Z", "+00:00"))
+    assert access_exp <= refresh_exp, (
+        f"the rotated access token expires at {access_exp}, past the grant deadline {refresh_exp}"
+    )
+    # expiresIn is capped too, not left at the full TTL — it is the field the
+    # contract tells the client to schedule its refresh from. Lower bound as well
+    # as upper: an over-truncation that returned an already-expired access token
+    # (the tz-misread the normalization guards against) would satisfy `<= 30` too.
+    assert 0 < body["expiresIn"] <= 30, f"expiresIn out of range: {body['expiresIn']}"
+
+
+async def test_a_rotation_far_from_the_deadline_still_gets_the_full_access_ttl(api) -> None:
+    """The deadline cap must not shorten a normal rotation — the fix's floor.
+
+    Capping `access_expires_at` at the grant deadline is right only when the
+    deadline is nearer than the TTL. A rotation 30 days out must still mint an
+    access token good for the full access TTL, not the whole grant; dropping the
+    `min` and always using the deadline would hand out a 30-day access token and
+    this is what catches it.
+    """
+    from gateway.app.core.config import settings
+
+    ttl = settings.oauth_access_token_ttl_seconds
+    async with api.factory() as s:
+        await store.issue_auth_grant(
+            s,
+            grant_id="g-far",
+            access_token="far-access",
+            refresh_token="far-refresh",
+            client_id="codexbridge-mobile",
+            user_id="alice",
+            scopes=["codexbridge.read"],
+            access_expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl),
+            refresh_expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+            event_type="auth.signed_in",
+        )
+
+    body = api.post("/api/v1/auth/refresh", json={"refreshToken": "far-refresh"}).json()
+    now = datetime.now(timezone.utc)
+    access_exp = datetime.fromisoformat(body["accessTokenExpiresAt"].replace("Z", "+00:00"))
+    assert access_exp - now <= timedelta(seconds=ttl + 5), (
+        f"a far-deadline rotation minted an access token good for {access_exp - now}, "
+        f"past the {ttl}s TTL"
+    )
+    assert body["expiresIn"] <= ttl + 5
+
+
+async def test_the_retention_sweep_keeps_a_refresh_reuse_record(api) -> None:
+    """The spam sweep must not age out the record that a token was replayed.
+
+    `auth.credentials_revoked{reason:"refresh_token_reuse"}` is the one durable
+    artefact saying a stolen refresh token was replayed on a grant. Scoping the
+    retention window to `entity_type == "auth"` deleted it along with rejected
+    sign-ins; it is scoped to `AUTH_SWEEPABLE_EVENT_TYPES` (the high-volume
+    `auth.sign_in_failed`, `auth.token_refreshed`, `auth.signed_in`), which
+    excludes `auth.credentials_revoked`, so the theft record survives while a
+    rejected sign-in of the same age is still swept.
+    """
+    async with api.factory() as s:
+        old = datetime.now(timezone.utc) - timedelta(days=120)
+        s.add(
+            AuditEventModel(
+                entity_type="auth",
+                entity_id="alice",
+                event_type="auth.credentials_revoked",
+                payload_json=json.dumps({"grant_id": "g1", "reason": "refresh_token_reuse"}),
+                created_at=old,
+            )
+        )
+        s.add(
+            AuditEventModel(
+                entity_type="auth",
+                entity_id="alice",
+                event_type="auth.sign_in_failed",
+                payload_json=json.dumps({"reason": "bad_password"}),
+                created_at=old,
+            )
+        )
+        await s.commit()
+
+        purged = await store.purge_expired_audit_events(s, retention_days=90)
+        survivors = sorted(
+            row.event_type for row in (await s.execute(select(AuditEventModel))).scalars()
+        )
+
+    assert purged == 1, "the sweep took something other than the rejected sign-in"
+    assert survivors == ["auth.credentials_revoked"], (
+        f"the theft record was aged out by a spam control: survivors={survivors}"
+    )
+
+
 # --------------------------------------------------------------------------
 # Who am I, and what may I do
 # --------------------------------------------------------------------------

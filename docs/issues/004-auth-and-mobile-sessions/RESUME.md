@@ -6,6 +6,65 @@
 
 ## Next Step (DO THIS FIRST)
 
+~~Adversarial review of this delivery~~ — **DONE 2026-08-26** (Squad E,
+WK-20260826-gh4-adversarial-review, branch
+`feature/gh-4/adversarial-review-fixes`, PR pending). See "Adversarial review
+2026-08-26" below. What remains is the **operator's**: the escalated findings in
+`docs/security.md` ("Revisão adversarial da issue #4 — decisões pendentes do
+operador"), chiefly **S1** (a narrowed OAuth delegation still confers admin,
+ship-blocking) and the **rotation-race theft-policy** direction conflict.
+
+## Adversarial review 2026-08-26 (Squad E) — two rounds, three lenses
+
+Concentrated where the RESUME asked (rotation race, revocation counters, 401
+leakage). Lenses: security, skeptic, second-caller. Recorded per
+`.docs/agents/council.md` §4.
+
+**Round 1 — raised 22 · survived §2 22 · became tests 6 (8 tests) · left to the
+operator 6 (+3 doc-accuracy questions).** Fixed on
+`feature/gh-4/adversarial-review-fixes`, each with a test that fails without it:
+- **S2** malformed/unreadable `users.json` answered an unauthenticated
+  `500 retryable:true` → now fails closed (`{}` → uniform 401).
+- **S4** last-write-wins on a colliding registry key silently rebound a live
+  token's privileges → the loader refuses a case-folded duplicate key.
+- **S5** a non-pbkdf2 or absurd (`…$99000000$…`) round count set the derivation
+  cost for every unauthenticated attempt → `_iterations_of`/`verify_password`
+  refuse it, ceiling `_MAX_ITERATIONS`.
+- **SC#1** a last-minute rotation minted an access token (and `expiresIn`) past
+  the grant's absolute deadline → capped at the deadline.
+- **SC#7** an idempotent-retry no-op `/revoke` wrote a `0/0` audit row → recorded
+  only when something was revoked.
+- **S3** the retention sweep aged out the `refresh_token_reuse` theft record →
+  scoped to `AUTH_SWEEPABLE_EVENT_TYPES`, incident rows preserved.
+
+Left to the operator (`.docs/agents/council.md` §1 one-way door — contradict a
+rule or a fenced decision): **S1** (admin ignores the scope allowlist),
+**rotation-race theft policy** (skeptic: concurrent loser not revoked/audited;
+second-caller: benign retry punished as theft — opposite directions →
+governance-precedence), **/revoke counter oracle** (entangled with fenced
+finding 17's pinning test), **S6** (`/mcp` non-dict body 500, out of #4 scope),
+**S7** (per-request registry parse). All written up in `docs/security.md`.
+
+**Round 2 — raised 5 (4 introduced-by-r1, 1 pre-existing) · survived §2 5 ·
+became tests 1 · questions/operator 4.** Closed in the same delivery: SC#1 tests
+gained a lower bound; `_MAX_ITERATIONS` 2M→10M (no lockout for a hardening
+operator); a stale test docstring corrected. Recorded as risk-acceptance /
+operator decisions in `docs/security.md`: an over-ceiling hash is unusable and
+audits `bad_password`; routine `signed_out` records are now retained (clean fix
+needs an audit-contract change); a pre-existing "a replayed token is audited
+once" gap; the case-insensitive `user_id` side effect; per-request log volume.
+
+**Finding 17 (operator-accepted) — confirmed still true, untouched:** behaviour
+at `routes/auth.py:341-373`, acceptance at `docs/security.md`, pin at
+`test_a_consumed_refresh_token_still_ends_its_own_grant` (passes unchanged).
+
+**Checks:** `.venv/bin/python -m pytest -q` → 561 passed, 3 skipped. Each new
+test verified failing against the unfixed source (stash of `gateway/`). Not
+validated: Postgres; any deployed environment; the machine-readable council
+record (`governancekit council --record`) was not produced — see handoff.
+
+## Original delivery — Next Step (superseded)
+
 Adversarial review of this delivery — no council has looked at it. Concentrate
 on `gateway/app/api/routes/auth.py` and `store.issue_auth_grant`: the rotation
 race, the revocation counters, and whether any 401 path leaks which of the five
