@@ -70,7 +70,15 @@ async def db_session():
                 ExecutorRegistration(
                     executor_id="T610", display_name="T610", machine_token="t",
                     allowed_projects=["p1"], max_concurrent_tasks=5,
-                )
+                ),
+                # A second, separately-capacity-limited executor -- only used
+                # by the submit_codex_task queue_wait_seconds test below, so
+                # saturating it (max_concurrent_tasks=1) never affects T610's
+                # own tests.
+                ExecutorRegistration(
+                    executor_id="T900", display_name="T900", machine_token="t2",
+                    allowed_projects=["p1"], max_concurrent_tasks=1,
+                ),
             ],
             projects=[
                 ProjectRegistration(project_id="p1", name="Projeto Um", path="/srv/p1", max_timeout_seconds=3600),
@@ -81,10 +89,11 @@ async def db_session():
 
 
 async def _create_task(
-    session: AsyncSession, *, mode: TaskMode = TaskMode.IMPLEMENT, engine: str = "claude", issue_ref: str | None = None
+    session: AsyncSession, *, mode: TaskMode = TaskMode.IMPLEMENT, engine: str = "claude", issue_ref: str | None = None,
+    executor_id: str = "T610",
 ):
     request = SubmitTaskRequest(
-        executor_id="T610",
+        executor_id=executor_id,
         project_id="p1",
         instruction="do the thing",
         mode=mode,
@@ -98,9 +107,35 @@ async def _create_task(
     return await store.create_task(session, request, executor_online=True)
 
 
-async def _seed_completed_history(session: AsyncSession, *, mode: TaskMode, engine: str, seconds_list) -> None:
+async def _submit_codex_task(session, hub, arguments: dict) -> dict:
+    response = await handle_mcp_call(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "submit_codex_task", "arguments": arguments}},
+        session, hub, ADMIN,
+    )
+    return response["result"]["structuredContent"]
+
+
+def _submit_arguments(
+    *, executor_id: str = "T610", mode: str = "implement", engine: str = "claude", timeout_seconds: int = 3600
+) -> dict:
+    return {
+        "executor_id": executor_id,
+        "project_id": "p1",
+        "instruction": "do the thing",
+        "mode": mode,
+        "timeout_seconds": timeout_seconds,
+        "priority": "normal",
+        "run_when_available": True,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        "engine": engine,
+    }
+
+
+async def _seed_completed_history(
+    session: AsyncSession, *, mode: TaskMode, engine: str, seconds_list, executor_id: str = "T610"
+) -> None:
     for seconds in seconds_list:
-        task = await _create_task(session, mode=mode, engine=engine)
+        task = await _create_task(session, mode=mode, engine=engine, executor_id=executor_id)
         await store.update_task_state(session, task.id, TaskState.RUNNING)
         task = await session.get(type(task), task.id)
         anchor = datetime.now(timezone.utc)
@@ -108,6 +143,17 @@ async def _seed_completed_history(session: AsyncSession, *, mode: TaskMode, engi
         task.completed_at = anchor
         task.state = TaskState.COMPLETED.value
         await session.commit()
+
+
+async def _seed_running_task(
+    session: AsyncSession, *, mode: TaskMode, engine: str, started_seconds_ago: float, executor_id: str = "T610"
+):
+    task = await _create_task(session, mode=mode, engine=engine, executor_id=executor_id)
+    await store.update_task_state(session, task.id, TaskState.RUNNING)
+    task = await session.get(type(task), task.id)
+    task.started_at = datetime.now(timezone.utc) - timedelta(seconds=started_seconds_ago)
+    await session.commit()
+    return task
 
 
 async def _get_task_status(session, hub, task_id: str) -> dict:
@@ -369,3 +415,78 @@ async def test_list_recent_tasks_keeps_every_pre_existing_field_unchanged(db_ses
     }
     for key, value in pre_existing.items():
         assert item[key] == value, key
+
+
+# --------------------------------------------------------------------------
+# #67 Objective ("additively, submit_codex_task"): the same eta_seconds /
+# eta_basis / eta_sample_size spread submit_codex_task's sibling submission
+# tool (start_development_task) already carries.
+#
+# Reading taken: unlike get_task_status/list_recent_tasks -- poll surfaces
+# for a task that has already cleared the dispatch gate, where executor_id
+# is deliberately withheld -- submit_codex_task is a SUBMISSION surface,
+# exactly like start_development_task. The Objective groups the two
+# together ("Give start_development_task (and, additively,
+# submit_codex_task) a duration estimate at submission time"), and
+# submit_codex_task's own schema already requires the caller to name
+# executor_id directly (no auto-resolution to second-guess), so there is no
+# ambiguity about which executor's queue is in question. queue_wait_seconds
+# is therefore wired through here, the same way it is for
+# start_development_task.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_submit_codex_task_carries_eta_fields_with_no_history(db_session: AsyncSession):
+    hub = DummyHub()
+    payload = await _submit_codex_task(db_session, hub, _submit_arguments())
+    assert payload["eta_seconds"] is None
+    assert payload["eta_basis"] == "none"
+    assert payload["eta_sample_size"] == 0
+    assert "queue_wait_seconds" not in payload
+
+
+@pytest.mark.asyncio
+async def test_submit_codex_task_eta_reflects_real_history(db_session: AsyncSession):
+    await _seed_completed_history(db_session, mode=TaskMode.IMPLEMENT, engine="claude", seconds_list=(100, 200, 300, 400, 500))
+    hub = DummyHub()
+    payload = await _submit_codex_task(db_session, hub, _submit_arguments())
+    assert payload["eta_basis"] == "project+mode+engine"
+    assert payload["eta_seconds"] == 300
+    assert payload["eta_sample_size"] == 5
+
+
+@pytest.mark.asyncio
+async def test_submit_codex_task_queue_wait_seconds_present_when_target_executor_saturated(db_session: AsyncSession):
+    """T900's `max_concurrent_tasks` is 1 (fixture) -- unlike T610, so this
+
+    test cannot be mistaken for exercising `get_task_status`/`list_recent_tasks`'s
+    deliberately-different, executor_id-less behaviour.
+    """
+    await _seed_completed_history(
+        db_session, mode=TaskMode.IMPLEMENT, engine="claude", seconds_list=(100, 200, 300, 400, 500), executor_id="T900"
+    )
+    # Median historical duration is 300s; this RUNNING task started 80s ago.
+    await _seed_running_task(db_session, mode=TaskMode.IMPLEMENT, engine="claude", started_seconds_ago=80, executor_id="T900")
+
+    hub = DummyHub()
+    payload = await _submit_codex_task(db_session, hub, _submit_arguments(executor_id="T900"))
+    assert "queue_wait_seconds" in payload
+    assert 215 <= payload["queue_wait_seconds"] <= 225
+
+
+@pytest.mark.asyncio
+async def test_submit_codex_task_keeps_every_pre_existing_field_unchanged(db_session: AsyncSession):
+    hub = DummyHub()
+    payload = await _submit_codex_task(db_session, hub, _submit_arguments())
+    task = await store.get_task(db_session, payload["task_id"])
+    # DummyHub reports no connections, so this lands `waiting_executor` (the
+    # pre-existing state a disconnected `run_when_available` task always got)
+    # -- unrelated to the additive fields under test here.
+    pre_existing = {
+        "task_id": task.id,
+        "state": "waiting_executor",
+        "expires_at": task.expires_at.isoformat(),
+    }
+    for key, value in pre_existing.items():
+        assert payload[key] == value, key

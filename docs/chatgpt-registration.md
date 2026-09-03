@@ -34,12 +34,48 @@ de um servidor MCP para o app. Duas formas de saber que uma tarefa terminou:
 
 1. **Perguntar na mesma conversa**: `get_task_status` com o `task_id`
    devolvido — ganhou os campos `engine`, `issue_ref`, `delivery` e
-   `delivery_result` (branch, commit, push sim/não), além dos já existentes.
-2. **Uma ChatGPT Task agendada**: criar uma tarefa agendada (ex: a cada 15
-   min) pedindo para chamar `list_recent_tasks` com
-   `states: ["completed", "failed"]` e comparar com a última checagem — é
-   exatamente o filtro que torna "o que terminou desde que perguntei" uma
-   chamada só, em vez de listar tudo e filtrar na conversa.
+   `delivery_result` (branch, commit, push sim/não), além de
+   `eta_seconds`/`eta_basis`/`eta_sample_size` (WK-20260903-gh67-70-read-gaps),
+   além dos já existentes.
+2. **Uma ChatGPT Task agendada** que faz a mesma pergunta periodicamente sem o
+   operador precisar abrir a conversa — receita completa abaixo.
+
+### Configurando a ChatGPT Task agendada
+
+`list_recent_tasks` aceita `states` (issue #70) exatamente para este caso:
+"o que terminou desde a última vez que perguntei" vira uma chamada só, em vez
+de listar tudo e filtrar na conversa. Desde WK-20260903-gh67-70-read-gaps cada
+item devolvido também carrega `issue_ref`, `delivery` (`branch`, `commit`,
+`pushed`, `outcome`, `reason` — `null` quando a tarefa não teve entrega) e
+`eta_seconds`/`eta_basis`/`eta_sample_size` — os mesmos campos que
+`start_development_task` já devolvia na submissão, agora também no polling.
+
+1. Com o app do CodexBridge já habilitado (ver `## Passos` acima), numa
+   conversa nova pedir diretamente em linguagem natural, por exemplo: *"a
+   cada 15 minutos, chame `list_recent_tasks` com
+   `states: ["completed", "failed", "cancelled", "expired", "lost"]` e
+   `limit: 50`; para cada tarefa que ainda não apareceu numa execução
+   anterior, me avise citando `task_id`, `project_id`, `engine`, `state`,
+   `issue_ref` e, quando presente, `delivery.branch`/`delivery.pushed`/`delivery.outcome`"*.
+   O ChatGPT reconhece o pedido recorrente e propõe o agendamento para
+   confirmação — confirmando, a Task fica salva. (Alternativa equivalente:
+   abrir `Scheduled` na barra lateral e criar a Task por lá.)
+   Os cinco estados acima são exatamente os terminais que `notify.py`
+   (abaixo) também cobre por e-mail; um subconjunto menor
+   (`["completed", "failed"]`, como no exemplo mínimo da seção acima)
+   também é válido se o operador só quer saber dos dois desfechos mais
+   comuns.
+2. Gerenciar Tasks já criadas (pausar, editar, apagar): `Settings ->
+   Notifications -> Manage tasks`, ou "..." numa conversa que tenha uma Task
+   ativa -> `See scheduled tasks`.
+3. A Task roda no relógio do ChatGPT, não no gateway (finding F12 do
+   concílio: não existe scheduler no lado do CodexBridge para isto) — cada
+   execução é uma chamada MCP nova, autenticada com a mesma sessão OAuth do
+   app.
+4. "Desde a última execução" fica por conta do próprio texto da Task (passo
+   1) comparando com o que ela relatou da vez anterior — `list_recent_tasks`
+   não guarda um cursor de leitura por chamador, só ordena por
+   `created_at desc` e filtra por `states`.
 
 O e-mail de conclusão (a outra metade — funciona com o app fechado) já está
 implementado (`gateway/app/services/notify.py`, issue #70): quando uma

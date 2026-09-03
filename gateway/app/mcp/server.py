@@ -310,7 +310,18 @@ async def handle_mcp_call(
                     task.executor_id,
                     hub_envelope(task.executor_id, "task.dispatch", dispatch_payload),
                 )
-        payload = {"task_id": task.id, "state": task.state, "expires_at": task.expires_at.isoformat()}
+        # Additive, WK-20260903-gh67-70-read-gaps (issue #67 Objective:
+        # "additively, submit_codex_task"). `executor_id` IS passed here --
+        # unlike `get_task_status`/`list_recent_tasks` (poll surfaces for a
+        # task that already cleared the dispatch gate), this is a submission
+        # surface exactly like `start_development_task`: the queue wait is
+        # meaningful right now, before dispatch, and `request.executor_id`
+        # is never inferred here the way `start_development_task` infers it
+        # -- the caller named it directly in the request.
+        eta = await store.estimate_task_duration_seconds(
+            session, project_id=task.project_id, mode=task.mode, engine=task.engine, executor_id=task.executor_id
+        )
+        payload = {"task_id": task.id, "state": task.state, "expires_at": task.expires_at.isoformat(), **eta}
         result = _text_result(f"Task {task.id} created with state {task.state}.", payload)
     elif tool_name == "get_task_status":
         require_scope("codexbridge.read")
