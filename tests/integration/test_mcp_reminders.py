@@ -10,6 +10,7 @@ being unconfigured never breaks the rest of the gateway.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -143,6 +144,62 @@ async def test_calendar_error_is_reported_as_a_client_error_not_a_500(db_session
     with pytest.raises(Exception) as raised:
         await _call(db_session, DummyHub(), WITH_REMINDERS, "create_reminder", {"text": "x", "when": "2099-01-01T10:00:00-03:00"})
     assert "has not been shared with" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_naive_when_is_reported_as_a_client_error_not_a_500(db_session, monkeypatch):
+    """Same pattern as `test_calendar_error_is_reported_as_a_client_error_not_a_500`,
+
+    for the specific failure this delivery adds: `NaiveDatetimeError` is a
+    `CalendarAccessError` subclass, so `handle_mcp_call`'s existing
+    `except (CalendarConfigError, CalendarAccessError)` already maps it to
+    `HTTPException(409, ...)` with no MCP-layer code change needed.
+    """
+    async def naive_rejected(**kwargs):
+        raise google_calendar.NaiveDatetimeError(kwargs["when"])
+
+    monkeypatch.setattr(google_calendar, "create_reminder", naive_rejected)
+
+    with pytest.raises(Exception) as raised:
+        await _call(db_session, DummyHub(), WITH_REMINDERS, "create_reminder", {
+            "text": "x", "when": "2099-01-01T10:00:00",
+        })
+    assert "no UTC offset" in str(raised.value)
+    assert "409" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_naive_when_is_rejected_end_to_end(db_session, monkeypatch, tmp_path):
+    """Not monkeypatching `google_calendar.create_reminder`: the real function
+
+    runs here, proving `/mcp` rejects a naive `when` the same way
+    `/api/v1/reminders` does (`tests/integration/test_reminders_api.py`'s
+    twin of this test) -- both transports share the one implementation in
+    `google_calendar.py`. No network call happens: `parse_when` raises
+    before any token is minted.
+    """
+    from gateway.app.core.config import settings
+
+    sa_path = tmp_path / "sa.json"
+    sa_path.write_text(
+        json.dumps(
+            {
+                "type": "service_account",
+                "client_email": "codexbridge-test@codexbridge-test.iam.gserviceaccount.com",
+                "private_key": "-----BEGIN PRIVATE KEY-----\nFAKE-NEVER-A-REAL-KEY\n-----END PRIVATE KEY-----\n",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "google_calendar_credentials_file", str(sa_path))
+    monkeypatch.setattr(settings, "google_calendar_id", "cal-1")
+
+    with pytest.raises(Exception) as raised:
+        await _call(db_session, DummyHub(), WITH_REMINDERS, "create_reminder", {
+            "text": "x", "when": "2099-01-01T10:00:00",
+        })
+    assert "no UTC offset" in str(raised.value)
 
 
 @pytest.mark.asyncio

@@ -167,6 +167,7 @@ async def create_reminder(
                 notes=payload.notes,
                 lead_minutes=payload.lead_minutes,
                 idempotency_key=payload.idempotency_key,
+                created_via="rest",
             )
     except (google_calendar.CalendarConfigError, google_calendar.CalendarAccessError) as exc:
         if claim is not None:

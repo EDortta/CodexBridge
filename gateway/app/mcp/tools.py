@@ -596,8 +596,10 @@ def tool_definitions() -> list[dict[str, Any]]:
                         "type": "string",
                         "format": "date-time",
                         "description": (
-                            "Instante do lembrete, ISO 8601, de preferencia com offset "
-                            "(ex 2026-09-04T15:00:00-03:00). Sem offset, assume America/Sao_Paulo."
+                            "Instante do lembrete, ISO 8601 e obrigatoriamente com offset "
+                            "UTC (ex 2026-09-04T15:00:00-03:00). Sem offset a chamada e "
+                            "recusada: quem chama sabe o fuso do operador, o gateway nao, e "
+                            "um palpite errado dispara o lembrete na hora errada sem avisar."
                         ),
                     },
                     "notes": {"type": "string", "maxLength": 4000},

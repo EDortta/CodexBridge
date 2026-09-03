@@ -65,7 +65,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Awaitable, Callable
-from zoneinfo import ZoneInfo
 
 import httpx
 from dateutil import parser as dateutil_parser
@@ -110,6 +109,33 @@ class CalendarAccessError(RuntimeError):
     aloud to the operator) -- it may name the service account's
     `client_email` (not a secret) but never its `private_key`.
     """
+
+
+class NaiveDatetimeError(CalendarAccessError):
+    """`when` had no UTC offset.
+
+    Issue #71's own Requirements are explicit about why this is a hard
+    rejection rather than a guess: ChatGPT already holds the operator's
+    timezone and the current instant before it ever calls this tool/endpoint
+    (see `google_calendar.py`'s module docstring and #71's "why the tool
+    takes a computed datetime, not free text"), so an offset-less value
+    means something went wrong upstream -- not that the caller forgot and
+    meant "here". Silently assuming a timezone would produce a reminder that
+    fires at the wrong hour with nobody noticing until it doesn't. Typed
+    (rather than a bare `CalendarAccessError`) so a caller that wants to
+    special-case it can, while both transports still catch it as the
+    `CalendarAccessError` it is a subclass of, and answer it exactly like
+    every other `when` validation failure.
+    """
+
+    def __init__(self, when: str):
+        self.when = when
+        super().__init__(
+            f"'when' ({when!r}) has no UTC offset. Send ISO 8601 with an explicit "
+            "offset, e.g. '2026-09-04T15:00:00-03:00', or a trailing 'Z' for UTC. "
+            "The caller is expected to resolve the operator's own timezone before "
+            "calling -- this server does not guess one."
+        )
 
 
 @dataclass(frozen=True)
@@ -243,22 +269,21 @@ def _event_id(user_id: str, idempotency_key: str | None, when_iso: str, text: st
     return f"{_EVENT_ID_PREFIX}{encoded[:_EVENT_ID_LENGTH]}"
 
 
-def parse_when(when: str) -> tuple[datetime, bool]:
-    """Parses `when` as ISO 8601. A caller with no offset is assumed to mean
+def parse_when(when: str) -> datetime:
+    """Parses `when` as ISO 8601 with an explicit UTC offset.
 
-    `DEFAULT_TIMEZONE` -- the server never guesses a *different* zone, it
-    just fills in the one this deployment is for. `isoparse` rather than
-    `datetime.fromisoformat`: the latter rejects a trailing `Z` on
-    Python 3.10.
+    A naive (offset-less) value is rejected, not assumed into
+    `DEFAULT_TIMEZONE` -- see `NaiveDatetimeError` for why. `isoparse`
+    rather than `datetime.fromisoformat`: the latter rejects a trailing `Z`
+    on Python 3.10.
     """
     try:
         parsed = dateutil_parser.isoparse(when)
     except (ValueError, OverflowError) as exc:
         raise CalendarAccessError(f"'when' is not a valid ISO 8601 datetime: {when!r}.") from exc
-    was_naive = parsed.tzinfo is None
-    if was_naive:
-        parsed = parsed.replace(tzinfo=ZoneInfo(DEFAULT_TIMEZONE))
-    return parsed, was_naive
+    if parsed.tzinfo is None:
+        raise NaiveDatetimeError(when)
+    return parsed
 
 
 async def create_reminder(
@@ -272,6 +297,7 @@ async def create_reminder(
     notes: str | None = None,
     lead_minutes: int = 0,
     idempotency_key: str | None = None,
+    created_via: str = "mcp",
 ) -> dict:
     if not config.calendar_id or not config.credentials_file:
         raise CalendarConfigError(
@@ -280,7 +306,7 @@ async def create_reminder(
         )
     service_account = _load_service_account(config.credentials_file)
 
-    when_dt, was_naive = parse_when(when)
+    when_dt = parse_when(when)
     now = datetime.now(timezone.utc)
     if when_dt <= now + _REMINDER_MIN_LEAD_FROM_NOW:
         raise CalendarAccessError(
@@ -314,8 +340,22 @@ async def create_reminder(
         # No "attendees" key, ever: a service account without Domain-Wide
         # Delegation gets 403 forbiddenForServiceAccounts for adding one. The
         # reminder reaches the operator by calendar MEMBERSHIP, not invitation.
+        #
+        # `created_via` and `idempotency_key` are populated from day one
+        # (issue #71's own "event shape" requirement), the same reasoning as
+        # `requested_by`: adding them later would not retroactively tag
+        # events already created, and #72's `list_reminders` exists
+        # specifically to filter and correlate on fields written here.
+        # Google requires string values, so an absent `idempotency_key`
+        # writes "" rather than a JSON null.
         "extendedProperties": {
-            "private": {"source": "codexbridge", "kind": "reminder", "requested_by": user_id}
+            "private": {
+                "source": "codexbridge",
+                "kind": "reminder",
+                "requested_by": user_id,
+                "created_via": created_via,
+                "idempotency_key": idempotency_key or "",
+            }
         },
     }
 
@@ -360,7 +400,6 @@ async def create_reminder(
         "lead_minutes": clamped_lead,
         "created": created,
         "html_link": payload.get("htmlLink"),
-        "when_was_naive": was_naive,
     }
 
 
