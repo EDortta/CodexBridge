@@ -895,6 +895,51 @@ caught one local copy of this set silently missing
 drift). This is issue #7's acceptance criterion ("state-transition commands
 validate the current mission state").
 
+### Create (issue #68)
+
+`POST /api/v1/missions` is the first HTTP exposure of `codexbridge.task.submit`
+(`permissions.MISSIONS_CREATE`). Before this issue, task creation existed only
+as the MCP tool `submit_codex_task`; `CodexBridgeMobile` had no way to launch
+anything. This does not add a new entity or a new id space: it creates the
+exact same `TaskModel` row `submit_codex_task`/`start_development_task` (MCP)
+already create, and the response is the same `Mission` shape `GET
+/api/v1/missions/{missionId}` already returns — council finding F01
+(`mission`/`session`/`decision` are one row today) is deliberately not
+reopened here; see #43 for that question.
+
+**`executorId` is optional and resolved automatically when omitted**, the
+same way `start_development_task` resolves it: the project's onboarded
+executors, preferring one that is connected right now. It has to be optional
+— reading the raw executor/node catalogue is an administrative action
+(`nodes.read`, `ADMIN_SCOPE`), so a caller who only holds
+`codexbridge.task.submit` has no HTTP way to learn a real executor id at all.
+
+**`delivery.allowPush` follows the exact same pre-authorization-as-approval
+path issue #66 established for the MCP transport, not a separate, weaker
+one**: the caller must additionally carry `codexbridge.task.approve` and be
+`can_approve_sensitive` (or admin), and `delivery.branch` must match the
+pushable-branch pattern — checked in the route, before `store.create_task` is
+ever called with `allowPush: true`. A request that clears both checks reaches
+`store.create_task` exactly like `start_development_task`'s does, so the same
+`push_preauthorized_by_request` policy path resolves the approval in the same
+transaction, with the same audit trail.
+
+**`engine`/`issueRef`/`delivery` are additive fields on the shared `Mission`
+DTO**, not a narrower create-only response shape: every mission endpoint
+(`list`, `get`, `cancel`, `create`) returns them, because they all serialize
+through the same `_mission_dto`. `engine` is, in practice, always populated
+(the column defaults `codex`) but is not marked `required` in the OpenAPI
+schema — `scripts/check_contract_compatibility.py` treats a field joining
+`required` as breaking regardless of request/response, so this is the
+conservative reading the mechanical gate enforces, not a claim that the field
+is sometimes actually absent.
+
+**`issueRef` validation mirrors `start_development_task` exactly**: shape
+(`ISSUE_REF_PATTERN`), `gh:` always refused (`issue_source_unsupported` —
+council finding F18, GitHub issue ingestion has no owner here yet), and
+`local:<id>` checked for existence and project ownership. A value this route
+accepts is never one the MCP transport would have refused, and vice versa.
+
 ---
 
 ## Epics and Issues (issue #8)

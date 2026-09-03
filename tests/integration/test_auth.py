@@ -1368,6 +1368,13 @@ ENDPOINT_FOR_ACTION = {
     "missions.readTimeline": ("GET", "/api/v1/missions/{id}/timeline"),
     "missions.explain": ("POST", "/api/v1/missions/{id}/explain"),
     "missions.cancel": ("POST", "/api/v1/missions/{id}/cancel"),
+    # Issue #68. No body sent, on purpose, same reasoning as
+    # `notifications.manage` below: `require_action` is a sub-dependency and
+    # runs before the request body is validated, so a caller lacking the
+    # scope gets the 403 this loop looks for regardless of the missing
+    # `projectId`/`objective`; one that has it gets 422 for the missing body,
+    # a non-403, which is exactly what the loop asserts either way.
+    "missions.create": ("POST", "/api/v1/missions"),
     # These six don't need a task/epic/issue to exist behind {id} — a
     # permission dependency runs before the route body ever looks the id up,
     # so a 403 for a caller lacking the scope, or a non-403 for one that has

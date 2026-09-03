@@ -247,6 +247,7 @@ def _api_route_signals() -> dict[str, bool]:
     query_names: set[str] = set()
     header_names: set[str] = set()
     paths: set[str] = set()
+    methods_by_path: dict[str, set[str]] = {}
     # `app.routes` holds one `_IncludedRouter` per `include_router()` call
     # rather than that router's flattened routes (FastAPI's lazy router
     # include); `iter_route_contexts` is the same recursion FastAPI's own
@@ -256,6 +257,7 @@ def _api_route_signals() -> dict[str, bool]:
         if not (path == "/api" or path.startswith("/api/")):
             continue
         paths.add(path)
+        methods_by_path.setdefault(path, set()).update(route_context.methods or set())
         dependant = getattr(route_context, "dependant", None)
         if dependant is not None:
             _collect_params(dependant, query_names, header_names)
@@ -276,6 +278,11 @@ def _api_route_signals() -> dict[str, bool]:
         "deviceAuthorization": any("/auth/device" in path for path in paths),
         "eventStream": any("/events" in path or "/stream" in path for path in paths),
         "artifactDownloads": any("/artifacts" in path or "/builds" in path for path in paths),
+        # `/api/v1/missions` also serves GET (list) — a path-only check would
+        # read `true` even if the POST were removed, so this one is method-
+        # aware, unlike the endswith checks above (none of which share their
+        # path with a route of a different capability).
+        "missionCreation": "POST" in methods_by_path.get("/api/v1/missions", set()),
     }
 
 

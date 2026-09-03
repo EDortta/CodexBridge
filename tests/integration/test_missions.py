@@ -44,6 +44,7 @@ class _Hub:
         self.connected = connected
         self.sent: list = []
         self.running_tasks: dict[str, set[str]] = {}
+        self.dispatch_available_calls: list[str] = []
 
     def is_connected(self, executor_id: str) -> bool:
         return self.connected
@@ -53,6 +54,16 @@ class _Hub:
 
     async def mark_task_finished(self, executor_id: str, task_id: str) -> None:
         self.running_tasks.setdefault(executor_id, set()).discard(task_id)
+
+    async def dispatch_available(self, executor_id: str) -> None:
+        """`create_mission` (issue #68) calls this to nudge the queue after
+        creating a task. The real dispatch (queued -> running, the payload
+        sent over the wire) is exercised against the real `AgentHub` in
+        `test_decisions.py`/`test_agent_ack_handling.py`; this double only
+        needs to record that the call happened without touching the database
+        itself, the same "recording double" shape `send` above already uses.
+        """
+        self.dispatch_available_calls.append(executor_id)
 
 
 @pytest.fixture
@@ -68,7 +79,7 @@ def users_file(tmp_path):
                         "password_hash": "x",
                         "roles": [],
                         "allowed_projects": ["p1"],
-                        "scopes": ["codexbridge.read", "codexbridge.task.cancel"],
+                        "scopes": ["codexbridge.read", "codexbridge.task.cancel", "codexbridge.task.submit"],
                         "enabled": True,
                     },
                     {
@@ -129,7 +140,7 @@ async def api(users_file, monkeypatch):
         )
         future = datetime.now(timezone.utc) + timedelta(hours=1)
         for token, user_id, scopes in (
-            (ALICE_TOKEN, "alice", ["codexbridge.read", "codexbridge.task.cancel"]),
+            (ALICE_TOKEN, "alice", ["codexbridge.read", "codexbridge.task.cancel", "codexbridge.task.submit"]),
             (READER_TOKEN, "reader", ["codexbridge.read"]),
             (ADMIN_TOKEN, "admin", ["codexbridge.admin"]),
         ):
@@ -740,3 +751,288 @@ async def test_explain_of_an_invisible_mission_is_not_found(api) -> None:
     theirs = await make_task(api.factory, "p2")
     response = api.post(f"/api/v1/missions/{theirs.id}/explain", headers=auth(ALICE_TOKEN))
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Create — issue #68
+# --------------------------------------------------------------------------
+
+
+async def test_a_token_without_the_submit_scope_cannot_create_a_mission(api) -> None:
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(READER_TOKEN),
+        json={"projectId": "p1", "objective": "analyze the repo"},
+    )
+    assert response.status_code == 403
+    assert response.json()["code"] == "permission_denied"
+
+
+async def test_creating_a_mission_and_reading_it_back(api) -> None:
+    """Issue #68's Definition of Done, verbatim: create, then GET the same id."""
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={"projectId": "p1", "objective": "implement the thing", "mode": "implement", "timeoutSeconds": 60},
+    )
+    assert response.status_code == 201
+    created = response.json()
+    assert created["projectId"] == "p1"
+    assert created["objective"] == "implement the thing"
+    assert created["assignedAgent"] == "E1"
+    assert created["engine"] == "codex"
+    assert created["issueRef"] is None
+    assert created["delivery"] is None
+    assert "ETag" in response.headers
+
+    fetched = api.get(f"/api/v1/missions/{created['id']}", headers=auth(ALICE_TOKEN)).json()
+    assert fetched == created
+
+
+async def test_create_does_not_reopen_the_identity_question(api) -> None:
+    """F01 (issue #68's own ARO): no new id space, no new TaskState.
+
+    The created row is readable through the exact same id `GET
+    /api/v1/sessions/{id}` and `GET /api/v1/decisions/{id}` would use for the
+    same `TaskModel` row — this test only asserts the mission side, since the
+    row itself (not a parallel one) is the whole claim.
+    """
+    from shared.protocol import TaskState as _TaskState
+
+    created = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={"projectId": "p1", "objective": "analyze it", "mode": "analyze", "timeoutSeconds": 60},
+    ).json()
+    assert created["state"] in {s.value for s in _TaskState}
+
+    async with api.factory() as s:
+        task = await store.get_task(s, created["id"])
+    assert task is not None
+    assert task.project_id == "p1"
+
+
+async def test_a_retried_create_replays_instead_of_creating_twice(api) -> None:
+    headers = {**auth(ALICE_TOKEN), "Idempotency-Key": "create-1"}
+    payload = {"projectId": "p1", "objective": "analyze it", "mode": "analyze", "timeoutSeconds": 60}
+
+    first = api.post("/api/v1/missions", headers=headers, json=payload)
+    second = api.post("/api/v1/missions", headers=headers, json=payload)
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.headers.get("Idempotent-Replay") == "true"
+    assert second.json() == first.json()
+
+    async with api.factory() as s:
+        from sqlalchemy import select
+
+        from gateway.app.models.entities import TaskModel
+
+        rows = (await s.execute(select(TaskModel).where(TaskModel.project_id == "p1"))).scalars().all()
+    assert len(rows) == 1
+
+
+async def test_create_resolves_an_executor_automatically_when_none_is_named(api) -> None:
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={"projectId": "p1", "objective": "analyze it", "mode": "analyze", "timeoutSeconds": 60},
+    )
+    assert response.status_code == 201
+    assert response.json()["assignedAgent"] == "E1"
+
+
+async def test_an_executor_not_onboarded_for_the_project_is_a_conflict(api) -> None:
+    async with api.factory() as s:
+        await store.upsert_registry(
+            s,
+            executors=[
+                ExecutorRegistration(
+                    executor_id="E1", display_name="E1", machine_token="t",
+                    allowed_projects=["p1", "p2"], enabled=True,
+                ),
+                ExecutorRegistration(
+                    executor_id="E2", display_name="E2", machine_token="t2",
+                    allowed_projects=["p2"], enabled=True,
+                ),
+            ],
+            projects=[
+                ProjectRegistration(
+                    project_id=pid, name=pid, path=f"/srv/{pid}",
+                    allowed_modes=list(TaskMode), max_timeout_seconds=600,
+                    sensitive_patterns=[], enabled=True,
+                )
+                for pid in ("p1", "p2")
+            ],
+        )
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={"projectId": "p1", "executorId": "E2", "objective": "analyze it", "mode": "analyze"},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "conflict"
+
+
+async def test_a_mission_in_an_invisible_project_cannot_be_created(api) -> None:
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={"projectId": "p2", "objective": "analyze it", "mode": "analyze"},
+    )
+    assert response.status_code == 404
+    assert response.json()["code"] == "not_found"
+
+
+async def test_engine_choice_is_accepted_and_returned(api) -> None:
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={"projectId": "p1", "objective": "analyze it", "mode": "analyze", "engine": "claude", "timeoutSeconds": 60},
+    )
+    assert response.status_code == 201
+    assert response.json()["engine"] == "claude"
+
+
+async def test_an_unimplemented_engine_is_refused(api) -> None:
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={"projectId": "p1", "objective": "analyze it", "mode": "analyze", "engine": "gemini"},
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "validation_failed"
+
+
+async def test_a_local_issue_ref_is_stored_and_returned(api) -> None:
+    async with api.factory() as s:
+        issue = await store.create_issue(
+            s, project_id="p1", epic_id=None, title="Fix the thing", description=None,
+            status=None, priority=None, labels=None, assignee_user_id=None, assignee_email=None,
+            dependencies=None, blocked_reason=None, actor_user_id="alice", actor_email="alice@example.com",
+        )
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={
+            "projectId": "p1", "objective": "resolve it", "mode": "implement",
+            "issueRef": f"local:{issue.id}", "timeoutSeconds": 60,
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["issueRef"] == f"local:{issue.id}"
+
+
+async def test_a_local_issue_ref_from_another_project_is_not_found(api) -> None:
+    async with api.factory() as s:
+        issue = await store.create_issue(
+            s, project_id="p2", epic_id=None, title="Not yours", description=None,
+            status=None, priority=None, labels=None, assignee_user_id=None, assignee_email=None,
+            dependencies=None, blocked_reason=None, actor_user_id="alice", actor_email="alice@example.com",
+        )
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={
+            "projectId": "p1", "objective": "resolve it", "mode": "implement",
+            "issueRef": f"local:{issue.id}",
+        },
+    )
+    assert response.status_code == 404
+
+
+async def test_a_github_issue_ref_is_not_supported_yet(api) -> None:
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={"projectId": "p1", "objective": "resolve it", "mode": "implement", "issueRef": "gh:42"},
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "validation_failed"
+
+
+async def test_delivery_with_allow_push_requires_approval_authority(api) -> None:
+    """No separate, weaker authorization path for the HTTP surface (issue #68).
+
+    Alice carries `codexbridge.task.submit` but not `codexbridge.task.approve`
+    and is not `can_approve_sensitive` — exactly the caller
+    `start_development_task` (MCP) refuses for the identical request shape.
+    """
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={
+            "projectId": "p1", "objective": "ship it", "mode": "implement",
+            "delivery": {"branch": "feature/x", "allowPush": True},
+        },
+    )
+    assert response.status_code == 403
+    assert response.json()["code"] == "permission_denied"
+
+
+async def test_delivery_with_a_non_pushable_branch_is_refused(api) -> None:
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ADMIN_TOKEN),
+        json={
+            "projectId": "p1", "objective": "ship it", "mode": "implement",
+            "delivery": {"branch": "main", "allowPush": True},
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "validation_failed"
+
+
+async def test_delivery_pre_authorization_flows_through_like_the_mcp_path(api) -> None:
+    """The same `push_preauthorized_by_request` path `store.create_task`
+    resolves for `submit_codex_task`/`start_development_task` (MCP) — a
+    caller who may approve sensitive tasks gets an already-approved mission
+    back, not one sitting in `awaiting_approval`.
+    """
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ADMIN_TOKEN),
+        json={
+            "projectId": "p1", "objective": "ship it", "mode": "implement", "timeoutSeconds": 60,
+            "delivery": {"branch": "feature/ship-it", "allowPush": True, "baseBranch": "development"},
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["approvalState"] == "approved"
+    assert body["state"] != "awaiting_approval"
+    assert body["delivery"] == {
+        "branch": "feature/ship-it",
+        "allowPush": True,
+        "baseBranch": "development",
+        "remote": "origin",
+        "commitSubject": None,
+    }
+
+
+async def test_a_delivery_without_allow_push_needs_no_approval_authority(api) -> None:
+    """`allow_push` is the gate, not `delivery` on its own: a caller may still
+    hand the executor a branch to work on without asking for a push."""
+    response = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={
+            "projectId": "p1", "objective": "prep the branch", "mode": "implement", "timeoutSeconds": 60,
+            "delivery": {"branch": "feature/prep", "allowPush": False},
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["delivery"]["allowPush"] is False
+
+
+async def test_missions_list_reports_engine_and_issue_ref_too(api) -> None:
+    """Issue #68: `_mission_dto` is shared, so the additive fields are not
+    exclusive to the create response — `docs/api/README.md` says as much."""
+    api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={"projectId": "p1", "objective": "analyze it", "mode": "analyze", "engine": "claude", "timeoutSeconds": 60},
+    )
+    body = api.get("/api/v1/missions", headers=auth(ALICE_TOKEN)).json()
+    assert body["items"][0]["engine"] == "claude"

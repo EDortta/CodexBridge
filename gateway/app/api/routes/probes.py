@@ -139,7 +139,17 @@ version_router = APIRouter()
 # only, so this would ordinarily be a minor bump; landing on 1.13.0 instead
 # of 1.7.0 is purely the reservation above, not a signal of a breaking
 # change.
-API_CONTRACT_VERSION = "1.14.0"
+# 1.14.0 -> 1.15.0 (WK-20260903-gh68-missions-http, issue #68): `POST
+# /api/v1/missions`, the first HTTP exposure of `codexbridge.task.submit`
+# (`permissions.MISSIONS_CREATE`). Additive only — a new endpoint, a new
+# capability flag (`missionCreation`), and three new, optional fields on the
+# existing `Mission` schema shared by every mission response, not only this
+# one's: `engine`, `issueRef`, `delivery`. None of the three joined
+# `required` — `scripts/check_contract_compatibility.py` treats a field
+# joining `required` as breaking even on a response, so `engine` (in
+# practice always populated; the column defaults `'codex'`) stays optional
+# in the schema on purpose, the conservative reading the gate enforces.
+API_CONTRACT_VERSION = "1.15.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a
@@ -178,6 +188,12 @@ CAPABILITIES = {
     # flag answers "does this server speak the artifact API", which is the
     # question a client that would otherwise meet a 404 is asking.
     "artifactDownloads": True,
+    # POST /api/v1/missions (issue #68) — the first HTTP exposure of
+    # `codexbridge.task.submit`. True because the route is served, not
+    # because every caller may reach it: `MISSIONS_CREATE` still gates who
+    # may, the same way `artifactDownloads` being `true` does not mean every
+    # caller has an artifact to download.
+    "missionCreation": True,
 }
 
 
