@@ -59,8 +59,10 @@ o resto do gateway continua servindo normalmente. `approve_codex_task` é a que 
 `start_development_task` (WK-20260830-chatgpt-entry-provider-and-delivery, issue
 #65) é a entrada conversacional: resolve `project` (id, nome ou prefixo único),
 resolve o executor automaticamente quando omitido, calcula `expires_at` sozinho
-e devolve uma estimativa de duração (`eta_seconds`/`eta_basis`/`eta_sample_size`)
-baseada no histórico real de tarefas. Aceita `issue` (`docs:NNN`/`NNN` resolvido
+e devolve uma estimativa de duração (`eta_seconds`/`eta_basis`/`eta_sample_size`,
+mais `queue_wait_seconds` quando o executor-alvo está no limite de concorrência
+ou acima — WK-20260903-gh67-70-read-gaps, issue #67) baseada no histórico real
+de tarefas. Aceita `issue` (`docs:NNN`/`NNN` resolvido
 **no executor**, `local:<id>` resolvido no gateway, `gh:<n>` recusado —
 ingestão de issue do GitHub não tem dono neste sistema) e `engine`
 (`codex`/`claude`/`cursor-agent`/`gemini`/`opencode`/`aider`, default `claude`).
@@ -68,7 +70,10 @@ ingestão de issue do GitHub não tem dono neste sistema) e `engine`
 `codexbridge.task.approve` — nunca cria a tarefa sem os dois. As quatro
 ferramentas com nome `codex` continuam respondendo exatamente como antes
 (57a surface inventory): `get_task_status` e `list_recent_tasks` só ganharam
-campos aditivos (`engine`, `issue_ref`, `delivery`, `delivery_result`).
+campos aditivos (`engine`, `issue_ref`, `delivery`, `delivery_result`, e agora
+também `eta_seconds`/`eta_basis`/`eta_sample_size` — WK-20260903-gh67-70-read-gaps,
+issue #67 Scope / #70 Scope; `queue_wait_seconds` fica só em
+`start_development_task`, que é onde a espera antes do despacho é decidida).
 
 ## Canal reverso do agente
 
