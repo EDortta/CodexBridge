@@ -1366,6 +1366,7 @@ ENDPOINT_FOR_ACTION = {
     "decisions.decide": ("POST", "/api/v1/decisions/{id}/approve"),
     "missions.read": ("GET", "/api/v1/missions"),
     "missions.readTimeline": ("GET", "/api/v1/missions/{id}/timeline"),
+    "missions.readDelivery": ("GET", "/api/v1/missions/{id}/delivery"),
     "missions.explain": ("POST", "/api/v1/missions/{id}/explain"),
     "missions.cancel": ("POST", "/api/v1/missions/{id}/cancel"),
     # Issue #68. No body sent, on purpose, same reasoning as

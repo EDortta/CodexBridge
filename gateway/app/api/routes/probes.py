@@ -149,7 +149,18 @@ version_router = APIRouter()
 # joining `required` as breaking even on a response, so `engine` (in
 # practice always populated; the column defaults `'codex'`) stays optional
 # in the schema on purpose, the conservative reading the gate enforces.
-API_CONTRACT_VERSION = "1.15.0"
+#
+# 1.15.0 -> 1.16.0 (WK-20260903-gh69-delivery-evidence, issue #69): `GET
+# /api/v1/missions/{missionId}/delivery` — branch, head commit, changed-file
+# paths and diff counters (never diff content), reading `tasks.
+# delivery_result_json` (issue #66) and `result_json`'s `tests_ran`.
+# Additive only: a new endpoint and two new schemas
+# (`MissionDeliveryEvidence`/`MissionDeliveryUnavailable`); no existing
+# schema changed. No new capability flag — every other mission sub-view
+# (`readTimeline`, `explain`) has none either, only the "does this build
+# speak an endpoint at all" flags (`missionCreation`, `artifactDownloads`,
+# …) get one.
+API_CONTRACT_VERSION = "1.16.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a

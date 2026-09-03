@@ -940,6 +940,49 @@ council finding F18, GitHub issue ingestion has no owner here yet), and
 `local:<id>` checked for existence and project ownership. A value this route
 accepts is never one the MCP transport would have refused, and vice versa.
 
+### Delivery evidence (issue #69)
+
+`GET /api/v1/missions/{missionId}/delivery` reads `tasks.delivery_result_json`
+(`DeliveryOutcome.to_dict()`, `agent/codex_bridge_agent/git_delivery.py`,
+written by `store.store_result` once a delivery step finishes) and
+`tasks.result_json`'s `tests_ran` — the only test-output field this
+codebase's runners produce today (`Codex`/`ClaudeRunner._guess_tests`:
+heuristic lines from the provider's final message, never a structured
+pass/fail count).
+
+**Diff content never leaves this endpoint.** The response is built from an
+explicit field allowlist (`_DELIVERY_RESULT_FIELDS`,
+`gateway/app/api/routes/missions.py`), not a passthrough of
+`DeliveryOutcome.to_dict()` — a future field the executor adds is absent from
+the response until this endpoint is deliberately extended to include it,
+never silently forwarded the moment one side of the wire is redeployed. F26
+(council): anything resembling artifact download/preview is out of this
+issue's scope; only file *paths* and counters.
+
+**`changedFiles` and `tests.ran` are redacted with the same `redact()` every
+session log already goes through**, for the reason issue #69 states plainly:
+a resolved issue's content is untrusted text, and a changed-file path or a
+line quoted from the provider's final message can carry an absolute
+filesystem path or worse.
+
+**Three distinct reasons for `available: false`**, not one catch-all, mirror
+the three ways a mission can lack delivery evidence: `no_delivery_requested`
+(the mission's own `delivery` was never set), `mission_not_finished`
+(`store.mission_stage(task) != "done"` — delivery only ever runs after a
+successful finish), and `delivery_step_did_not_run` (the mission finished but
+`delivery_result_json` is still null — almost always because the run did not
+end in `completed`, since `deliver_changes` is gated on exactly that). None of
+the three is a `404`: the mission itself is visible and real, only its
+delivery evidence is absent, and for a specific, reportable reason — the
+acceptance criterion the issue states as "never an empty object
+indistinguishable from nothing changed."
+
+`missions.readDelivery` is its own catalogued action (`READ_SCOPE`), not a
+reuse of `missions.read` — the same "every mission sub-view is its own
+action" precedent `missions.readTimeline`/`missions.explain` already set, so
+a deployment that ever wants to withhold delivery evidence specifically can,
+without withholding the mission list itself.
+
 ---
 
 ## Epics and Issues (issue #8)
