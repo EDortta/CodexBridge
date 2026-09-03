@@ -179,6 +179,19 @@ MISSIONS_READ_TIMELINE = Action(
     summary="Read the recorded timeline of a mission.",
 )
 
+# Issue #69. Its own action rather than reusing `MISSIONS_READ`, matching the
+# precedent `missions.readTimeline`/`missions.explain` already set in this
+# same catalogue: every mission sub-view is its own action, so a deployment
+# that ever wants to withhold one without withholding `GET /api/v1/missions`
+# itself can, and `GET /api/v1/auth/me` reports the split without a client
+# change.
+MISSIONS_READ_DELIVERY = Action(
+    name="missions.readDelivery",
+    category=READ,
+    scope=READ_SCOPE,
+    summary="Read a mission's delivery evidence — branch, commit, diff counters, never diff content.",
+)
+
 MISSIONS_EXPLAIN = Action(
     name="missions.explain",
     category=READ,
@@ -442,6 +455,7 @@ CATALOGUE: tuple[Action, ...] = (
     PROJECTS_READ,
     MISSIONS_READ,
     MISSIONS_READ_TIMELINE,
+    MISSIONS_READ_DELIVERY,
     MISSIONS_EXPLAIN,
     EPICS_READ,
     ISSUES_READ,

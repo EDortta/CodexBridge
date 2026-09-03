@@ -24,6 +24,7 @@ from gateway.app.db.base import Base
 from gateway.app.db.session import get_session
 from gateway.app.services import store
 from shared.protocol import (
+    DeliveryRequest,
     ExecutorRegistration,
     ProjectRegistration,
     SubmitTaskRequest,
@@ -182,6 +183,7 @@ async def make_task(
     instruction: str = "analyze it",
     mode: TaskMode = TaskMode.ANALYZE,
     state: str | None = None,
+    delivery: DeliveryRequest | None = None,
 ):
     async with factory() as s:
         task = await store.create_task(
@@ -190,12 +192,69 @@ async def make_task(
                 executor_id="E1", project_id=project_id, instruction=instruction,
                 mode=mode, priority=TaskPriority.NORMAL, timeout_seconds=60,
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                delivery=delivery,
             ),
             executor_online=True,
         )
         if state:
             task = await store.update_task_state(s, task.id, TaskState(state))
         return task
+
+
+async def deliver(
+    factory,
+    task_id: str,
+    *,
+    outcome: str = "committed_and_pushed",
+    branch: str = "feature/ship-it",
+    base_branch: str = "development",
+    commit: str = "a1b2c3d4",
+    commit_subject: str = "Deliver the thing",
+    files_changed: int = 2,
+    insertions: int = 10,
+    deletions: int = 3,
+    pushed: bool = True,
+    staged_paths: list[str] | None = None,
+    tests_ran: list[str] | None = None,
+):
+    """Issue #69's fixture: what `store.store_result` writes to
+    `delivery_result_json`/`result_json` once a real executor finishes a
+    delivery — `DeliveryOutcome.to_dict()`
+    (`agent/codex_bridge_agent/git_delivery.py`) and the `tests_ran` list
+    `Codex`/`ClaudeRunner._guess_tests` produce, shaped by hand here rather
+    than run for real (git delivery has its own executor-side tests).
+    """
+    if staged_paths is None:
+        staged_paths = ["gateway/app/api/routes/missions.py", "tests/integration/test_missions.py"]
+    async with factory() as s:
+        await store.store_result(
+            s,
+            task_id,
+            {
+                "task_id": task_id,
+                "final_state": "completed",
+                "tests_ran": tests_ran if tests_ran is not None else [],
+                "delivery": {
+                    "attempted": True,
+                    "outcome": outcome,
+                    "reason": None,
+                    "branch": branch,
+                    "base_branch": base_branch,
+                    "created_branch": True,
+                    "head_before": "0000000",
+                    "commit": commit,
+                    "remote": "origin",
+                    "remote_sha": commit if pushed else None,
+                    "pushed": pushed,
+                    "staged_paths": staged_paths,
+                    "files_changed": files_changed,
+                    "insertions": insertions,
+                    "deletions": deletions,
+                    "commit_subject": commit_subject,
+                },
+            },
+            TaskState.COMPLETED,
+        )
 
 
 def auth(token: str) -> dict:
@@ -1036,3 +1095,102 @@ async def test_missions_list_reports_engine_and_issue_ref_too(api) -> None:
     )
     body = api.get("/api/v1/missions", headers=auth(ALICE_TOKEN)).json()
     assert body["items"][0]["engine"] == "claude"
+
+
+# --------------------------------------------------------------------------
+# Delivery evidence — issue #69
+# --------------------------------------------------------------------------
+
+
+async def test_delivery_evidence_is_present_after_a_completed_delivery(api) -> None:
+    task = await make_task(api.factory, "p1", delivery=DeliveryRequest(branch="feature/ship-it"))
+    await deliver(api.factory, task.id, commit="deadbeef1234", pushed=True, outcome="committed_and_pushed")
+
+    body = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).json()
+    assert body == {
+        "available": True,
+        "branch": "feature/ship-it",
+        "baseBranch": "development",
+        "headCommit": "deadbeef1234",
+        "commitSubject": "Deliver the thing",
+        "filesChanged": 2,
+        "insertions": 10,
+        "deletions": 3,
+        "changedFiles": [
+            "gateway/app/api/routes/missions.py",
+            "tests/integration/test_missions.py",
+        ],
+        "pushed": True,
+        "deliveryOutcome": "committed_and_pushed",
+        "tests": {"ran": []},
+    }
+
+
+async def test_delivery_is_unavailable_when_no_delivery_was_requested(api) -> None:
+    task = await make_task(api.factory, "p1", state="completed")
+    body = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).json()
+    assert body == {"available": False, "reason": "no_delivery_requested"}
+
+
+async def test_delivery_is_unavailable_while_the_mission_is_still_running(api) -> None:
+    task = await make_task(api.factory, "p1", state="running", delivery=DeliveryRequest(branch="feature/wip"))
+    body = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).json()
+    assert body == {"available": False, "reason": "mission_not_finished"}
+
+
+async def test_delivery_is_unavailable_when_the_step_never_ran(api) -> None:
+    """Delivery was requested and the mission finished, but not by completing
+    successfully — `deliver_changes` only ever runs after `final_state ==
+    COMPLETED`, so a failed run never produces a `delivery_result_json`."""
+    task = await make_task(
+        api.factory, "p1", state="failed", delivery=DeliveryRequest(branch="feature/failed-run")
+    )
+    body = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).json()
+    assert body == {"available": False, "reason": "delivery_step_did_not_run"}
+
+
+async def test_changed_file_paths_are_redacted(api) -> None:
+    task = await make_task(api.factory, "p1", delivery=DeliveryRequest(branch="feature/x"))
+    await deliver(
+        api.factory, task.id,
+        staged_paths=["gateway/app/api/routes/missions.py", "/home/esteban/secret-notes.txt"],
+    )
+    body = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).json()
+    assert body["changedFiles"] == ["gateway/app/api/routes/missions.py", "[PATH]"]
+    assert "/home/esteban" not in json.dumps(body)
+
+
+async def test_tests_ran_lines_are_present_and_redacted(api) -> None:
+    task = await make_task(api.factory, "p1", delivery=DeliveryRequest(branch="feature/x"))
+    await deliver(
+        api.factory, task.id,
+        tests_ran=["pytest tests/unit -q", "ran pytest at /home/esteban/project — 12 passed"],
+    )
+    body = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).json()
+    assert body["tests"]["ran"] == ["pytest tests/unit -q", "ran pytest at [PATH] — 12 passed"]
+    assert "/home/esteban" not in json.dumps(body)
+
+
+async def test_diff_content_never_appears_in_the_response_body(api) -> None:
+    """Issue #69's own boundary: counters and paths only, never the diff
+    itself. This asserts the absence of diff-shaped content, not merely that
+    the declared fields render correctly."""
+    task = await make_task(api.factory, "p1", delivery=DeliveryRequest(branch="feature/x"))
+    await deliver(api.factory, task.id)
+
+    text = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).text
+    for marker in ("diff --git", "+++ b/", "--- a/", "@@ -"):
+        assert marker not in text
+
+
+async def test_delivery_of_an_invisible_mission_is_not_found(api) -> None:
+    theirs = await make_task(api.factory, "p2", delivery=DeliveryRequest(branch="feature/x"))
+    response = api.get(f"/api/v1/missions/{theirs.id}/delivery", headers=auth(ALICE_TOKEN))
+    assert response.status_code == 404
+    assert response.json()["code"] == "not_found"
+
+
+async def test_delivery_requires_a_token(api) -> None:
+    task = await make_task(api.factory, "p1")
+    response = api.get(f"/api/v1/missions/{task.id}/delivery")
+    assert response.status_code == 401

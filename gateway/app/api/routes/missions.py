@@ -696,6 +696,84 @@ async def get_mission_timeline(
     return {"items": [_timeline_dto(event) for event in page], "page": info}
 
 
+# Keys of `agent.codex_bridge_agent.git_delivery.DeliveryOutcome.to_dict()`
+# that map straight onto this contract's response, camelCase on the wire.
+# Deliberately NOT `**data` passthrough: that would ship a future field the
+# executor adds (`staged_paths` already needs redaction and renaming; the
+# next one might too) the instant one side of the wire is redeployed, which
+# is exactly the "diff content never leaves this endpoint" promise issue #69
+# makes turning into a promise nothing enforces.
+_DELIVERY_RESULT_FIELDS = (
+    ("branch", "branch"),
+    ("base_branch", "baseBranch"),
+    ("commit", "headCommit"),
+    ("commit_subject", "commitSubject"),
+    ("files_changed", "filesChanged"),
+    ("insertions", "insertions"),
+    ("deletions", "deletions"),
+    ("pushed", "pushed"),
+    ("outcome", "deliveryOutcome"),
+)
+
+
+def _delivery_unavailable(reason: str) -> dict:
+    return {"available": False, "reason": reason}
+
+
+def _delivery_evidence_dto(task: TaskModel) -> dict:
+    """`GET /api/v1/missions/{missionId}/delivery` — issue #69.
+
+    Reads `tasks.delivery_result_json` (`DeliveryOutcome.to_dict()`, written
+    by `store.store_result` — see `agent/codex_bridge_agent/git_delivery.py`)
+    and `tasks.result_json`'s `tests_ran` (the only test-output field this
+    codebase's runners produce today: heuristic lines from the provider's
+    final message, never structured pass/fail counts).
+
+    Never returns diff content — only `--shortstat`-equivalent counters and
+    the changed-file path list, both redacted the same way session logs are
+    (F26: artifact transport, and anything resembling one, is explicitly out
+    of this issue's scope).
+    """
+    if task.delivery_json is None:
+        # No delivery was ever requested for this mission — distinct from "it
+        # was requested but has not produced a result yet", which the caller
+        # needs to tell apart from "nothing changed" (this issue's own
+        # acceptance criterion).
+        return _delivery_unavailable("no_delivery_requested")
+    if task.delivery_result_json is None:
+        if store.mission_stage(task) != "done":
+            return _delivery_unavailable("mission_not_finished")
+        return _delivery_unavailable("delivery_step_did_not_run")
+
+    result = _safe_payload(task.delivery_result_json)
+    body: dict = {"available": True}
+    for source_key, wire_key in _DELIVERY_RESULT_FIELDS:
+        body[wire_key] = result.get(source_key)
+    changed_files = result.get("staged_paths") or []
+    body["changedFiles"] = [redact(path) for path in changed_files if isinstance(path, str)]
+
+    tests_ran = _safe_payload(task.result_json or "{}").get("tests_ran") or []
+    body["tests"] = {
+        "ran": [redact(line) for line in tests_ran if isinstance(line, str)]
+    }
+    return body
+
+
+@router.get("/missions/{mission_id}/delivery", tags=["missions"])
+async def get_mission_delivery(
+    mission_id: str,
+    response: Response,
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.MISSIONS_READ_DELIVERY)),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Branch, head commit, changed-file list and diff statistics — never content."""
+    task = await store.get_task_for_projects(session, mission_id, visible_projects(principal))
+    if task is None:
+        raise _not_found()
+    response.headers["Cache-Control"] = "no-store"
+    return _delivery_evidence_dto(task)
+
+
 async def _dispatch_cancel(hub: AgentHub, task: TaskModel) -> bool:
     """Tell the executor, if it is listening. Returns whether it was told.
 
