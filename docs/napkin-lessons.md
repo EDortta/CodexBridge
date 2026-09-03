@@ -1787,3 +1787,37 @@ endpoint de aprovação humana.
 Lição: "duas fontes muito improváveis de colidir" não é o mesmo problema que
 "duas fontes que nunca colidem" — e o código deveria refletir qual das duas
 frases é realmente verdadeira, não a que é mais conveniente de escrever.
+
+## 2026-09-02 — verde numa branch é verde contra um repositório que já não existe
+
+Treze branches desta sessão fecharam verdes, cada uma com a suíte completa
+rodada no seu próprio worktree. A integração em `development` produziu quatro
+falhas que nenhuma delas poderia ter visto, e a lista é a lição:
+
+- um índice único criado por uma branch (`scm_associations(project_id,
+  provider)`) contra uma deduplicação escrita por outra (`(project_id,
+  remote_url)`) — `IntegrityError` esperando a segunda grafia da mesma URL;
+- um teste de uma branch fixando o comportamento que outra mudou de propósito
+  (dispatch `implement` rebaixado para `read-only` versus recusado);
+- duas travas que entraram em `development` por um merge paralelo, ambas certas
+  em disparar contra código escrito antes delas existirem;
+- três eventos auditados sem tradução no stream móvel, porque a trava que exige
+  a tradução também chegou depois.
+
+E, acima de tudo, **cinco migrações com números colididos**. Duas branches
+reivindicaram `0010` e `0011`, ocupadas em `development` enquanto elas estavam
+abertas, e duas colidiram entre si porque foram renumeradas em paralelo. O git
+não reporta nada: dois arquivos que apenas compartilham um número não são um
+conflito. `apply_migrations.py` ordena por nome de arquivo, então a colisão só
+aparece quando alguém aplica — em produção, se ninguém olhar antes.
+
+Lição operacional: número de migração é recurso do **repositório**, não da
+branch, e a única hora em que dá para verificá-lo é a integração. Um `ls
+migrations/` antes de cada merge custa segundos; descobrir depois custa um
+banco.
+
+Lição mais geral: paralelizar branches troca conflito de merge por
+**divergência semântica**, que o git não vê. O preço é uma integração feita
+merge a merge, com a suíte rodando a cada passo — não treze botões de "merge"
+no GitHub. As quatro falhas acima teriam entrado silenciosamente por qualquer
+caminho mais barato.
