@@ -1894,3 +1894,42 @@ sintoma, não conserto: **todo worktree paralelo nasce quebrado assim.** Duas
 saídas de verdade: arquivos `.env` separados por classe de settings, ou
 `extra="ignore"` em uma delas. Até lá, a suíte que vale é a do checkout
 canônico — foi lá que a baseline e cada merge desta sessão foram medidos.
+
+## 2026-09-03 — o teste ao vivo que a DoD pedia achou o bug que os testes verdes escondiam
+
+A Definition of Done da #66 pedia um smoke test de push contra um remoto real.
+Nunca tinha sido feito, e a suíte estava verde com cobertura honesta:
+`deliver_changes` era exercitado contra repositórios `git` de verdade, não
+mocks. O push contra o GitHub, feito à mão nesta sessão, devolveu
+`committed_only` / `pushed: false` / `push_verification_failed` — para uma
+branch que o `git ls-remote` mostrava no GitHub, com exatamente o commit
+recém-criado.
+
+A causa não estava no push, e sim na prova: a verificação lia
+`git rev-parse <remote>/<branch>` — um ref **local** de rastreamento. Num clone
+`--single-branch` (o que `git clone --branch X --depth N` produz por padrão) o
+refspec é `+refs/heads/X:refs/remotes/origin/X` e mais nada, então empurrar
+outra branch nunca cria esse ref, e o código concluía "não empurrou" a partir da
+ausência de um arquivo na própria máquina.
+
+Por que nenhum teste pegou: todos clonavam completo. O caminho feliz e o
+caminho de erro estavam ambos cobertos — **na topologia errada**. A variável que
+decidia o resultado (o refspec do clone) não era um parâmetro que algum teste
+variasse; era uma propriedade do ambiente que todo teste herdava igual.
+
+Duas lições, e a segunda é a mais cara:
+
+1. Verificar uma pós-condição consultando **estado local** é verificar a própria
+   narrativa. `git push` retornar 0 não é prova, e o ref de rastreamento
+   local também não é: a prova mora no remoto (`ls-remote`).
+2. "Testado contra um repositório de verdade" não é o mesmo que "testado nas
+   topologias de verdade". Clone completo e clone raso de uma branch só são
+   ambientes diferentes, e o de deploy costuma ser o segundo. Quando um teste
+   monta o mundo sempre do mesmo jeito, ele fixa esse jeito como se fosse o
+   único — e é por isso que a DoD pedia um teste ao vivo, não mais um teste.
+
+Corolário registrado no conserto: "o remoto discordou" e "não consegui
+perguntar ao remoto" viraram motivos distintos (`push_verification_failed` e
+`push_verification_unreachable`). Colapsar os dois diria "não empurrou" quando a
+resposta honesta é "não confirmei" — e é essa diferença que manda alguém olhar o
+forge em vez de reempurrar por cima.
