@@ -32,9 +32,11 @@ reversa `wss` e fica escutando tarefas.
   opera gateway e agente.
 - **Cliente MCP (ChatGPT)**: submete tarefas por `project_id`, acompanha logs,
   resultado e diff. Nunca informa caminho de sistema de arquivos.
-- **Executor** (`devel3`): máquina que tem os repositórios locais e roda o
-  `codex-bridge-agent`. O `T610` foi a máquina de desenvolvimento original e
-  sobrevive apenas como valor de exemplo; ver `docs/architecture.md`.
+- **Bridge Node** (`devel3`): máquina que tem os repositórios locais e roda o
+  executor (`codex-bridge-agent`). O `T610` foi a máquina de desenvolvimento
+  original e sobrevive apenas como valor de exemplo; ver `docs/architecture.md`
+  e `docs/control-plane.md` para a distinção entre Node (a máquina) e Executor
+  (o processo/conexão que ela mantém com o gateway) — ver `docs/glossary.md`.
 
 Autorização no gateway é por principal com `roles` e `scopes`
 (`codexbridge.read`, `codexbridge.task.submit`, `codexbridge.task.cancel`,

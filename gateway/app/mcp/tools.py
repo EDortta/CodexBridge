@@ -202,9 +202,9 @@ def tool_definitions() -> list[dict[str, Any]]:
             "description": (
                 "Declarar (ou confirmar) a qual repositorio GitHub um projeto esta ligado. "
                 "So um humano com escopo de administrador pode chamar esta ferramenta -- ela "
-                "e o que liga o roteamento de forge para as outras ferramentas de issue. "
-                "O executor confirma o remote real antes de cada operacao; isto so registra "
-                "o que foi declarado."
+                "e o que direciona as demais ferramentas de issue para o repositorio GitHub "
+                "certo. O executor confirma o remote real antes de cada operacao no GitHub; "
+                "isto so registra o que foi declarado."
             ),
             "inputSchema": {
                 "type": "object",
@@ -232,10 +232,11 @@ def tool_definitions() -> list[dict[str, Any]]:
             "title": "Create a project issue",
             "description": (
                 "Criar uma issue no projeto. Se o projeto estiver ligado a um repositorio GitHub "
-                "(bind_project_forge), isto cria uma operacao de forge (issue_open) que espera "
-                "decisao humana na Central de Decisoes antes de publicar no GitHub. Se nao "
-                "estiver ligado, cria uma issue local imediatamente, sem aprovacao. O operador "
-                "usa a mesma frase nos dois casos."
+                "(bind_project_forge), isto pede ao executor a abertura da issue no GitHub -- "
+                "nunca ao agente de codificacao, que nao tem acesso a rede --, e espera decisao "
+                "humana na Central de Decisoes antes de publicar. Se nao estiver ligado, cria "
+                "uma issue local imediatamente, sem aprovacao. O operador usa a mesma frase nos "
+                "dois casos."
             ),
             "inputSchema": {
                 "type": "object",
@@ -245,7 +246,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "body": {"type": "string", "maxLength": 65536},
                     "executor_id": {
                         "type": "string",
-                        "description": "Omitido: escolhido automaticamente (so relevante quando ligado ao forge).",
+                        "description": "Omitido: escolhido automaticamente (so relevante quando ligado a um repositorio GitHub).",
                     },
                 },
                 "required": ["project", "title"],
@@ -256,9 +257,10 @@ def tool_definitions() -> list[dict[str, Any]]:
             "name": "list_project_issues",
             "title": "List project issues",
             "description": (
-                "Listar issues do projeto. Ligado ao forge: despacha uma leitura (issue_list) "
-                "ao GitHub via o executor, sem aprovacao (e uma leitura). Nao ligado: le as "
-                "issues locais deste gateway. Mesma ferramenta, mesmos argumentos, nos dois casos."
+                "Listar issues do projeto. Projeto ligado a um repositorio GitHub: despacha uma "
+                "leitura ao GitHub via o executor, sem aprovacao (e uma leitura). Nao ligado: le "
+                "as issues locais deste gateway. Mesma ferramenta, mesmos argumentos, nos dois "
+                "casos."
             ),
             "inputSchema": {
                 "type": "object",
@@ -275,10 +277,10 @@ def tool_definitions() -> list[dict[str, Any]]:
             "name": "comment_project_issue",
             "title": "Comment on a project issue",
             "description": (
-                "Comentar numa issue do GitHub. So funciona em projeto ligado ao forge "
-                "(bind_project_forge) -- este gateway nao tem conceito de comentario em issue "
-                "local. Cria uma operacao de forge (issue_comment) que espera decisao humana na "
-                "Central de Decisoes."
+                "Comentar numa issue do GitHub. So funciona em projeto ligado a um repositorio "
+                "GitHub (bind_project_forge) -- este gateway nao tem conceito de comentario em "
+                "issue local. O executor publica o comentario apos decisao humana na Central de "
+                "Decisoes."
             ),
             "inputSchema": {
                 "type": "object",
@@ -296,8 +298,8 @@ def tool_definitions() -> list[dict[str, Any]]:
             "name": "close_project_issue",
             "title": "Close a project issue",
             "description": (
-                "Fechar uma issue do projeto. Ligado ao forge: cria uma operacao de forge "
-                "(issue_close) que espera decisao humana na Central de Decisoes. Nao ligado: "
+                "Fechar uma issue do projeto. Projeto ligado a um repositorio GitHub: o executor "
+                "fecha a issue no GitHub apos decisao humana na Central de Decisoes. Nao ligado: "
                 "marca a issue local como concluida imediatamente. Mesma ferramenta nos dois "
                 "casos; o campo 'issue' e o numero da issue no GitHub quando ligado, ou o id da "
                 "issue local quando nao."
@@ -340,7 +342,7 @@ def tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "create_epic",
             "title": "Create epic",
-            "description": "Criar uma epica para agrupar issues dentro de um projeto que pode nao ter forge nenhum.",
+            "description": "Criar uma epica para agrupar issues dentro de um projeto, ligado ou nao a um repositorio GitHub.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
