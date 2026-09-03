@@ -1,5 +1,9 @@
 # Arquitetura proposta
 
+Vocabulário operador-facing (Node, Executor, Engine, Mission/Task/Session/
+Decision, etc.): `docs/glossary.md` (issue #81) é a referência canônica; este
+documento usa os mesmos termos.
+
 ## Resumo
 
 O sistema tem dois componentes independentes:

@@ -41,6 +41,11 @@ a toca. Use `- (none)` se genuinamente não houver nenhum.
 - `docs/control-plane.md` — **obrigatório** ao tocar em nó, projeto lógico,
   binding de workspace, associação SCM ou autorização (issue #73). Explica por que
   essas entidades são separadas e o que se perde ao fundi-las.
+- `docs/glossary.md` — **obrigatório** ao escrever ou revisar qualquer texto
+  voltado ao operador (telas de Control, descrições de ferramenta MCP, prompts
+  de aprovação, prosa de documentação): o vocabulário canônico (issue #81) e
+  por que `forge`, `agent`/`executor` e `mission`/`task`/`session`/`decision`
+  não são intercambiáveis.
 - `docs/napkin-lessons.md` — lições curtas; leia ao retomar trabalho relacionado
 
 ## Fontes locais — fora do checkout

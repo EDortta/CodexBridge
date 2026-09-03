@@ -502,7 +502,7 @@ async def control_home(
 
     table = (
         "<table><thead><tr><th>Node</th><th>Health</th><th>Admission</th>"
-        "<th>Pending candidates</th><th>Agent version</th></tr></thead>"
+        "<th>Pending candidates</th><th>Executor version</th></tr></thead>"
         f"<tbody>{''.join(body_rows) or '<tr><td colspan=5>No Bridge Nodes registered.</td></tr>'}</tbody></table>"
     )
 
