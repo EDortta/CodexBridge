@@ -4401,10 +4401,16 @@ async def _task_durations(
     ]
 
 
-async def estimate_task_duration_seconds(
-    session: AsyncSession, *, project_id: str, mode: str, engine: str
+async def _estimate_duration_seconds(
+    session: AsyncSession, *, project_id: str | None, mode: str, engine: str | None
 ) -> dict:
-    """A duration estimate for `start_development_task`'s `eta_seconds`.
+    """The median-of-history estimate itself, independent of any executor's
+
+    queue. Factored out of `estimate_task_duration_seconds` so
+    `_queue_wait_seconds` (issue #67's `queue_wait_seconds`) can ask the same
+    widen-then-report-none-honestly question about a single RUNNING task's
+    own project+mode+engine, instead of a second copy of this logic drifting
+    from it.
 
     Median (not mean -- a single long timeout must not dominate) of
     `completed_at - started_at` over the last 50 completed tasks in the last
@@ -4452,6 +4458,80 @@ async def estimate_task_duration_seconds(
     if durations:
         return {"eta_seconds": statistics.median(durations), "eta_basis": "global", "eta_sample_size": len(durations)}
     return {"eta_seconds": None, "eta_basis": "none", "eta_sample_size": 0}
+
+
+async def _queue_wait_seconds(session: AsyncSession, executor_id: str) -> float | None:
+    """Issue #67 Requirements: "If the target executor is at or over its
+
+    concurrency limit, add the median remaining wall time of its currently
+    RUNNING tasks and report it as a separate `queue_wait_seconds` field
+    rather than folding it silently into `eta_seconds`."
+
+    Returns `None` when `executor_id` is unknown, or is not currently at or
+    over its `max_concurrent_tasks` -- the caller omits the field entirely in
+    that case (WK-20260903-gh67-70-read-gaps test plan: "`queue_wait_seconds`
+    present only when the executor is saturated"), rather than shipping
+    `queue_wait_seconds: null` on every response whether or not a wait was
+    ever in question.
+
+    A RUNNING task's own "remaining wall time" is read the same way
+    `eta_seconds` is: that task's own project+mode+engine median historical
+    duration (via `_estimate_duration_seconds`, widening the same way),
+    minus how long it has already run, floored at 0 so a task already past
+    its typical duration reports "no time left" rather than a negative
+    number. A RUNNING task with no historical basis at any level contributes
+    nothing to the median -- never a fabricated remaining time -- the same
+    null-when-unknown posture `_estimate_duration_seconds` takes for F29.
+    """
+    executor = await session.get(ExecutorModel, executor_id)
+    if executor is None:
+        return None
+    max_concurrent = int(json.loads(executor.metadata_json).get("max_concurrent_tasks", 1))
+    result = await session.execute(
+        select(TaskModel.project_id, TaskModel.mode, TaskModel.engine, TaskModel.started_at)
+        .where(TaskModel.executor_id == executor_id)
+        .where(TaskModel.state == TaskState.RUNNING.value)
+    )
+    running = result.all()
+    if len(running) < max_concurrent:
+        return None
+    now = datetime.now(timezone.utc)
+    remaining: list[float] = []
+    for r_project_id, r_mode, r_engine, r_started_at in running:
+        if r_started_at is None:
+            continue
+        estimate = await _estimate_duration_seconds(session, project_id=r_project_id, mode=r_mode, engine=r_engine)
+        if estimate["eta_seconds"] is None:
+            continue
+        elapsed = (now - _as_utc(r_started_at)).total_seconds()
+        remaining.append(max(0.0, estimate["eta_seconds"] - elapsed))
+    if not remaining:
+        return None
+    return statistics.median(remaining)
+
+
+async def estimate_task_duration_seconds(
+    session: AsyncSession, *, project_id: str, mode: str, engine: str, executor_id: str | None = None
+) -> dict:
+    """A duration estimate for `start_development_task`'s `eta_seconds`,
+
+    additively exposed on `get_task_status`/`list_recent_tasks` too (issue
+    #67 Scope / #70 Scope). See `_estimate_duration_seconds` for the
+    estimate itself.
+
+    `executor_id` is optional and additive: when given, and that executor is
+    at or over its concurrency limit right now, the returned dict also
+    carries `queue_wait_seconds` (see `_queue_wait_seconds`). Omitted
+    entirely (not `None`) when `executor_id` is absent or the executor is
+    not saturated, so a caller that never asked about queueing never sees
+    the key.
+    """
+    estimate = await _estimate_duration_seconds(session, project_id=project_id, mode=mode, engine=engine)
+    if executor_id is not None:
+        queue_wait_seconds = await _queue_wait_seconds(session, executor_id)
+        if queue_wait_seconds is not None:
+            estimate = {**estimate, "queue_wait_seconds": queue_wait_seconds}
+    return estimate
 
 
 # Artifacts, Android builds and download tokens (issue #11).

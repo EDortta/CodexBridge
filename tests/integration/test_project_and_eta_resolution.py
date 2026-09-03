@@ -207,3 +207,121 @@ async def test_median_not_mean_so_one_outlier_does_not_dominate(db_session: Asyn
         db_session, project_id="codexbridge", mode="implement", engine="claude"
     )
     assert estimate["eta_seconds"] == 10
+
+
+# --------------------------------------------------------------------------
+# queue_wait_seconds (issue #67 Requirements, WK-20260903-gh67-70-read-gaps)
+# --------------------------------------------------------------------------
+
+
+async def _seed_running_task(
+    session: AsyncSession, *, project_id: str, mode: TaskMode, engine: str, started_seconds_ago: float
+) -> None:
+    request = SubmitTaskRequest(
+        executor_id="T610",
+        project_id=project_id,
+        instruction="in flight",
+        mode=mode,
+        timeout_seconds=3600,
+        priority=TaskPriority.NORMAL,
+        run_when_available=True,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        engine=engine,
+    )
+    task = await store.create_task(session, request, executor_online=True)
+    await store.update_task_state(session, task.id, TaskState.RUNNING)
+    task = await session.get(type(task), task.id)
+    task.started_at = datetime.now(timezone.utc) - timedelta(seconds=started_seconds_ago)
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_queue_wait_seconds_absent_when_no_executor_id_given(db_session: AsyncSession):
+    """`executor_id` is optional and additive -- omitting it (every caller
+
+    before this issue) must never surface `queue_wait_seconds` at all, let
+    alone try to compute it.
+    """
+    estimate = await store.estimate_task_duration_seconds(
+        db_session, project_id="codexbridge", mode="implement", engine="claude"
+    )
+    assert "queue_wait_seconds" not in estimate
+
+
+@pytest.mark.asyncio
+async def test_queue_wait_seconds_absent_when_executor_is_not_saturated(db_session: AsyncSession):
+    """T610's `max_concurrent_tasks` is 1 (fixture). Zero RUNNING tasks is
+
+    strictly below that, so the field must be absent entirely -- never
+    `None` -- per the test plan's "present only when the executor is
+    saturated".
+    """
+    estimate = await store.estimate_task_duration_seconds(
+        db_session, project_id="codexbridge", mode="implement", engine="claude", executor_id="T610"
+    )
+    assert "queue_wait_seconds" not in estimate
+
+
+@pytest.mark.asyncio
+async def test_queue_wait_seconds_present_and_median_when_executor_saturated(db_session: AsyncSession):
+    """T610's `max_concurrent_tasks` is 1. One RUNNING task already meets
+
+    "at or over its concurrency limit" -- `queue_wait_seconds` must appear,
+    computed as that task's own historical median duration minus how long it
+    has already run.
+    """
+    for seconds in (100, 200, 300, 400, 500):
+        await _seed_completed_task(
+            db_session, project_id="codexbridge", mode=TaskMode.IMPLEMENT, engine="claude", duration_seconds=seconds
+        )
+    # Median historical duration for (codexbridge, implement, claude) is 300s.
+    # This RUNNING task started 80s ago -> ~220s remaining.
+    await _seed_running_task(
+        db_session, project_id="codexbridge", mode=TaskMode.IMPLEMENT, engine="claude", started_seconds_ago=80
+    )
+    estimate = await store.estimate_task_duration_seconds(
+        db_session, project_id="codexbridge", mode="implement", engine="claude", executor_id="T610"
+    )
+    assert "queue_wait_seconds" in estimate
+    assert 215 <= estimate["queue_wait_seconds"] <= 225
+
+
+@pytest.mark.asyncio
+async def test_queue_wait_seconds_floors_at_zero_past_the_typical_duration(db_session: AsyncSession):
+    for seconds in (10, 20, 30, 40, 50):
+        await _seed_completed_task(
+            db_session, project_id="codexbridge", mode=TaskMode.IMPLEMENT, engine="claude", duration_seconds=seconds
+        )
+    # Median is 30s; this task has already run for 500s -- well past it.
+    await _seed_running_task(
+        db_session, project_id="codexbridge", mode=TaskMode.IMPLEMENT, engine="claude", started_seconds_ago=500
+    )
+    estimate = await store.estimate_task_duration_seconds(
+        db_session, project_id="codexbridge", mode="implement", engine="claude", executor_id="T610"
+    )
+    assert estimate["queue_wait_seconds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_queue_wait_seconds_absent_when_saturated_but_no_historical_basis(db_session: AsyncSession):
+    """Saturated, but the one RUNNING task has zero historical samples at any
+
+    level (nothing else was ever seeded) -- `_queue_wait_seconds` must not
+    fabricate a number (F29's null-when-unknown rule applies here too), so
+    the field stays absent even though the executor genuinely is at capacity.
+    """
+    await _seed_running_task(
+        db_session, project_id="codexbridge", mode=TaskMode.IMPLEMENT, engine="claude", started_seconds_ago=30
+    )
+    estimate = await store.estimate_task_duration_seconds(
+        db_session, project_id="codexbridge", mode="implement", engine="claude", executor_id="T610"
+    )
+    assert "queue_wait_seconds" not in estimate
+
+
+@pytest.mark.asyncio
+async def test_queue_wait_seconds_absent_for_unknown_executor(db_session: AsyncSession):
+    estimate = await store.estimate_task_duration_seconds(
+        db_session, project_id="codexbridge", mode="implement", engine="claude", executor_id="no-such-executor"
+    )
+    assert "queue_wait_seconds" not in estimate

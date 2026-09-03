@@ -310,7 +310,18 @@ async def handle_mcp_call(
                     task.executor_id,
                     hub_envelope(task.executor_id, "task.dispatch", dispatch_payload),
                 )
-        payload = {"task_id": task.id, "state": task.state, "expires_at": task.expires_at.isoformat()}
+        # Additive, WK-20260903-gh67-70-read-gaps (issue #67 Objective:
+        # "additively, submit_codex_task"). `executor_id` IS passed here --
+        # unlike `get_task_status`/`list_recent_tasks` (poll surfaces for a
+        # task that already cleared the dispatch gate), this is a submission
+        # surface exactly like `start_development_task`: the queue wait is
+        # meaningful right now, before dispatch, and `request.executor_id`
+        # is never inferred here the way `start_development_task` infers it
+        # -- the caller named it directly in the request.
+        eta = await store.estimate_task_duration_seconds(
+            session, project_id=task.project_id, mode=task.mode, engine=task.engine, executor_id=task.executor_id
+        )
+        payload = {"task_id": task.id, "state": task.state, "expires_at": task.expires_at.isoformat(), **eta}
         result = _text_result(f"Task {task.id} created with state {task.state}.", payload)
     elif tool_name == "get_task_status":
         require_scope("codexbridge.read")
@@ -318,6 +329,9 @@ async def handle_mcp_call(
         if task is None:
             raise HTTPException(status_code=404, detail="unknown_task")
         require_task_access(task)
+        eta = await store.estimate_task_duration_seconds(
+            session, project_id=task.project_id, mode=task.mode, engine=task.engine
+        )
         payload = {
             "task_id": task.id,
             "state": task.state,
@@ -337,6 +351,14 @@ async def handle_mcp_call(
             "issue_ref": task.issue_ref,
             "delivery": json.loads(task.delivery_json) if task.delivery_json else None,
             "delivery_result": json.loads(task.delivery_result_json) if task.delivery_result_json else None,
+            # Additive, WK-20260903-gh67-70-read-gaps (issue #67 Scope /
+            # #70 Scope): the same estimate `start_development_task` already
+            # returns at submission time, so a poller can tell whether a
+            # RUNNING task is running long relative to its own history.
+            # `executor_id` intentionally not passed here -- `queue_wait_seconds`
+            # is about the wait BEFORE a task starts; a task this call already
+            # has a status for has already cleared that gate.
+            **eta,
         }
         result = _text_result(f"Task {task.id} is {task.state}.", payload)
     elif tool_name == "get_task_logs":
@@ -672,7 +694,7 @@ async def handle_mcp_call(
                 )
 
         eta = await store.estimate_task_duration_seconds(
-            session, project_id=project.id, mode=mode_value, engine=engine_value
+            session, project_id=project.id, mode=mode_value, engine=engine_value, executor_id=task.executor_id
         )
         payload = {
             "task_id": task.id,
@@ -906,8 +928,12 @@ async def handle_mcp_call(
         )
         if principal is not None and not principal.is_admin():
             tasks = [task for task in tasks if task.requested_by_user_id == principal.user_id]
-        payload = {
-            "tasks": [
+        items = []
+        for item in tasks:
+            eta = await store.estimate_task_duration_seconds(
+                session, project_id=item.project_id, mode=item.mode, engine=item.engine
+            )
+            items.append(
                 {
                     "task_id": item.id,
                     "executor_id": item.executor_id,
@@ -919,10 +945,20 @@ async def handle_mcp_call(
                     "engine": item.engine,
                     "branch": (json.loads(item.delivery_result_json).get("branch") if item.delivery_result_json else None),
                     "pushed": (json.loads(item.delivery_result_json).get("pushed") if item.delivery_result_json else None),
+                    # Additive, WK-20260903-gh67-70-read-gaps (issue #70
+                    # Scope): `issue_ref` and the full delivery outcome
+                    # object -- `branch`/`pushed` above stay exactly as they
+                    # were (an existing caller reading them keeps working
+                    # unchanged) rather than being replaced by this richer
+                    # shape. `delivery` is `None`, never a fabricated object
+                    # with null fields, for a task that never had a delivery
+                    # outcome recorded.
+                    "issue_ref": item.issue_ref,
+                    "delivery": json.loads(item.delivery_result_json) if item.delivery_result_json else None,
+                    **eta,
                 }
-                for item in tasks
-            ]
-        }
+            )
+        payload = {"tasks": items}
         result = _text_result(f"Returned {len(payload['tasks'])} tasks.", payload)
     elif tool_name == "create_epic":
         # Issue #78: exposes the same store.create_epic REST already tests

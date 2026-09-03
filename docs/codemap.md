@@ -1,17 +1,16 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-09-03 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 182 file(s) · 2003 symbol(s) indexed
-- Languages: config (2), python (178), shell (2)
+- 183 file(s) · 2029 symbol(s) indexed
+- Languages: config (2), python (179), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
 
-- `AGENTS.md`
 - `docs/required-reading.md`
 - `docs/project-rules.md`
 - `docs/software-overview.md`
@@ -193,6 +192,7 @@ tests/
     test_sessions.py  — "Agent sessions, logs and control — issue #9."
     test_start_development_task.py  — "The `start_development_task` MCP tool -- the conversational entry point."
     test_store_and_mcp.py
+    test_task_status_and_list_read_surfaces.py  — "`get_task_status` / `list_recent_tasks` additive read-surface fields."
   unit/
     test_agent_announcement.py  — "The `hello` payload's real content -- issue #73 Stage 2."
     test_agent_auth.py  — "Credential resolution for the `/agent/ws` handshake — issue #15."
@@ -1047,7 +1047,7 @@ tests/
 - **`AmbiguousProjectReference`** *(class)* — "More than one project matched a `start_development_task` reference."
   - `__init__(self, candidates)` *(method)*
 - `resolve_project_reference(session, text)` *(async function)* — "Resolves "project Y" to exactly one registered project."
-- `estimate_task_duration_seconds(session)` *(async function)* — "A duration estimate for `start_development_task`'s `eta_seconds`."
+- `estimate_task_duration_seconds(session)` *(async function)* — "A duration estimate for `start_development_task`'s `eta_seconds`,"
 - `create_artifact(session)` *(async function)* — "Record an artifact and, for an APK, its build metadata."
 - `artifact_is_retained(artifact, now)` — "Whether the artifact is still inside its retention window."
 - `get_artifact_for_projects(session, artifact_id, project_ids)` *(async function)* — "An artifact the caller may see, or None. Mirrors `get_conversation_for_projects`."
@@ -2227,6 +2227,12 @@ tests/
 - `test_widens_to_project_and_mode_when_the_engine_specific_sample_is_too_thin(db_session)` *(async function)*
 - `test_widens_to_global_mode_and_finally_to_none(db_session)` *(async function)*
 - `test_median_not_mean_so_one_outlier_does_not_dominate(db_session)` *(async function)*
+- `test_queue_wait_seconds_absent_when_no_executor_id_given(db_session)` *(async function)* — "`executor_id` is optional and additive -- omitting it (every caller"
+- `test_queue_wait_seconds_absent_when_executor_is_not_saturated(db_session)` *(async function)* — "T610's `max_concurrent_tasks` is 1 (fixture). Zero RUNNING tasks is"
+- `test_queue_wait_seconds_present_and_median_when_executor_saturated(db_session)` *(async function)* — "T610's `max_concurrent_tasks` is 1. One RUNNING task already meets"
+- `test_queue_wait_seconds_floors_at_zero_past_the_typical_duration(db_session)` *(async function)*
+- `test_queue_wait_seconds_absent_when_saturated_but_no_historical_basis(db_session)` *(async function)* — "Saturated, but the one RUNNING task has zero historical samples at any"
+- `test_queue_wait_seconds_absent_for_unknown_executor(db_session)` *(async function)*
 
 ### `tests/integration/test_projects.py`
 
@@ -2398,6 +2404,31 @@ tests/
 - `test_mcp_continue_codex_session_dispatches_to_a_connected_idle_executor(mcp_hub_factory)` *(async function)* — "Issue #24: unlike its sibling `submit_codex_task` (same file), this"
 - `test_mcp_continue_codex_session_leaves_task_queued_when_the_executor_is_offline(mcp_hub_factory)` *(async function)* — "No regression on the pre-existing (disconnected) case: an offline"
 - `test_mcp_continue_codex_session_at_capacity_does_not_dispatch(mcp_hub_factory)` *(async function)* — "A connected executor already at its concurrency limit must not be sent"
+
+### `tests/integration/test_task_status_and_list_read_surfaces.py`
+
+> `get_task_status` / `list_recent_tasks` additive read-surface fields.
+
+- **`DummyHub`** *(class)*
+  - `__init__(self)` *(method)*
+  - `is_connected(self, executor_id)` *(method)*
+  - `dispatch_next(self, executor_id)` *(async method)*
+  - `send(self, executor_id, envelope)` *(async method)*
+- `db_session()` *(async function)*
+- `test_get_task_status_carries_eta_fields_with_no_history(db_session)` *(async function)*
+- `test_get_task_status_eta_reflects_real_history(db_session)` *(async function)*
+- `test_get_task_status_never_carries_queue_wait_seconds(db_session)` *(async function)* — "`queue_wait_seconds` is about the wait BEFORE a task starts"
+- `test_list_recent_tasks_carries_eta_fields_per_item(db_session)` *(async function)*
+- `test_states_filter_narrows_to_the_requested_states(db_session)` *(async function)*
+- `test_states_filter_accepts_multiple_values(db_session)` *(async function)* — "The exact motivating case named in #70's Objective: "what finished"
+- `test_states_filter_absent_returns_every_state(db_session)` *(async function)*
+- `test_states_filter_matching_nothing_returns_an_empty_list(db_session)` *(async function)*
+- `test_get_task_status_delivery_result_is_none_when_no_delivery_happened(db_session)` *(async function)* — "A task with no delivery must not fabricate a delivery object --"
+- `test_get_task_status_delivery_result_carries_the_full_outcome_shape(db_session)` *(async function)*
+- `test_list_recent_tasks_delivery_is_none_when_no_delivery_happened(db_session)` *(async function)*
+- `test_list_recent_tasks_delivery_carries_the_full_outcome_shape(db_session)` *(async function)*
+- `test_get_task_status_keeps_every_pre_existing_field_unchanged(db_session)` *(async function)*
+- `test_list_recent_tasks_keeps_every_pre_existing_field_unchanged(db_session)` *(async function)*
 
 ### `tests/unit/test_agent_announcement.py`
 
