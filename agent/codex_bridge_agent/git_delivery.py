@@ -20,6 +20,50 @@ Nothing here ever emits `--force`, `--force-with-lease`, or a `+refs`
 refspec. Nothing here ever runs `git add -A`, `git add .`, or `git commit -a`
 -- every stage is by explicit path, taken from `git status`'s own output
 (shared working-tree gate, `.docs/workflows/git-delivery.md`).
+
+Issue #66 ARO finding F34 ("a cancelled task that still has a running git
+delivery step in flight is a real interaction this issue does not resolve
+... the git step should check for cancellation before committing"): this is
+that check. `deliver_changes` accepts an `is_cancelled` callable and reads it
+exactly once, immediately before the `git commit` call, at the same point --
+and for the same reason -- `head_before`/`head_now` are re-read: the last
+safe moment to still refuse before an irreversible local write.
+
+The three outcomes a cancel arriving during delivery could produce are
+deliberately NOT symmetric, chosen against the shape cancel already has
+everywhere else in this codebase (`STOPPABLE_TASK_STATES`, `RunnerPool.
+cancel`, the reconnect-replay path issue #17 added):
+
+  - **Before the commit checkpoint** (still validating, staging, or
+    switching branches): refused outright, exactly like `head_moved` --
+    `outcome="refused", reason="cancelled_before_commit"`, nothing
+    committed, the staged tree left exactly as `git add` left it,
+    inspectable rather than unstaged or "fixed".
+  - **After the commit checkpoint has already passed** (the commit itself,
+    and any push that follows it): runs to completion UNINTERRUPTED. Once
+    this module has decided to make the commit, cancelling becomes
+    strictly worse than finishing: a killed `git commit` risks nothing
+    (git's own commit is atomic), but a killed `git push` is a subprocess
+    torn down mid-transfer with no defined recovery -- this module already
+    refuses to `--force` or rewrite a ref under any circumstance, so there
+    is no corrective action it could take afterward, only an ambiguous
+    local/remote state and a branch an operator cannot trust. Letting an
+    in-flight push finish and reporting exactly what happened
+    (`committed_and_pushed` / `committed_only` with `pushed=False` and a
+    `reason` naming why) is the one behaviour that keeps every claim this
+    module makes -- verified post-condition, no forced ref, no half state
+    -- true regardless of when the cancel arrived.
+  - A cancel is therefore never allowed to interrupt a `git push` already
+    running. That is a deliberate rejection of "attempt to interrupt
+    mid-push": this module has no way to safely reason about a subprocess
+    killed after it may have already started transferring objects, and
+    every other guard here exists specifically to avoid leaving git state
+    that cannot be trusted at a glance.
+
+The caller (`AgentService._handle_dispatch`) does not gate the call to
+`deliver_changes` on cancellation itself -- per `design-standards.md` §3,
+the guard lives in the one place that is actually dangerous (the commit),
+not at the caller, so a future second call site cannot forget it.
 """
 
 from __future__ import annotations
@@ -179,13 +223,22 @@ async def deliver_changes(
     issue_ref: str | None,
     engine: str,
     send_log: LogSender,
+    is_cancelled: Callable[[], bool] | None = None,
 ) -> DeliveryOutcome:
     """Commits (and, if authorized, pushes) whatever a completed task changed.
 
     Only called by `AgentService._handle_dispatch` after the provider runner
     exits successfully (`final_state == COMPLETED`) -- never on a failed or
     cancelled run, and never from inside the provider's own sandbox.
+
+    `is_cancelled` is optional and defaults to "never cancelled" -- every
+    existing caller (this module's own materialize call site, every test in
+    `tests/unit/test_git_delivery.py`) keeps working unchanged without
+    passing it. When given, it is polled exactly once, immediately before
+    the commit -- see this module's own docstring, "Issue #66 ARO finding
+    F34", for why that single checkpoint and not any other.
     """
+    check_cancelled = is_cancelled or (lambda: False)
     branch = delivery.branch
 
     if branch in _PROTECTED_BRANCHES:
@@ -255,6 +308,23 @@ async def deliver_changes(
     if head_now != head_before:
         return _refused(
             f"head_moved:{head_before}->{head_now}", delivery,
+            branch=branch, created_branch=created_branch, head_before=head_before, staged_paths=staged_paths,
+        )
+
+    # Issue #66 ARO finding F34 -- the check this module's own docstring
+    # names ("check for cancellation before committing"), placed at the
+    # last possible moment before the commit itself, the same way
+    # `head_moved` just above is re-read immediately before use rather than
+    # trusted from earlier in this function. Nothing is unstaged on a
+    # cancel: the tree is left exactly as `git add` left it, inspectable,
+    # not "cleaned up" by force. Once this check has passed, delivery is
+    # allowed to run the commit and any push through to completion
+    # uninterrupted -- see the module docstring for why interrupting a
+    # push in flight is rejected outright.
+    if check_cancelled():
+        await send_log("stderr", f"task.delivery_cancelled:{task_id}")
+        return _refused(
+            "cancelled_before_commit", delivery,
             branch=branch, created_branch=created_branch, head_before=head_before, staged_paths=staged_paths,
         )
 
