@@ -129,7 +129,6 @@ FAKE_CREATE_RESULT = {
     "lead_minutes": 30,
     "created": True,
     "html_link": "https://calendar.example/e",
-    "when_was_naive": False,
 }
 
 
@@ -224,6 +223,9 @@ async def test_create_reminder_round_trip(api, monkeypatch) -> None:
     assert captured["when"] == "2099-01-01T10:00:00-03:00"
     assert captured["notes"] == "Falar do IR"
     assert captured["lead_minutes"] == 30
+    # This transport always identifies itself -- see google_calendar.py's
+    # `created_via` parameter and its extendedProperties.private use.
+    assert captured["created_via"] == "rest"
 
 
 async def test_create_response_matches_the_mcp_tool_output_shape_field_for_field(api, monkeypatch) -> None:
@@ -304,6 +306,73 @@ async def test_create_reminder_access_error_names_the_client_email(api, monkeypa
     assert body["code"] == "conflict"
     assert body["message"] == message
     assert "sa@example.iam.gserviceaccount.com" in body["message"]
+
+
+async def test_create_reminder_naive_when_is_409_with_the_mcp_message_text(api, monkeypatch) -> None:
+    """Same error-mapping pattern as the two tests above, for the specific
+
+    failure this delivery adds: `NaiveDatetimeError` is a `CalendarAccessError`
+    subclass, so the route's existing `except (CalendarConfigError,
+    CalendarAccessError)` already maps it to `409 conflict` with no route
+    code change needed -- this proves it, at this transport.
+    """
+    message = (
+        "'when' ('2099-01-01T10:00:00') has no UTC offset. Send ISO 8601 with an "
+        "explicit offset, e.g. '2026-09-04T15:00:00-03:00', or a trailing 'Z' for "
+        "UTC. The caller is expected to resolve the operator's own timezone before "
+        "calling -- this server does not guess one."
+    )
+
+    async def naive_rejected(**kwargs):
+        raise google_calendar.NaiveDatetimeError(kwargs["when"])
+
+    monkeypatch.setattr(google_calendar, "create_reminder", naive_rejected)
+
+    response = api.post(
+        "/api/v1/reminders",
+        json={"text": "x", "when": "2099-01-01T10:00:00"},
+        headers=auth(WRITE_ONLY_TOKEN),
+    )
+    assert response.status_code == 409
+    body = response.json()
+    assert body["code"] == "conflict"
+    assert body["message"] == message
+
+
+async def test_create_reminder_naive_when_is_rejected_end_to_end(api, monkeypatch, tmp_path) -> None:
+    """Not monkeypatching `google_calendar.create_reminder`: the real function
+
+    runs here, so this proves the rejection all the way from the HTTP layer
+    down through `parse_when`, not just that the route maps a raised
+    exception to the right status. No network call happens either way --
+    `parse_when` raises before any token is minted, which is also what keeps
+    this safe to run without touching Google.
+    """
+    from gateway.app.core.config import settings
+
+    sa_path = tmp_path / "sa.json"
+    sa_path.write_text(
+        json.dumps(
+            {
+                "type": "service_account",
+                "client_email": "codexbridge-test@codexbridge-test.iam.gserviceaccount.com",
+                "private_key": "-----BEGIN PRIVATE KEY-----\nFAKE-NEVER-A-REAL-KEY\n-----END PRIVATE KEY-----\n",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "google_calendar_credentials_file", str(sa_path))
+
+    response = api.post(
+        "/api/v1/reminders",
+        json={"text": "x", "when": "2099-01-01T10:00:00"},
+        headers=auth(WRITE_ONLY_TOKEN),
+    )
+    assert response.status_code == 409
+    body = response.json()
+    assert body["code"] == "conflict"
+    assert "no UTC offset" in body["message"]
 
 
 async def test_create_reminder_rejects_a_missing_required_field(api) -> None:

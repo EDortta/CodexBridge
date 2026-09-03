@@ -149,7 +149,20 @@ version_router = APIRouter()
 # paragraphs above jump their own gaps: 1.15.0 and 1.16.0 are reserved for
 # other branches open this same session (WK-20260903-gh68-missions-http,
 # WK-20260903-gh81-terminology); only one bump survives the eventual merge.
-API_CONTRACT_VERSION = "1.17.0"
+#
+# 1.17.0 -> 1.18.0 (WK-20260903-gh71-naive-datetime, issue #71): repairs a
+# claim-versus-code divergence found by delivery audit -- `when` with no UTC
+# offset was silently assumed into this deployment's own default timezone,
+# the exact opposite of issue #71's own Requirements ("A naive (offset-less)
+# datetime is rejected rather than silently assumed into a timezone"). A
+# request that previously succeeded (201) now answers `409 conflict` for the
+# same body. No schema field changed shape or name -- `when` is still a
+# plain string -- so `scripts/check_contract_compatibility.py` cannot see
+# this break mechanically (docs/api/README.md's own "meaning change that
+# keeps the name and the type... no schema diff catches it"); it is real
+# regardless, hence the version bump on prose-only content. 1.15.0 and
+# 1.16.0 remain reserved for the two branches named above, still unmerged.
+API_CONTRACT_VERSION = "1.18.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a

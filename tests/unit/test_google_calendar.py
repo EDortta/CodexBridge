@@ -148,22 +148,35 @@ def test_event_id_alphabet_is_base32hex_lowercase():
 # --------------------------------------------------------------------------
 
 
-def test_naive_input_gets_the_default_timezone():
-    when_dt, was_naive = gc.parse_when("2026-09-04T15:00:00")
-    assert was_naive is True
-    assert when_dt.tzinfo is not None
-    assert when_dt.tzinfo.key == gc.DEFAULT_TIMEZONE
+def test_naive_input_is_rejected_not_defaulted():
+    """Issue #71's own Requirements: ChatGPT already resolved the operator's
+
+    timezone and the current instant before calling this tool/endpoint, so a
+    naive `when` means something went wrong upstream. Guessing a timezone
+    would produce a reminder that silently fires at the wrong hour -- this
+    replaces `test_naive_input_gets_the_default_timezone`, which pinned that
+    wrong (opposite) behaviour. See this delivery's commit message for why
+    the old test was removed rather than kept alongside the new one.
+    """
+    with pytest.raises(gc.NaiveDatetimeError) as raised:
+        gc.parse_when("2026-09-04T15:00:00")
+    # Typed AND operator-legible: names what was wrong and the expected shape.
+    assert raised.value.when == "2026-09-04T15:00:00"
+    assert "no UTC offset" in str(raised.value)
+    assert "2026-09-04T15:00:00-03:00" in str(raised.value)  # the expected shape
+    # A subclass of CalendarAccessError, so both transports' existing
+    # `except (CalendarConfigError, CalendarAccessError)` clauses already
+    # catch it -- no per-transport special-casing needed.
+    assert isinstance(raised.value, gc.CalendarAccessError)
 
 
 def test_offset_aware_input_keeps_its_own_offset():
-    when_dt, was_naive = gc.parse_when("2026-09-04T15:00:00-03:00")
-    assert was_naive is False
+    when_dt = gc.parse_when("2026-09-04T15:00:00-03:00")
     assert when_dt.utcoffset() == timedelta(hours=-3)
 
 
 def test_trailing_z_suffix_parses():
-    when_dt, was_naive = gc.parse_when("2026-09-04T18:00:00Z")
-    assert was_naive is False
+    when_dt = gc.parse_when("2026-09-04T18:00:00Z")
     assert when_dt.utcoffset() == timedelta(0)
 
 
@@ -203,6 +216,23 @@ async def test_a_time_in_the_past_is_refused(tmp_path):
                 config=config, client=client, signer=_fake_signer,
                 user_id="esteban", text="lembrete",
                 when=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_reminder_refuses_a_naive_when_before_touching_the_network(tmp_path):
+    """The end-to-end path, not just `parse_when` in isolation: a naive
+
+    `when` reaching `create_reminder` (as it would from either transport)
+    is rejected before minting a token or calling Google.
+    """
+    config = gc.CalendarConfig(credentials_file=_write_service_account(tmp_path), calendar_id="cal-1")
+    transport = httpx.MockTransport(lambda r: (_ for _ in ()).throw(AssertionError("no network call expected")))
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(gc.NaiveDatetimeError, match="no UTC offset"):
+            await gc.create_reminder(
+                config=config, client=client, signer=_fake_signer,
+                user_id="esteban", text="lembrete", when="2099-01-01T10:00:00",
             )
 
 
@@ -248,10 +278,47 @@ async def test_the_event_body_matches_the_documented_shape_and_never_has_attende
     assert "attendees" not in body
     assert body["transparency"] == "transparent"
     assert body["reminders"] == {"useDefault": False, "overrides": [{"method": "popup", "minutes": 0}]}
-    assert body["extendedProperties"]["private"]["source"] == "codexbridge"
+    private = body["extendedProperties"]["private"]
+    assert private["source"] == "codexbridge"
+    assert private["requested_by"] == "esteban"
+    # From day one (issue #71): what makes #72's list_reminders able to
+    # filter and correlate without retroactively tagging events created
+    # before these fields existed.
+    assert private["created_via"] == "mcp"  # the default -- no transport named itself
+    assert private["idempotency_key"] == "smoke-1"
     assert body["start"]["timeZone"] == gc.DEFAULT_TIMEZONE
     assert result["created"] is True
     assert result["reminder_id"] == body["id"]
+
+
+@pytest.mark.asyncio
+async def test_created_via_is_recorded_per_transport(tmp_path):
+    """The REST route passes `created_via="rest"` explicitly
+
+    (`gateway/app/api/routes/reminders.py`); `/mcp` never names one (that
+    call site is out of this delivery's scope), so it gets the default.
+    """
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/token"):
+            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
+        captured["body"] = json.loads(request.read())
+        return httpx.Response(200, json=captured["body"])
+
+    config = gc.CalendarConfig(credentials_file=_write_service_account(tmp_path), calendar_id="cal-1")
+    transport = httpx.MockTransport(handler)
+    when = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    async with httpx.AsyncClient(transport=transport) as client:
+        await gc.create_reminder(
+            config=config, client=client, signer=_fake_signer,
+            user_id="esteban", text="lembrete", when=when, created_via="rest",
+        )
+
+    assert captured["body"]["extendedProperties"]["private"]["created_via"] == "rest"
+    # No idempotency_key was passed -- still a string, never a JSON null,
+    # because Google's extendedProperties.private requires string values.
+    assert captured["body"]["extendedProperties"]["private"]["idempotency_key"] == ""
 
 
 @pytest.mark.asyncio
