@@ -630,10 +630,23 @@ class AgentService:
             # WK-20260830-chatgpt-entry-provider-and-delivery, slice of #51.
             # Runs OUTSIDE the provider's own sandbox, only after a successful
             # run, and only when the dispatch itself carried a `delivery`
-            # block. Today no gateway ever sets that key (issue #65 wires the
-            # MCP tool that will), so this branch is currently unreachable in
-            # practice -- exercised directly in
-            # tests/unit/test_git_delivery.py, not yet through a real dispatch.
+            # block. Issue #65/#66 wired the gateway side of that: the MCP
+            # tool `start_development_task` (and `publish_epic_to_repo`) sets
+            # `DeliveryRequest.allow_push`/`branch` from an operator's own
+            # request (`gateway/app/mcp/server.py`), `store.create_task`
+            # persists it as `delivery_json`, and `AgentHub.dispatch_next`
+            # forwards it into this exact `payload["delivery"]` key
+            # (`gateway/app/services/agent_hub.py`). So this branch IS
+            # reachable in practice today, gated by this executor's own
+            # `AgentSettings.allow_git_delivery` (off by default) and by
+            # `PUSHABLE_BRANCH_PATTERN` re-checked inside `deliver_changes`
+            # itself. Exercised through `_handle_dispatch` with a fake
+            # WebSocket in `tests/unit/test_agent_service.py::
+            # test_handle_dispatch_runs_delivery_when_the_payload_carries_one`
+            # (and its sibling negative cases), and through `deliver_changes`
+            # directly in `tests/unit/test_git_delivery.py`; there is no test
+            # yet with a real socket on both ends (see `docs/security.md`,
+            # "Lacunas assumidas para endurecimento").
             delivery_payload = envelope.payload.get("delivery")
             if delivery_payload and result.get("final_state") == TaskState.COMPLETED.value:
                 delivery_outcome = await deliver_changes(

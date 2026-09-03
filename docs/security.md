@@ -9,6 +9,109 @@
 * `codex exec` e `git` chamados sem shell.
 * logs sanitizados.
 * tarefas sensíveis desviadas para `awaiting_approval`.
+* entrega com commit e push pré-autorizados (issue #66,
+  WK-20260830-chatgpt-entry-provider-and-delivery): `SENSITIVE_KEYWORDS`
+  (`shared/policy.py`) não foi alterada nem enfraquecida — a lista fechada
+  (`deploy`, `production`, `migration`, `secret`, `secrets`, `"push "`,
+  `"pull request"`, `"terraform apply"`, `"kubectl apply"`, `"rm -rf"`)
+  continua exatamente a mesma. Em vez disso, `shared.policy.
+  evaluate_task_policy` ganhou uma cláusula própria e independente:
+  `delivery.allow_push == True` força `PolicyLevel.SENSITIVE` com o motivo
+  `delivery_requests_push`, quer a palavra "push" apareça na instrução ou
+  não — uma intenção de push é estruturalmente sensível, não lexicalmente.
+  Pontos de segurança:
+  - a pré-autorização (`shared.policy.push_is_preauthorized`) reduz — nunca
+    amplia — o conjunto `SENSITIVE` que pode prosseguir sem decisão humana
+    no momento: só se aplica quando **todo** sinal sensível presente é um
+    dos dois textuais de push (`"push "`, `"pull request"`) e/ou a própria
+    cláusula `delivery_requests_push`, e `delivery.branch` casa com
+    `PUSHABLE_BRANCH_PATTERN` (`shared/protocol.py`). Qualquer outra
+    palavra da lista (`deploy`, `secret`, `rm -rf`, …) mantém
+    `approved=False` sempre, mesmo com `delivery` presente —
+    `tests/unit/test_policy.py::test_no_other_sensitive_keyword_is_ever_preauthorized`
+    prova isso iterando a lista inteira;
+  - quando a pré-autorização se aplica, a tarefa não pula a aprovação:
+    `gateway/app/services/store.py::create_task` grava a linha como
+    `AWAITING_APPROVAL` exatamente como qualquer outra `SENSITIVE`, e só
+    então resolve pelo caminho já existente e testado
+    `decide_task_approval(..., ApprovalDecision.APPROVED, reason="pre-
+    authorized in request by <ator>")` — o mesmo caminho que uma aprovação
+    humana via `approve_codex_task` usa —, produzindo o mesmo
+    `task.approval_decision`, o mesmo `policy_level`, e a mesma
+    visibilidade em `/api/v1/decisions`. Um evento
+    `task.push_preauthorized` próprio registra ator, branch, base branch e
+    remote;
+  - isso só acontece se quem chamou tiver autoridade de aprovação
+    (`codexbridge.task.approve`, não apenas `codexbridge.task.submit`):
+    `gateway/app/mcp/server.py` recusa `start_development_task` (e
+    `publish_epic_to_repo`, quando um `delivery` é pedido) com
+    `403 approval_not_allowed` se o principal não tem `can_approve_
+    sensitive`/`is_admin()`, e com `400 branch_not_pushable`/
+    `branch_required_for_push` se a branch falha `PUSHABLE_BRANCH_PATTERN`
+    ou está ausente — a tarefa **nunca chega a ser criada** nesses casos,
+    recusada na submissão em vez de enfileirada para falhar depois.
+    `submit_codex_task` continua sem esse campo no seu próprio JSON
+    Schema — `create_task`'s `can_approve_push` é inerte por esse caminho
+    hoje, conforme o próprio comentário do call site;
+  - `PUSHABLE_BRANCH_PATTERN` e a recusa de `main`/`master` são impostas em
+    três camadas independentes, cada uma cega às outras: submissão
+    (`gateway/app/mcp/server.py`, antes de qualquer linha existir),
+    política do gateway (`shared.policy.push_branch_is_allowed`/
+    `push_is_preauthorized`, usadas dentro de `evaluate_task_policy` e de
+    `store.create_task`), e checagem do executor
+    (`agent/codex_bridge_agent/git_delivery.py::deliver_changes`, que casa
+    `PUSHABLE_BRANCH_PATTERN` de novo e recusa `main`/`master`/`HEAD`
+    mesmo que o gateway já tenha aprovado — "a compromised or buggy
+    gateway must not be able to grant `main` by lying about what it
+    already verified", no próprio docstring do módulo). `AgentSettings.
+    allow_git_delivery` é a trava de máquina desta terceira camada,
+    **False por padrão** (mesmo desenho de `allow_workspace_write`) —
+    desligada, `deliver_changes` recusa com `executor_delivery_disabled`
+    mesmo com tudo o mais autorizado;
+  - nenhum comando desta entrega pode carregar flag de força:
+    `git_delivery.py` nunca emite `--force`, `--force-with-lease` ou
+    refspec `+refs`
+    (`tests/unit/test_git_delivery.py::test_no_command_ever_carries_a_force_flag`);
+    staging é sempre por caminho explícito, nunca `-A`/`.`/`commit -a`
+    (`::test_staging_never_uses_add_all_or_a_bare_dot`); `delivery.remote`
+    passa por um padrão conservador antes de entrar no argv de
+    `git push`, para que um valor como `"--force"` não seja lido como
+    flag
+    (`::test_refuses_an_invalid_remote_name_that_could_be_parsed_as_a_flag`);
+    `HEAD` é relido imediatamente antes do commit e a operação é recusada,
+    não forçada, se mudou nesse intervalo
+    (`::test_head_moving_between_status_and_commit_is_refused_not_forced`);
+    e a pós-condição do push é verificada contra o sha remoto, não apenas
+    o código de saída;
+  - uma trava adicional contra "`SENSITIVE` vira `read-only` por engano"
+    (o mesmo modo de falha da issue #34: saída 0, nenhuma mudança, nenhum
+    erro) é fixada por `tests/unit/test_agent_service.py::
+    test_sandbox_for_is_workspace_write_for_controlled_write_and_sensitive`;
+  - cobertura completa: a matriz de quatro células (palavra-chave sozinha /
+    `allow_push` sem palavra-chave / `allow_push` para `main` / os dois
+    juntos) em `tests/unit/test_policy.py`; o passo de git isolado em
+    `tests/unit/test_git_delivery.py`; a fiação `_handle_dispatch` →
+    `deliver_changes` (com e sem `delivery` no payload, e nunca após uma
+    tarefa que falhou) em `tests/unit/test_agent_service.py::
+    test_handle_dispatch_runs_delivery_when_the_payload_carries_one`/
+    `::test_handle_dispatch_never_runs_delivery_without_a_delivery_payload`/
+    `::test_handle_dispatch_never_runs_delivery_after_a_failed_task`; o
+    encaminhamento do `delivery` no payload de despacho do gateway em
+    `tests/integration/test_dispatch_payload_engine_and_delivery.py`; e o
+    schema/migração das quatro colunas novas (`engine`, `issue_ref`,
+    `delivery_json`, `delivery_result_json`) em `tests/unit/
+    test_schema_guard.py::test_engine_and_delivery_columns_are_required` e
+    `tests/unit/test_apply_migrations.py::
+    test_engine_and_delivery_columns_default_existing_rows_to_codex`.
+    Não há, hoje, um teste de ponta a ponta com socket real gateway↔executor
+    exercitando este caminho (o mais próximo é o par acima, um em cada
+    lado, com o WebSocket substituído por um dublê) — ver "Lacunas
+    assumidas para endurecimento" abaixo.
+
+  A credencial que o `git push` de fato usa, o porquê de o executor poder
+  alcançá-la agora, e a mudança na base do risco aceito F14 estão em
+  `docs/threat-model.md`, seção "Commit e push deliberados pelo executor"
+  — não repetidos aqui.
 * operação de forge (issue #79/#80, WK-20260902-forge-binding): trava de
   máquina `allow_forge_operations` desligada por padrão; superfície fechada a
   quatro operações enumeradas à mão (`ForgeOperationKind`) sem "rodar `gh`
@@ -233,6 +336,22 @@ formas de dar rede a essa operação; duas foram descartadas.
 
 ## Lacunas assumidas para endurecimento
 
+* **A entrega com push pré-autorizado (issue #66) não tem, neste checkout,
+  teste de ponta a ponta com um socket real gateway↔executor, nem registro de
+  um push de verdade contra um remoto real.** A suíte cobre cada lado
+  isoladamente — a política em `tests/unit/test_policy.py`, o passo de git em
+  `tests/unit/test_git_delivery.py`, a fiação `_handle_dispatch` →
+  `deliver_changes` com um WebSocket dublê em `tests/unit/test_agent_service.py`,
+  o encaminhamento do payload de despacho em
+  `tests/integration/test_dispatch_payload_engine_and_delivery.py` — mas
+  nenhum teste faz um `codex-bridge-agent` real se conectar a um gateway real
+  e completar um push. A issue #66 lista essa live corrida como item do
+  Definition of Done ("A pre-authorized push ... produces a real commit and
+  a verified push, end to end, in the live smoke test"); nada em
+  `docs/napkin-lessons.md`, `handoff.md` ou no histórico git deste checkout
+  registra que ela foi executada. Fechar essa lacuna é rodar a corrida contra
+  um repositório e remoto reais e registrar o resultado, ou o operador emitir
+  uma renúncia (waiver) explícita por escrito.
 * **O token de máquina já exposto continua válido, e os logs antigos continuam
   no disco.** Tirar a credencial da URL impede exposição nova; não desfaz a
   antiga. Rotacionar o token no `registry.json` e purgar ou rotacionar os logs
