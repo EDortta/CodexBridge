@@ -16,12 +16,13 @@ endpoint that answers `403` cannot disagree, because both read this file.
 An entry here is a promise that a served endpoint honours it — the same rule
 `probes.CAPABILITIES` follows, and for the same reason: the first cut of the
 capability flags advertised machinery no endpoint used, so a client that
-believed them got a 404. `codexbridge.task.submit` is therefore still absent:
-it exists in the MCP transport and in `users.json`, and no HTTP endpoint of
-this contract offers it yet. `codexbridge.task.approve` used to be absent for
-the same reason; issue #6's `POST /api/v1/decisions/{id}/approve|reject|
-request-revision` is its first HTTP exposure, so it is now `DECISIONS_DECIDE`'s
-scope below.
+believed them got a 404. `codexbridge.task.approve` used to be absent for the
+same reason `codexbridge.task.submit` used to be; issue #6's `POST
+/api/v1/decisions/{id}/approve|reject|request-revision` was its first HTTP
+exposure, so it became `DECISIONS_DECIDE`'s scope below. `codexbridge.task.submit`
+followed the same path: it existed only in the MCP transport and in
+`users.json` until issue #68's `POST /api/v1/missions`, which is now
+`MISSIONS_CREATE`'s scope.
 
 ## The three classes
 
@@ -190,6 +191,20 @@ MISSIONS_CANCEL = Action(
     category=OPERATIONAL,
     scope=CANCEL_SCOPE,
     summary="Cancel a queued or running mission.",
+)
+
+# Issue #68: the first HTTP exposure of `codexbridge.task.submit` — see the
+# module docstring's "Only actions this build serves" note. `allow_push`
+# (issue #66's `DeliveryRequest`) is gated a second time, inside the route
+# itself (`routes/missions.py:_require_push_authority`), the same shape
+# `DECISIONS_DECIDE`'s `can_approve_sensitive` gate takes below: the scope
+# grants creating a mission at all, not the sensitive push a `delivery` block
+# may additionally request.
+MISSIONS_CREATE = Action(
+    name="missions.create",
+    category=OPERATIONAL,
+    scope=SUBMIT_SCOPE,
+    summary="Create a mission (submit a coding-agent run) in one of the actor's projects.",
 )
 
 MISSIONS_READ_ALL_PROJECTS = Action(
@@ -440,6 +455,7 @@ CATALOGUE: tuple[Action, ...] = (
     SESSIONS_RESUME,
     SESSIONS_RESTART,
     MISSIONS_CANCEL,
+    MISSIONS_CREATE,
     EPICS_CREATE,
     EPICS_UPDATE,
     ISSUES_CREATE,

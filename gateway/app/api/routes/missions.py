@@ -36,23 +36,35 @@ has `task.dispatch`, `task.ack`, `task.log`, `task.result`, `task.cancel`,
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.api import concurrency, idempotency, pagination, permissions, timestamps
 from gateway.app.api.auth import require_action, visible_projects
-from gateway.app.api.errors import CONFLICT, NOT_FOUND, ApiError
+from gateway.app.api.errors import CONFLICT, NOT_FOUND, PERMISSION_DENIED, VALIDATION_FAILED, ApiError
 from gateway.app.api.routes.sessions import redact
 from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.db.session import get_session
-from gateway.app.models.entities import AuditEventModel, TaskModel
+from gateway.app.models.entities import AuditEventModel, ExecutorModel, IssueModel, ProjectModel, TaskModel
 from gateway.app.services import store
 from gateway.app.services.audit import record_event
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
-from shared.protocol import AgentMessageType, STOPPABLE_TASK_STATES, TaskState
+from shared.protocol import (
+    AgentEngine,
+    AgentMessageType,
+    DeliveryRequest,
+    IMPLEMENTED_ENGINES,
+    ISSUE_REF_PATTERN,
+    PUSHABLE_BRANCH_PATTERN,
+    STOPPABLE_TASK_STATES,
+    SubmitTaskRequest,
+    TaskMode,
+    TaskPriority,
+    TaskState,
+)
 
 
 router = APIRouter(prefix="/api/v1")
@@ -82,6 +94,71 @@ class MissionCancelRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=4000)
 
 
+class CreateMissionDelivery(BaseModel):
+    """Wire shape of `shared.protocol.DeliveryRequest` — issue #68/#66.
+
+    Field-for-field the same envelope `start_development_task` (MCP,
+    `gateway/app/mcp/server.py`) already accepts, camelCase for this
+    transport. `to_protocol()` is the only place this becomes the real
+    `DeliveryRequest` `store.create_task` understands, so the two shapes
+    cannot drift silently: a field added to one and not translated here
+    fails at that call, not at runtime months later.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    branch: str = Field(min_length=1, max_length=200)
+    allow_push: bool = Field(default=False, alias="allowPush")
+    base_branch: str = Field(default="development", alias="baseBranch", max_length=200)
+    remote: str = Field(default="origin", max_length=200)
+    commit_subject: str | None = Field(default=None, alias="commitSubject", max_length=200)
+
+    def to_protocol(self) -> DeliveryRequest:
+        return DeliveryRequest(
+            branch=self.branch,
+            allow_push=self.allow_push,
+            base_branch=self.base_branch,
+            remote=self.remote,
+            commit_subject=self.commit_subject,
+        )
+
+
+class CreateMissionRequest(BaseModel):
+    """`POST /api/v1/missions` — issue #68.
+
+    The first HTTP exposure of `codexbridge.task.submit`
+    (`gateway/app/api/permissions.py:MISSIONS_CREATE`). Deliberately close to
+    `SubmitTaskRequest`/`start_development_task`'s own shape rather than a
+    new vocabulary: `objective`/`mode`/`priority`/`engine`/`issueRef`/
+    `delivery` are the same fields those already validate, so this route can
+    hand them to `store.create_task` — the exact function every other task
+    creator in this codebase already goes through — instead of re-deriving
+    what a valid task looks like a second time.
+
+    `executorId` is optional and, when omitted, resolved the same way
+    `start_development_task` resolves it: the project's onboarded executors,
+    preferring one that is connected right now. It has to be optional —
+    `nodes.read`/`executors` listing is an administrative action
+    (`permissions.NODES_READ`, `ADMIN_SCOPE`), so a non-admin caller — the
+    only caller this endpoint exists for — has no HTTP way to learn a raw
+    executor id at all.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(alias="projectId", min_length=1, max_length=128)
+    executor_id: str | None = Field(default=None, alias="executorId", max_length=128)
+    objective: str = Field(min_length=1, max_length=12000)
+    mode: TaskMode = TaskMode.IMPLEMENT
+    priority: TaskPriority = TaskPriority.NORMAL
+    engine: AgentEngine = AgentEngine.CODEX
+    issue_ref: str | None = Field(default=None, alias="issueRef", max_length=512)
+    timeout_seconds: int = Field(default=3600, ge=30, le=86400, alias="timeoutSeconds")
+    run_when_available: bool = Field(default=True, alias="runWhenAvailable")
+    expires_at: datetime | None = Field(default=None, alias="expiresAt")
+    delivery: CreateMissionDelivery | None = None
+
+
 def _iso(value: datetime | None) -> str | None:
     return timestamps.utc_z(value)
 
@@ -105,12 +182,36 @@ def _blocked_reason(task: TaskModel) -> dict | None:
     return {"code": BLOCKED_REASON_AWAITING_APPROVAL, "summary": summary}
 
 
+def _delivery_dto(raw_json: str | None) -> dict | None:
+    """`TaskModel.delivery_json` (snake_case `DeliveryRequest.model_dump_json()`)
+    reshaped to the contract's camelCase, or `None` when no delivery was
+    requested. Never carries the *result* of a delivery
+    (`delivery_result_json`) — that is issue #69's `GET .../delivery`, kept
+    deliberately separate (`docs/api/README.md`, "Missions (issue #7)").
+    """
+    if not raw_json:
+        return None
+    data = json.loads(raw_json)
+    return {
+        "branch": data.get("branch"),
+        "allowPush": data.get("allow_push", False),
+        "baseBranch": data.get("base_branch"),
+        "remote": data.get("remote"),
+        "commitSubject": data.get("commit_subject"),
+    }
+
+
 def _mission_dto(task: TaskModel) -> dict:
     """Mobile representation of a mission.
 
     Omits `ProjectModel.path`, the command line and the stored result blob —
     the same fields Sessions omits, for the same reason (`docs/api/README.md`,
     "Fields that must never ship").
+
+    `engine`/`issueRef`/`delivery` (issue #68) are additive: every mission
+    endpoint shares this function, so a client reading `GET /api/v1/missions`
+    or `.../{id}` sees them too, exactly as `docs/api/README.md` describes for
+    the create response — there is no second, narrower DTO for create alone.
     """
     return {
         "id": task.id,
@@ -132,6 +233,9 @@ def _mission_dto(task: TaskModel) -> dict:
         "approvalState": task.approval_state,
         "requestedBy": task.requested_by_email or task.requested_by_user_id,
         "lastError": redact(task.last_error),
+        "engine": task.engine,
+        "issueRef": task.issue_ref,
+        "delivery": _delivery_dto(task.delivery_json),
     }
 
 
@@ -255,6 +359,259 @@ async def get_mission(
     response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(task.revision)
     response.headers["Cache-Control"] = "no-store"
     return _mission_dto(task)
+
+
+def _validation_error(field: str, code: str, message: str) -> ApiError:
+    return ApiError(
+        status_code=400,
+        code=VALIDATION_FAILED,
+        message=message,
+        details=[{"field": f"/{field}", "code": code, "message": message}],
+    )
+
+
+# `store.create_task`'s own vocabulary (a bare `ValueError` with one of these
+# messages — see its docstring-free `raise ValueError(...)` call sites) mapped
+# to this contract's codes. Not exhaustive of every ValueError Python could
+# raise, only of the ones that function is documented to: an unmapped message
+# still becomes a 500 `internal_error`, the fail-closed default, rather than
+# silently turning into a 400 for a failure this table does not actually know.
+_TASK_CREATION_ERRORS: dict[str, tuple[int, str]] = {
+    "unknown_or_disabled_executor": (404, NOT_FOUND),
+    "unknown_or_disabled_project": (404, NOT_FOUND),
+    "project_not_allowed_for_executor": (409, CONFLICT),
+    "mode_not_allowed_for_project": (400, VALIDATION_FAILED),
+    "timeout_exceeds_project_limit": (400, VALIDATION_FAILED),
+    "executor_offline": (409, CONFLICT),
+    "task_already_expired": (400, VALIDATION_FAILED),
+}
+
+
+def _task_creation_error(exc: ValueError) -> ApiError:
+    reason = str(exc)
+    status_code, code = _TASK_CREATION_ERRORS.get(reason, (500, "internal_error"))
+    return ApiError(status_code=status_code, code=code, message=reason)
+
+
+async def _resolve_executor(
+    session: AsyncSession, hub: AgentHub, project_id: str, requested_executor_id: str | None
+) -> ExecutorModel:
+    """The executor a mission dispatches to.
+
+    Explicit `executorId` is validated against the project's own allowlist —
+    `store.create_task` re-checks this itself, but failing here gives a
+    precise `404`/`409` instead of letting an unmapped internal message
+    through. Omitted, it is resolved exactly the way `start_development_task`
+    (MCP) resolves it: the project's onboarded executors, preferring one that
+    is connected right now — see `CreateMissionRequest.executor_id`'s
+    docstring for why this cannot simply be a required field on this surface.
+    """
+    if requested_executor_id:
+        executor = await session.get(ExecutorModel, requested_executor_id)
+        if executor is None or not executor.enabled:
+            raise ApiError(status_code=404, code=NOT_FOUND, message="No such executor.")
+        allowed = json.loads(executor.metadata_json).get("allowed_projects", [])
+        if project_id not in allowed:
+            raise ApiError(
+                status_code=409,
+                code=CONFLICT,
+                message=(
+                    f"Executor {requested_executor_id!r} does not allow project {project_id!r}."
+                ),
+            )
+        return executor
+
+    onboarded = await store.executors_allowing_project(session, project_id)
+    if not onboarded:
+        raise ApiError(
+            status_code=409,
+            code=CONFLICT,
+            message=f"No executor allows project {project_id!r}.",
+        )
+    connected = [item for item in onboarded if hub.is_connected(item.id)]
+    return connected[0] if connected else onboarded[0]
+
+
+async def _validate_issue_ref(session: AsyncSession, project_id: str, issue_ref: str | None) -> None:
+    """Same shape check `start_development_task` applies, so an `issueRef`
+    this endpoint accepts is never one the MCP transport would have refused.
+
+    `gh:` is syntactically valid but always rejected: GitHub issue ingestion
+    has no owner in this codebase yet (council finding F18). `docs:NNN`/bare
+    `NNN` resolve on the executor, which never learns a project's real path
+    (`docs/architecture.md`), so there is nothing to check here beyond shape.
+    Only `local:` — an `IssueModel` row this gateway owns — can be, and is,
+    verified to exist and belong to `project_id`.
+    """
+    if issue_ref is None:
+        return
+    if not ISSUE_REF_PATTERN.match(issue_ref):
+        raise _validation_error("issueRef", "invalid", "issueRef is not a recognized shape.")
+    if issue_ref.startswith("gh:"):
+        raise _validation_error(
+            "issueRef", "issue_source_unsupported", "GitHub issue ingestion is not supported yet."
+        )
+    if issue_ref.startswith("local:"):
+        local_id = issue_ref.split(":", 1)[1]
+        issue_row = await session.get(IssueModel, local_id)
+        if issue_row is None or issue_row.project_id != project_id:
+            raise ApiError(status_code=404, code=NOT_FOUND, message="No such issue.")
+
+
+def _require_push_authority(principal: AuthenticatedPrincipal, delivery: CreateMissionDelivery) -> None:
+    """The same pre-authorization-as-approval path `start_development_task`
+    (MCP) enforces before `allow_push` reaches `store.create_task` — issue
+    #68's own requirement: "no separate, weaker authorization path for the
+    HTTP surface." A caller who fails either check never reaches
+    `store.create_task` with `allow_push=True` at all, so `can_approve_push`
+    below (always the caller's own authority, not a body field) is the only
+    thing that can turn a pre-authorized push into an actual approval.
+    """
+    if not principal.has_scope(permissions.APPROVE_SCOPE):
+        raise ApiError(
+            status_code=403,
+            code=PERMISSION_DENIED,
+            message="delivery.allowPush requires the codexbridge.task.approve scope.",
+        )
+    if not (principal.can_approve_sensitive or principal.is_admin()):
+        raise ApiError(
+            status_code=403,
+            code=PERMISSION_DENIED,
+            message="delivery.allowPush requires sensitive-approval authority.",
+        )
+    if not PUSHABLE_BRANCH_PATTERN.match(delivery.branch):
+        raise _validation_error(
+            "delivery/branch", "branch_not_pushable", "delivery.branch is not a pushable branch."
+        )
+
+
+@router.post("/missions", tags=["missions"], status_code=201)
+async def create_mission(
+    payload: CreateMissionRequest,
+    response: Response,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.MISSIONS_CREATE)),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Create a mission — the first HTTP exposure of `codexbridge.task.submit`.
+
+    Today this is the same `TaskModel` row `submit_codex_task`/
+    `start_development_task` (MCP) create; it does not introduce a new id
+    space, a new `TaskState`, or a new meaning for any `_mission_dto` field —
+    council finding F01 (mission/session/decision are one row) is
+    deliberately not re-opened here (issue #68's own ARO).
+    """
+    from gateway.app.main import hub  # imported late: main includes this router
+
+    projects = visible_projects(principal)
+    if projects is not None and payload.project_id not in projects:
+        # Same probing-prevention rule every other create endpoint in this
+        # contract applies (`docs/api/README.md`): a project the caller
+        # cannot see answers 404, never 403.
+        raise ApiError(status_code=404, code=NOT_FOUND, message="No such project.")
+    project = await session.get(ProjectModel, payload.project_id)
+    if project is None or not project.enabled:
+        raise ApiError(status_code=404, code=NOT_FOUND, message="No such project.")
+
+    if payload.engine.value not in IMPLEMENTED_ENGINES:
+        raise _validation_error(
+            "engine", "engine_not_implemented", f"engine {payload.engine.value!r} is not implemented."
+        )
+
+    await _validate_issue_ref(session, payload.project_id, payload.issue_ref)
+
+    delivery: DeliveryRequest | None = None
+    if payload.delivery is not None:
+        if payload.delivery.allow_push:
+            _require_push_authority(principal, payload.delivery)
+        delivery = payload.delivery.to_protocol()
+
+    executor = await _resolve_executor(session, hub, payload.project_id, payload.executor_id)
+
+    expires_at = payload.expires_at
+    if expires_at is None:
+        # Same generous formula `start_development_task` computes when a
+        # caller does not hand-build an RFC-3339 timestamp: bounds queueing,
+        # not execution — `timeout_seconds` already bounds that.
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(7200, 2 * payload.timeout_seconds))
+
+    request = SubmitTaskRequest(
+        executor_id=executor.id,
+        project_id=payload.project_id,
+        instruction=payload.objective,
+        mode=payload.mode,
+        timeout_seconds=payload.timeout_seconds,
+        priority=payload.priority,
+        run_when_available=payload.run_when_available,
+        expires_at=expires_at,
+        engine=payload.engine,
+        issue_ref=payload.issue_ref,
+        delivery=delivery,
+    )
+
+    fingerprint = idempotency.fingerprint(
+        payload.model_dump_json(by_alias=True).encode()
+    )
+    claim = None
+    if idempotency_key:
+        outcome = await idempotency.reserve(
+            session,
+            key=idempotency_key,
+            endpoint=MISSIONS_ENDPOINT,
+            actor_id=principal.user_id,
+            request_fingerprint=fingerprint,
+        )
+        if isinstance(outcome, idempotency.ReplayedResponse):
+            response.status_code = outcome.status_code
+            response.headers["Idempotent-Replay"] = "true"
+            return outcome.body
+        claim = outcome
+
+    try:
+        task = await store.create_task(
+            session,
+            request,
+            hub.is_connected(executor.id),
+            requested_by_user_id=principal.user_id,
+            requested_by_email=principal.email,
+            can_approve_push=bool(principal.can_approve_sensitive or principal.is_admin()),
+        )
+    except ValueError as exc:
+        if claim is not None:
+            await idempotency.release(
+                session, key=idempotency_key, endpoint=MISSIONS_ENDPOINT, actor_id=principal.user_id, claim=claim
+            )
+        raise _task_creation_error(exc) from exc
+    except Exception:
+        if claim is not None:
+            await idempotency.release(
+                session, key=idempotency_key, endpoint=MISSIONS_ENDPOINT, actor_id=principal.user_id, claim=claim
+            )
+        raise
+
+    # `dispatch_available` is the shared entry point `continue_codex_session`
+    # (MCP) already uses for this same follow-up — nudges the queue in this
+    # turn rather than leaving a connected, idle executor waiting for an
+    # unrelated event, without this route hand-rolling the
+    # is_connected/dispatch_next/send sequence issues #18/#20 found
+    # duplicated elsewhere.
+    await hub.dispatch_available(task.executor_id)
+    await session.refresh(task)
+
+    body = _mission_dto(task)
+    if claim is not None:
+        await idempotency.complete(
+            session,
+            key=idempotency_key,
+            endpoint=MISSIONS_ENDPOINT,
+            actor_id=principal.user_id,
+            status_code=201,
+            body=body,
+            claim=claim,
+            request_fingerprint=fingerprint,
+        )
+    response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(task.revision)
+    return body
 
 
 def _safe_payload(raw: str) -> dict:
