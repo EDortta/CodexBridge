@@ -81,8 +81,48 @@
     `HEAD` é relido imediatamente antes do commit e a operação é recusada,
     não forçada, se mudou nesse intervalo
     (`::test_head_moving_between_status_and_commit_is_refused_not_forced`);
-    e a pós-condição do push é verificada contra o sha remoto, não apenas
-    o código de saída;
+    e a pós-condição do push é verificada contra o que o REMOTO relata
+    (`git ls-remote <remote> refs/heads/<branch>`), não apenas o código de
+    saída do `push` — nem, desde WK-20260903-gh66-push-verify, um ref de
+    rastreamento local (`git rev-parse <remote>/<branch>`);
+  - **`push_verification_failed` podia soar "não empurrado" para um push
+    que, na verdade, chegou ao remoto** (issue #66, achado no smoke test
+    de live push contra um remoto GitHub real em 2026-09-03, o item do
+    Definition of Done que a lacuna "sem live smoke test" abaixo já
+    apontava como pendente). Um checkout clonado com `--branch <b> --depth
+    N` (`--depth` implica `--single-branch` a menos que revogado) restringe
+    `remote.origin.fetch` só a `<b>`; empurrar QUALQUER outra branch chega
+    ao remoto intacto mas nunca cria `refs/remotes/origin/<outra-branch>`
+    localmente, e a verificação antiga lia exatamente esse ref local
+    (`git rev-parse origin/<branch>`) — daí um push real relatado como
+    `pushed=false, reason="push_verification_failed", remote_sha=null`.
+    A verificação agora consulta o remoto diretamente
+    (`git ls-remote <remote> refs/heads/<branch>`), sem depender do
+    refspec de fetch deste clone; `rev-parse` foi removido, não mantido
+    como uma primeira tentativa barata — ele falha por construção em
+    qualquer clone single-branch empurrando outra branch, então toda
+    entrega desse tipo pagaria pelos dois comandos mesmo assim. As duas
+    situações que a versão antiga misturava num `reason` só agora têm
+    nomes distintos: `push_verification_failed` continua para quando o
+    remoto responde e discorda do commit feito (`remote_sha` carrega o que
+    o remoto relatou); `push_verification_unreachable`, novo, é para
+    quando o próprio `ls-remote` falha (rede caiu logo após um push que já
+    tinha sucesso, DNS/TLS transitório, o timeout de verificação abaixo
+    disparando) — `remote_sha` fica `None`: nada foi aprendido sobre o
+    remoto. A verificação ganhou seu próprio limite de tempo,
+    `AgentSettings.git_push_verify_timeout_seconds` (padrão 30s,
+    `CODEX_BRIDGE_AGENT_GIT_PUSH_VERIFY_TIMEOUT_SECONDS`), separado de
+    `git_push_timeout_seconds` (padrão 120s): uma consulta de um ref não
+    deveria herdar o orçamento de uma transferência de objetos. Nenhum
+    campo, outcome ou reason existente foi renomeado — `push_verification_
+    unreachable` é aditivo. Reproduzido contra um clone single-branch real
+    e um remoto bare real (não um `run_git` dublê) em
+    `tests/unit/test_git_delivery.py::
+    test_push_verification_succeeds_against_a_single_branch_clones_narrow_refspec`;
+    as duas situações que passaram a ter `reason` distinto, também contra
+    remoto real, em
+    `::test_push_verification_flags_a_real_mismatch_distinctly_from_unreachable`
+    e `::test_push_verification_unreachable_is_a_distinct_reason_from_a_real_mismatch`;
   - **um `task.cancel` que chega enquanto a entrega já está em andamento**
     (issue #66, achado ARO **F34**: "a cancelled task that still has a
     running git delivery step in flight ... the git step should check for
@@ -430,11 +470,27 @@ formas de dar rede a essa operação; duas foram descartadas.
   nenhum teste faz um `codex-bridge-agent` real se conectar a um gateway real
   e completar um push. A issue #66 lista essa live corrida como item do
   Definition of Done ("A pre-authorized push ... produces a real commit and
-  a verified push, end to end, in the live smoke test"); nada em
-  `docs/napkin-lessons.md`, `handoff.md` ou no histórico git deste checkout
-  registra que ela foi executada. Fechar essa lacuna é rodar a corrida contra
-  um repositório e remoto reais e registrar o resultado, ou o operador emitir
-  uma renúncia (waiver) explícita por escrito.
+  a verified push, end to end, in the live smoke test").
+
+  **Atualização 2026-09-03:** essa corrida foi executada pela primeira vez
+  nesta tarde, contra `https://github.com/EDortta/CodexBridge.git` — e
+  achou um defeito real: o push chegou ao remoto (`git ls-remote` confirmou
+  o sha exato do commit feito), mas `deliver_changes` relatou
+  `pushed=false, reason="push_verification_failed"`, porque o checkout era
+  um clone single-branch e a verificação de então lia um ref de
+  rastreamento local que esse clone nunca populava. WK-20260903-gh66-push-verify
+  é o fix (ver o bullet "`push_verification_failed` podia soar..." acima) e
+  suas próprias regressões (`tests/unit/test_git_delivery.py::
+  test_push_verification_succeeds_against_a_single_branch_clones_narrow_refspec`
+  e as duas seguintes) reproduzem a causa exata contra um remoto bare real.
+  Isso fecha a corrida de push em si; **não fecha o resto desta lacuna** —
+  continua sem existir, neste checkout, um teste automatizado de ponta a
+  ponta com socket real gateway↔executor cobrindo esse caminho; a corrida de
+  2026-09-03 foi manual, contra o GitHub real, e não deixou um teste
+  reexecutável para trás. Fechar o que resta é automatizar essa mesma
+  corrida (um `codex-bridge-agent` real conectado a um gateway real,
+  completando um push), ou o operador emitir uma renúncia (waiver) explícita
+  por escrito aceitando que ela continue manual.
 * **O token de máquina já exposto continua válido, e os logs antigos continuam
   no disco.** Tirar a credencial da URL impede exposição nova; não desfaz a
   antiga. Rotacionar o token no `registry.json` e purgar ou rotacionar os logs
