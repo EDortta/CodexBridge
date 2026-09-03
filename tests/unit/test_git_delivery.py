@@ -628,3 +628,202 @@ async def test_no_is_cancelled_callback_behaves_exactly_like_before(tmp_path: Pa
 
     assert outcome.outcome == "committed_only"
     assert outcome.commit is not None
+
+
+# --------------------------------------------------------------------------
+# Issue #66, WK-20260903-gh66-push-verify: the live smoke test against a
+# real GitHub remote (2026-09-03) pushed `feature/preflight-gh66-smoke`
+# successfully -- `git ls-remote` against the real remote showed the exact
+# commit just made -- yet `deliver_changes` reported `pushed=False,
+# reason="push_verification_failed"`. Root cause: the checkout was a
+# single-branch clone (`git clone --branch development --depth 3`, and
+# `--depth` implies `--single-branch` unless overridden), so
+# `remote.origin.fetch` only ever mirrors `development` and `git rev-parse
+# origin/<branch>` -- what the old verification ran -- has no local ref to
+# read for any OTHER branch, regardless of whether the push reached the
+# remote. These tests reproduce that against a real bare remote, not a
+# stubbed `run_git`, which is the only way to actually exercise the bug:
+# every pre-existing stubbed test in this file (`test_no_command_ever_
+# carries_a_force_flag`, `test_a_cancel_arriving_after_the_commit_
+# checkpoint_does_not_stop_the_push`) uses a FULL clone, whose refspec
+# mirrors every branch and so never trips this at all.
+# --------------------------------------------------------------------------
+
+
+def _clone_single_branch(origin: Path, dest: Path, *, branch: str = "development") -> None:
+    """Reproduces the exact checkout shape from the live smoke test: a
+
+    `--branch`+`--depth` clone, which git defaults to `--single-branch` for
+    unless `--no-single-branch` is given. `file://` is used (not a bare
+    filesystem path) so `--depth` is actually honoured instead of being
+    silently ignored the way git does for a local-path source -- the
+    narrowed `remote.origin.fetch` this test relies on is a side effect of
+    `--single-branch`, not of `--depth` itself, but using the operator's own
+    exact command line keeps this test reproducing the real report rather
+    than a hand-picked equivalent.
+    """
+    _run(["git", "clone", "-q", "--branch", branch, "--depth", "3", f"file://{origin}", str(dest)], origin.parent)
+
+
+@pytest.mark.asyncio
+async def test_push_verification_succeeds_against_a_single_branch_clones_narrow_refspec(tmp_path: Path):
+    origin = tmp_path.parent / "origin-singlebranch.git"
+    _run(["git", "init", "-q", "--bare", "-b", "development", str(origin)], tmp_path.parent)
+
+    seed = tmp_path.parent / "seed-singlebranch"
+    seed.mkdir()
+    _init_repo(seed, branch="development")
+    _run(["git", "remote", "add", "origin", str(origin)], seed)
+    _run(["git", "push", "-q", "origin", "development"], seed)
+
+    repo = tmp_path / "work"
+    _clone_single_branch(origin, repo)
+
+    # Proves this really is the narrow-refspec scenario the live report
+    # described, not an incidental full clone that would pass either way.
+    fetch_refspec = _run(["git", "config", "--get-all", "remote.origin.fetch"], repo).stdout.strip()
+    assert fetch_refspec == "+refs/heads/development:refs/remotes/origin/development"
+
+    (repo / "app.py").write_text("print('changed')\n", encoding="utf-8")
+
+    outcome = await deliver_changes(
+        project_root=repo,
+        delivery=_delivery(branch="feature/preflight-gh66-smoke", allow_push=True, base_branch="development"),
+        settings=_settings(),
+        task_id="t-gh66-live",
+        issue_ref="66",
+        engine="claude",
+        send_log=_collect_logs,
+    )
+
+    assert outcome.outcome == "committed_and_pushed"
+    assert outcome.pushed is True
+    assert outcome.reason is None
+    assert outcome.remote_sha == outcome.commit
+
+    # The bug's exact mechanism, confirmed directly: the local
+    # remote-tracking ref the OLD code depended on still does not exist,
+    # even though the branch is live on the remote (the assertions above
+    # already prove that via `ls-remote`, exercised inside `deliver_changes`
+    # itself). A `rev-parse`-based check would still fail here today.
+    rev_parse = subprocess.run(
+        ["git", "rev-parse", "origin/feature/preflight-gh66-smoke"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    assert rev_parse.returncode != 0
+
+    # And the remote genuinely has it, queried independently of the code
+    # under test.
+    ls_remote = _run(["git", "ls-remote", str(origin), "refs/heads/feature/preflight-gh66-smoke"], repo).stdout
+    assert outcome.commit in ls_remote
+
+
+@pytest.mark.asyncio
+async def test_push_verification_flags_a_real_mismatch_distinctly_from_unreachable(tmp_path: Path, monkeypatch):
+    """The other half of collapsing two situations into one `reason`: once
+
+    `ls-remote` can be QUERIED but disagrees with the commit just made (a
+    genuine race -- another actor overwrote the branch on the remote between
+    this module's own push and its verification), that must produce
+    `push_verification_failed` with the disagreeing sha attached, distinct
+    from the "could not even ask" case the next test covers. Simulated
+    against a real bare remote by force-updating the branch's ref on the
+    remote itself right after this module's own push lands, not by
+    stubbing `ls-remote`'s return value.
+    """
+    import agent.codex_bridge_agent.git_delivery as git_delivery
+
+    origin = tmp_path.parent / "origin-mismatch.git"
+    _run(["git", "init", "-q", "--bare", "-b", "development", str(origin)], tmp_path.parent)
+
+    repo = tmp_path / "work"
+    repo.mkdir()
+    _init_repo(repo, branch="development")
+    _run(["git", "remote", "add", "origin", str(origin)], repo)
+    _run(["git", "push", "-q", "origin", "development"], repo)
+    (repo / "app.py").write_text("print('changed')\n", encoding="utf-8")
+
+    real_run_git = git_delivery.run_git
+    interfering_sha = {"value": None}
+
+    async def racing_run_git(project_root, *args, **kwargs):
+        result = await real_run_git(project_root, *args, **kwargs)
+        if args and args[0] == "push":
+            # Another actor's push lands on the SAME branch on the remote,
+            # immediately after this module's own push succeeded and before
+            # its verification runs -- a real, independent commit reachable
+            # only through the bare remote, not a mocked return value.
+            _run(["git", "init", "-q", "-b", "feature/uc-race", str(tmp_path / "racer")], tmp_path)
+            racer = tmp_path / "racer"
+            _run(["git", "commit", "-q", "--allow-empty", "-m", "racing commit"], racer)
+            _run(["git", "remote", "add", "origin", str(origin)], racer)
+            _run(["git", "push", "-q", "-f", "origin", "feature/uc-race:feature/uc-103"], racer)
+            interfering_sha["value"] = _run(["git", "rev-parse", "HEAD"], racer).stdout.strip()
+        return result
+
+    monkeypatch.setattr(git_delivery, "run_git", racing_run_git)
+
+    outcome = await deliver_changes(
+        project_root=repo,
+        delivery=_delivery(branch="feature/uc-103", allow_push=True, base_branch="development"),
+        settings=_settings(),
+        task_id="t-race",
+        issue_ref=None,
+        engine="claude",
+        send_log=_collect_logs,
+    )
+
+    assert outcome.outcome == "committed_only"
+    assert outcome.pushed is False
+    assert outcome.reason == "push_verification_failed"
+    assert outcome.remote_sha == interfering_sha["value"]
+    assert outcome.remote_sha != outcome.commit
+
+
+@pytest.mark.asyncio
+async def test_push_verification_unreachable_is_a_distinct_reason_from_a_real_mismatch(tmp_path: Path, monkeypatch):
+    """`ls-remote` itself failing (network gone right after a successful
+
+    push, a transient DNS/TLS failure, the verify timeout firing) must not
+    be reported the same way as a successful query that disagrees -- one
+    means "we know the push did not land as expected," the other means "we
+    no longer know anything." `remote_sha` stays `None` for this case: it
+    was never learned.
+    """
+    import agent.codex_bridge_agent.git_delivery as git_delivery
+
+    origin = tmp_path.parent / "origin-unreachable.git"
+    _run(["git", "init", "-q", "--bare", "-b", "development", str(origin)], tmp_path.parent)
+
+    repo = tmp_path / "work"
+    repo.mkdir()
+    _init_repo(repo, branch="development")
+    _run(["git", "remote", "add", "origin", str(origin)], repo)
+    _run(["git", "push", "-q", "origin", "development"], repo)
+    (repo / "app.py").write_text("print('changed')\n", encoding="utf-8")
+
+    real_run_git = git_delivery.run_git
+
+    async def network_dies_after_push(project_root, *args, **kwargs):
+        if args and args[0] == "ls-remote":
+            return 128, "", "fatal: unable to access remote: Could not resolve host"
+        return await real_run_git(project_root, *args, **kwargs)
+
+    monkeypatch.setattr(git_delivery, "run_git", network_dies_after_push)
+
+    outcome = await deliver_changes(
+        project_root=repo,
+        delivery=_delivery(branch="feature/uc-104", allow_push=True, base_branch="development"),
+        settings=_settings(),
+        task_id="t-unreachable",
+        issue_ref=None,
+        engine="claude",
+        send_log=_collect_logs,
+    )
+
+    assert outcome.outcome == "committed_only"
+    assert outcome.pushed is False
+    assert outcome.reason == "push_verification_unreachable"
+    assert outcome.remote_sha is None
+    # The commit itself is real and untouched -- only verification failed.
+    assert outcome.commit is not None

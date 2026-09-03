@@ -64,6 +64,19 @@ The caller (`AgentService._handle_dispatch`) does not gate the call to
 `deliver_changes` on cancellation itself -- per `design-standards.md` §3,
 the guard lives in the one place that is actually dangerous (the commit),
 not at the caller, so a future second call site cannot forget it.
+
+WK-20260903-gh66-push-verify, issue #66's own Definition-of-Done live smoke
+test (2026-09-03, first run against a real GitHub remote): the post-push
+verification below queries the REMOTE (`git ls-remote`), not a local
+remote-tracking ref (`git rev-parse <remote>/<branch>`, what it did before).
+A single-branch clone (`git clone --branch <b> --depth N`) narrows
+`remote.<remote>.fetch` to just `<b>`, so `rev-parse` on any OTHER pushed
+branch fails for want of a local ref this module never asked git to
+create -- even though the push reached the remote intact. That live run
+reported a real, verified GitHub push as `pushed=False,
+reason="push_verification_failed"`. See the comment at the verification
+call site for the fix and the new `push_verification_unreachable` reason
+this introduces alongside it.
 """
 
 from __future__ import annotations
@@ -379,8 +392,46 @@ async def deliver_changes(
         return DeliveryOutcome(outcome="committed_only", pushed=False, reason="push_failed_or_non_fast_forward", **common_fields)
 
     # Verify the post-condition -- a command that returns 0 is not proof.
-    code, remote_sha_out, _ = await run_git(project_root, "rev-parse", f"{delivery.remote}/{branch}")
-    remote_sha = remote_sha_out.strip() if code == 0 else None
+    #
+    # Issue #66, observed 2026-09-03 in the live smoke test against a real
+    # GitHub remote: `git rev-parse <remote>/<branch>` (what this used to do)
+    # reads a LOCAL remote-tracking ref, and that ref only exists for
+    # branches covered by this clone's own `remote.<remote>.fetch` refspec.
+    # A single-branch clone (`git clone --branch development --depth N`,
+    # where `--depth` implies `--single-branch` unless overridden) narrows
+    # that refspec to just `development` -- so pushing any OTHER branch
+    # reaches the remote intact (`git ls-remote` against the same remote
+    # showed the exact commit just made) while `rev-parse` fails with
+    # "unknown revision" for want of a local ref that nothing here ever
+    # asked git to create. The result was a real, live push reported as
+    # `pushed=False, reason="push_verification_failed"` -- correctness
+    # matters here specifically because `GET /api/v1/missions/{id}/delivery`
+    # and the task result are what an operator reads to decide whether a
+    # branch exists, not the local clone's own bookkeeping.
+    #
+    # `ls-remote` asks the remote directly, which has no such dependency,
+    # and is the only local check this module needs: a `rev-parse` first
+    # pass would only pretend to be cheap -- it fails by construction on
+    # every single-branch clone pushing anything but its cloned branch, so
+    # every such push would pay for both calls anyway. One authoritative
+    # check, not two commands to keep in sync.
+    code, ls_remote_out, _ = await run_git(
+        project_root, "ls-remote", delivery.remote, f"refs/heads/{branch}",
+        timeout_seconds=settings.git_push_verify_timeout_seconds,
+    )
+    if code != 0:
+        # The remote itself could not be queried (network dropped right
+        # after a push that already reported success, a transient DNS/TLS
+        # failure, the verify timeout above firing...). This is deliberately
+        # NOT the same `reason` as a query that succeeds and disagrees --
+        # one means "we know the push did not land as expected," the other
+        # means "we no longer know anything," and telling an operator
+        # "not pushed" for the second case would be its own false claim.
+        # `remote_sha` stays None: nothing was learned about the remote.
+        return DeliveryOutcome(
+            outcome="committed_only", pushed=False, reason="push_verification_unreachable", **common_fields
+        )
+    remote_sha = ls_remote_out.split()[0] if ls_remote_out.strip() else None
     if remote_sha != commit_sha:
         return DeliveryOutcome(outcome="committed_only", pushed=False, reason="push_verification_failed", remote_sha=remote_sha, **common_fields)
 

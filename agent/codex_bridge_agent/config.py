@@ -109,6 +109,22 @@ class AgentSettings(BaseSettings):
     git_author_name: str = "CodexBridge"
     git_author_email: str = "codexbridge@invalid"
     git_push_timeout_seconds: float = 120
+    # WK-20260903-gh66-push-verify, issue #66. Upper bound on the
+    # `git ls-remote <remote> refs/heads/<branch>` `deliver_changes` runs
+    # right after a successful push, to confirm what the REMOTE actually has
+    # rather than trust the push's own exit code (`git_delivery.py`'s "a
+    # command that returns 0 is not proof"). Deliberately its own setting,
+    # not a reuse of `git_push_timeout_seconds` above: a push transfers
+    # objects and can legitimately take up to that whole budget on a slow
+    # link or a large change, but a `ls-remote` query is a single ref
+    # lookup with nothing to transfer -- the same "a caller reading logs
+    # should be able to tell which of the two stalled" reasoning
+    # `forge_remote_check_timeout_seconds` documents below for its own,
+    # separate, local `git remote get-url` bound. Short by design: a
+    # verification call that itself hangs for two minutes would make an
+    # already-pushed branch look stuck for far longer than the push that
+    # actually mattered.
+    git_push_verify_timeout_seconds: float = 30
     # WK-20260902-forge-protocol-and-policy, issue #80/#79. Same "last
     # barrier on this machine" shape as `allow_git_delivery` above, and the
     # same reasoning: a new capability with no existing behavior to
