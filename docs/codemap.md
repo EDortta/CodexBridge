@@ -5,12 +5,13 @@
 
 ## Summary
 
-- 183 file(s) · 2029 symbol(s) indexed
-- Languages: config (2), python (179), shell (2)
+- 185 file(s) · 2096 symbol(s) indexed
+- Languages: config (2), python (181), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
 
+- `AGENTS.md`
 - `docs/required-reading.md`
 - `docs/project-rules.md`
 - `docs/software-overview.md`
@@ -89,6 +90,7 @@ gateway/
         notifications.py  — "What this actor wants to be notified about — issue #13."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
         projects.py  — "Projects and the project operational dashboard — issue #5."
+        reminders.py  — "REST surface for reminders — issue #72, the second transport in front of"
         sessions.py  — "Agent sessions, their logs, and lifecycle control."
       scope.py  — "Which requests the API's cross-cutting rules apply to."
       setup.py  — "One call that installs every cross-cutting API behaviour."
@@ -189,6 +191,7 @@ tests/
     test_projects.py  — "Projects and the project operational dashboard — issue #5."
     test_push_preauthorization.py  — "Push pre-authorization is resolved as a recorded approval, never a bypass."
     test_reconnect_replay_resolves.py  — "Issue #17 council round 1 — the headline scenario named by findings 1, 4"
+    test_reminders_api.py  — "REST reminders — issue #72."
     test_sessions.py  — "Agent sessions, logs and control — issue #9."
     test_start_development_task.py  — "The `start_development_task` MCP tool -- the conversational entry point."
     test_store_and_mcp.py
@@ -604,9 +607,14 @@ tests/
 > Missions: the mission-control view of the same run Sessions exposes — issue #7.
 
 - **`MissionCancelRequest`** *(class)* — "Issue #36: an operator-typed reason has nowhere to go without this."
+- **`CreateMissionDelivery`** *(class)* — "Wire shape of `shared.protocol.DeliveryRequest` — issue #68/#66."
+  - `to_protocol(self)` *(method)*
+- **`CreateMissionRequest`** *(class)* — "`POST /api/v1/missions` — issue #68."
 - `list_missions(response, project_id, stage, state, risk, blocked, cursor, limit, principal, session)` *(async function)* — "Missions the caller may see, newest first."
 - `get_mission(mission_id, response, principal, session)` *(async function)*
+- `create_mission(payload, response, idempotency_key, principal, session)` *(async function)* — "Create a mission — the first HTTP exposure of `codexbridge.task.submit`."
 - `get_mission_timeline(mission_id, response, cursor, limit, principal, session)` *(async function)* — "The mission's recorded events, oldest first — the order a narrative reads in."
+- `get_mission_delivery(mission_id, response, principal, session)` *(async function)* — "Branch, head commit, changed-file list and diff statistics — never content."
 - `cancel_mission(mission_id, response, if_match, idempotency_key, body, principal, session)` *(async function)* — "Cancel a mission that is queued, waiting, running or awaiting approval."
 - `explain_mission(mission_id, principal, session)` *(async function)* — "A structured account of a mission's current state, assembled server-side."
 
@@ -642,6 +650,15 @@ tests/
 - `list_projects_endpoint(response, q, status, attention, cursor, limit, principal, session)` *(async function)* — "Projects the caller may see, ordered by id, optimized for the mobile dashboard."
 - `get_project_detail(project_id, principal, session)` *(async function)*
 - `get_project_summary(project_id, principal, session)` *(async function)* — "The full dashboard payload for one project: status plus the executor breakdown."
+
+### `gateway/app/api/routes/reminders.py`
+
+> REST surface for reminders — issue #72, the second transport in front of
+
+- **`CreateReminderRequest`** *(class)*
+- `create_reminder(payload, response, idempotency_key, principal, session)` *(async function)* — "Create a reminder on the operator's Google Calendar."
+- `list_reminders(response, cursor, limit, principal)` *(async function)* — "CodexBridge-created reminders on the operator's calendar, this actor's own."
+- `cancel_reminder(reminder_id, response, idempotency_key, principal, session)` *(async function)* — "Cancel a previously created reminder."
 
 ### `gateway/app/api/routes/sessions.py`
 
@@ -914,6 +931,7 @@ tests/
 - `parse_when(when)` — "Parses `when` as ISO 8601. A caller with no offset is assumed to mean"
 - `create_reminder()` *(async function)*
 - `cancel_reminder()` *(async function)*
+- `list_reminders()` *(async function)* — "CodexBridge-created reminders on the configured calendar, newest first."
 - `check_access(config)` *(async function)* — "Confirms the configured credential can actually read the configured"
 
 ### `gateway/app/services/issue_render.py`
@@ -2067,7 +2085,8 @@ tests/
 
 - `users_file(tmp_path)`
 - `api(users_file, monkeypatch)` *(async function)* — "A real app over a real database, seeded with two projects."
-- `make_task(factory, project_id, instruction, mode, state)` *(async function)*
+- `make_task(factory, project_id, instruction, mode, state, delivery)` *(async function)*
+- `deliver(factory, task_id)` *(async function)* — "Issue #69's fixture: what `store.store_result` writes to"
 - `auth(token)`
 - `test_missions_require_a_token(api)` *(async function)*
 - `test_an_expired_token_is_refused(api)` *(async function)*
@@ -2109,6 +2128,32 @@ tests/
 - `test_explain_reports_mission_control_fields_alongside_evidence(api)` *(async function)*
 - `test_explain_on_a_blocked_mission_reports_it(api)` *(async function)*
 - `test_explain_of_an_invisible_mission_is_not_found(api)` *(async function)*
+- `test_a_token_without_the_submit_scope_cannot_create_a_mission(api)` *(async function)*
+- `test_creating_a_mission_and_reading_it_back(api)` *(async function)* — "Issue #68's Definition of Done, verbatim: create, then GET the same id."
+- `test_create_does_not_reopen_the_identity_question(api)` *(async function)* — "F01 (issue #68's own ARO): no new id space, no new TaskState."
+- `test_a_retried_create_replays_instead_of_creating_twice(api)` *(async function)*
+- `test_create_resolves_an_executor_automatically_when_none_is_named(api)` *(async function)*
+- `test_an_executor_not_onboarded_for_the_project_is_a_conflict(api)` *(async function)*
+- `test_a_mission_in_an_invisible_project_cannot_be_created(api)` *(async function)*
+- `test_engine_choice_is_accepted_and_returned(api)` *(async function)*
+- `test_an_unimplemented_engine_is_refused(api)` *(async function)*
+- `test_a_local_issue_ref_is_stored_and_returned(api)` *(async function)*
+- `test_a_local_issue_ref_from_another_project_is_not_found(api)` *(async function)*
+- `test_a_github_issue_ref_is_not_supported_yet(api)` *(async function)*
+- `test_delivery_with_allow_push_requires_approval_authority(api)` *(async function)* — "No separate, weaker authorization path for the HTTP surface (issue #68)."
+- `test_delivery_with_a_non_pushable_branch_is_refused(api)` *(async function)*
+- `test_delivery_pre_authorization_flows_through_like_the_mcp_path(api)` *(async function)* — "The same `push_preauthorized_by_request` path `store.create_task`"
+- `test_a_delivery_without_allow_push_needs_no_approval_authority(api)` *(async function)* — "`allow_push` is the gate, not `delivery` on its own: a caller may still"
+- `test_missions_list_reports_engine_and_issue_ref_too(api)` *(async function)* — "Issue #68: `_mission_dto` is shared, so the additive fields are not"
+- `test_delivery_evidence_is_present_after_a_completed_delivery(api)` *(async function)*
+- `test_delivery_is_unavailable_when_no_delivery_was_requested(api)` *(async function)*
+- `test_delivery_is_unavailable_while_the_mission_is_still_running(api)` *(async function)*
+- `test_delivery_is_unavailable_when_the_step_never_ran(api)` *(async function)* — "Delivery was requested and the mission finished, but not by completing"
+- `test_changed_file_paths_are_redacted(api)` *(async function)*
+- `test_tests_ran_lines_are_present_and_redacted(api)` *(async function)*
+- `test_diff_content_never_appears_in_the_response_body(api)` *(async function)* — "Issue #69's own boundary: counters and paths only, never the diff"
+- `test_delivery_of_an_invisible_mission_is_not_found(api)` *(async function)*
+- `test_delivery_requires_a_token(api)` *(async function)*
 
 ### `tests/integration/test_node_enrollment_ws.py`
 
@@ -2298,6 +2343,33 @@ tests/
 - `test_cancel_ack_immediately_dispatches_the_next_queued_task(factory, monkeypatch)` *(async function)* — "finding 10 (council round 2 on #17, "the sweep skeptic"): the two tests"
 - `test_handle_task_cancelled_triggers_notification(factory, monkeypatch)` *(async function)* — "issue #70: `handle_task_cancelled` lands a task in CANCELLED -- a"
 
+### `tests/integration/test_reminders_api.py`
+
+> REST reminders — issue #72.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)*
+- `auth(token)`
+- `test_every_route_requires_a_token(api)`
+- `test_write_scope_alone_cannot_list(api)`
+- `test_read_scope_alone_cannot_create_or_cancel(api, monkeypatch)`
+- `test_a_principal_with_neither_scope_is_refused_everywhere(api)`
+- `test_create_reminder_round_trip(api, monkeypatch)` *(async function)*
+- `test_create_response_matches_the_mcp_tool_output_shape_field_for_field(api, monkeypatch)` *(async function)* — "The test plan's own words: "matches #71's MCP tool output shape"
+- `test_create_reminder_config_error_is_503_with_the_mcp_message_text(api, monkeypatch)` *(async function)* — "Same actionable message text as `/mcp` — the issue's own requirement."
+- `test_create_reminder_access_error_names_the_client_email(api, monkeypatch)` *(async function)*
+- `test_create_reminder_rejects_a_missing_required_field(api)` *(async function)*
+- `test_idempotency_key_replay_calls_the_calendar_service_once(api, monkeypatch)` *(async function)*
+- `test_idempotency_key_reused_for_a_different_body_is_refused(api, monkeypatch)` *(async function)*
+- `test_without_a_header_a_repeated_body_idempotency_key_still_dedupes_at_the_calendar(api, monkeypatch)` *(async function)* — "No `Idempotency-Key` header at all -- only the body's own `idempotencyKey`,"
+- `test_list_reminders_round_trip(api, monkeypatch)` *(async function)*
+- `test_list_reminders_reports_a_next_cursor_when_google_has_more(api, monkeypatch)` *(async function)*
+- `test_list_reminders_forwards_cursor_and_limit(api, monkeypatch)` *(async function)*
+- `test_list_reminders_config_error_is_503(api, monkeypatch)` *(async function)*
+- `test_cancel_reminder_round_trip(api, monkeypatch)` *(async function)*
+- `test_cancel_reminder_idempotency_key_replay(api, monkeypatch)` *(async function)*
+- `test_cancel_reminder_config_error_is_503_with_the_mcp_message_text(api, monkeypatch)` *(async function)*
+
 ### `tests/integration/test_sessions.py`
 
 > Agent sessions, logs and control — issue #9.
@@ -2429,6 +2501,10 @@ tests/
 - `test_list_recent_tasks_delivery_carries_the_full_outcome_shape(db_session)` *(async function)*
 - `test_get_task_status_keeps_every_pre_existing_field_unchanged(db_session)` *(async function)*
 - `test_list_recent_tasks_keeps_every_pre_existing_field_unchanged(db_session)` *(async function)*
+- `test_submit_codex_task_carries_eta_fields_with_no_history(db_session)` *(async function)*
+- `test_submit_codex_task_eta_reflects_real_history(db_session)` *(async function)*
+- `test_submit_codex_task_queue_wait_seconds_present_when_target_executor_saturated(db_session)` *(async function)* — "T900's `max_concurrent_tasks` is 1 (fixture) -- unlike T610, so this"
+- `test_submit_codex_task_keeps_every_pre_existing_field_unchanged(db_session)` *(async function)*
 
 ### `tests/unit/test_agent_announcement.py`
 
@@ -2831,6 +2907,10 @@ tests/
 - `test_credential_file_missing_a_required_field_is_actionable(tmp_path)` *(async function)*
 - `test_cancel_reminder_succeeds(tmp_path)` *(async function)*
 - `test_cancel_reminder_already_gone_is_success(tmp_path)` *(async function)*
+- `test_list_reminders_filters_by_source_and_normalizes_the_shape(tmp_path)` *(async function)*
+- `test_list_reminders_drops_a_cancelled_event_defensively(tmp_path)` *(async function)*
+- `test_list_reminders_unconfigured_gateway_refuses_before_touching_the_network(tmp_path)` *(async function)*
+- `test_list_reminders_sharing_error_names_the_client_email(tmp_path)` *(async function)*
 - `test_check_access_reports_calendar_summary_and_timezone(tmp_path)` *(async function)*
 - `test_openssl_sign_rs256_produces_a_verifiable_signature(tmp_path)` *(async function)*
 

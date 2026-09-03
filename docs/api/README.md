@@ -1911,6 +1911,112 @@ carries it.
 
 ---
 
+## Reminders (issue #72)
+
+`POST /api/v1/reminders`, `GET /api/v1/reminders`,
+`DELETE /api/v1/reminders/{reminderId}`.
+
+### A second transport, not a second implementation
+
+Issue #71 shipped `create_reminder`/`cancel_reminder` as MCP tools, backed by
+`gateway/app/services/google_calendar.py`. CodexBridgeMobile speaks
+`/api/v1/*`, not `/mcp` — different transport, different auth model — so this
+issue's whole job is a REST front door onto that same service. The route
+handlers (`gateway/app/api/routes/reminders.py`) call the exact same
+`create_reminder`/`cancel_reminder` functions `gateway/app/mcp/server.py`
+calls, with the same arguments, so a reminder created from the phone and one
+created by asking ChatGPT are indistinguishable in the underlying Calendar
+event.
+
+`list_reminders` is new in that service module — #71 deliberately shipped no
+MCP list tool (the operator already has the Google Calendar app for
+browsing), but this issue's mobile client has no such app open, so it needed
+one. Additive to `google_calendar.py`; `create_reminder`/`cancel_reminder`
+are unchanged.
+
+### Two scopes, not one
+
+`codexbridge.reminders.write` already existed as a plain string check in the
+MCP transport; this issue is its first appearance in
+`gateway/app/api/permissions.py`'s catalogue, named as the same literal so a
+token minted before this REST surface existed is not silently narrower on it
+than it was. `codexbridge.reminders.read` is new — reading and browsing
+reminders is a capability an operator may grant to a phone independently of
+letting it create or cancel one, the same split every other read/write pair
+in this catalogue already draws.
+
+### `GET` can never become a way to browse the whole calendar
+
+The issue's own named guard. Enforced server-side, inside the Google query
+itself (`privateExtendedProperty`, repeatable and ANDed) rather than by
+filtering a broader read after the fact: `source=codexbridge` always, and
+`requested_by=<the caller's own identity>` always. One operator and one
+shared calendar today, so the second constraint has no visible effect yet —
+it is there because `extendedProperties.private.requested_by` was populated
+from day one (#71's own multi-user note) specifically so that narrowing to
+"my reminders" needs no migration, only this filter, the day a second
+identity is ever granted the scope.
+
+### Identity from the token, never the body
+
+Field-for-field, `CreateReminderRequest` mirrors #71's tool arguments
+(`text`, `when`, `notes`, `leadMinutes`, `idempotencyKey`) — camelCased, this
+contract's own convention, not MCP's snake_case. There is no `userId` or
+`requestedBy` field: `google_calendar.create_reminder`'s `user_id` and
+`list_reminders`'s `requested_by` filter both come from
+`principal.email`, the same `design-standards.md` §4 rule every scoped
+endpoint on this contract follows.
+
+### Idempotency: the header **and** the body key, doing different jobs
+
+`POST`/`DELETE` accept the standard `Idempotency-Key` header
+(`gateway/app/api/idempotency.py`) like every other write on this contract —
+unlike `/mcp`, `/api/v1/*` sits inside that middleware's scope
+(`gateway/app/api/scope.py`), so this issue did not need to reinvent it. The
+request body's own `idempotencyKey` is a second, independent mechanism: it is
+what `google_calendar.create_reminder` folds into a deterministic Calendar
+event id, the same trick `/mcp`'s tool uses. The header protects a single
+HTTP call from being repeated by a client that lost the network mid-request;
+the body key protects the *reminder itself* from being created twice by two
+genuinely separate calls, with or without a header. A caller may send either,
+both, or neither.
+
+### Error mapping matches `/mcp`, on purpose
+
+`CalendarConfigError` (the gateway is not set up) answers `503
+dependency_unavailable`; `CalendarAccessError` (Google refused the request,
+or `when` failed the service's own validation) answers `409 conflict`. Both
+carry the **exact** message text `google_calendar.py` raised — the issue's
+own requirement, so an unconfigured or misshared calendar reads identically
+regardless of which client the operator used, `client_email` and the sharing
+step included.
+
+Collapsing every `CalendarAccessError` — a stale `when`, a sharing failure, a
+Google outage — onto one status is a REST purist's compromise: `/mcp` already
+made this same call (`gateway/app/mcp/server.py` maps both exception types to
+one status), and splitting it here would need a distinct exception type in
+`google_calendar.py`, a module this issue keeps unchanged. Left as a residual
+item rather than fixed.
+
+### `GET`'s pagination is Google's, not this contract's own cursor scheme
+
+Returned under the standard `PageInfo` shape (`page.hasMore` /
+`page.nextCursor`), but the cursor value itself is Google's own opaque
+`nextPageToken`, forwarded unchanged rather than wrapped in this contract's
+HMAC-signed envelope (`gateway/app/api/pagination.py`) — that scheme exists
+for this gateway's own keyset-ordered queries, and this collection is
+Google's, not a local table.
+
+### No `If-Match`
+
+Every other write on this contract protects a local, revisioned row. A
+reminder has none: its only state of record is the Calendar event itself,
+never read back before a write (`google_calendar.py` uses a deterministic id
+instead of a lookup, for the same reason). There is nothing local to race
+against, so there is no `ETag`.
+
+---
+
 ## Cross-cutting rules every endpoint inherits
 
 Implemented in `gateway/app/api/` (issue #12). An endpoint does not re-invent

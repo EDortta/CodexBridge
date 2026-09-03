@@ -283,6 +283,7 @@ def _api_route_signals() -> dict[str, bool]:
         # aware, unlike the endswith checks above (none of which share their
         # path with a route of a different capability).
         "missionCreation": "POST" in methods_by_path.get("/api/v1/missions", set()),
+        "reminders": any("/reminders" in path for path in paths),
     }
 
 

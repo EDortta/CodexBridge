@@ -467,6 +467,116 @@ async def test_cancel_reminder_already_gone_is_success(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# list_reminders (issue #72)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_filters_by_source_and_normalizes_the_shape(tmp_path):
+    captured_query: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/token"):
+            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
+        captured_query["params"] = list(request.url.params.multi_items())
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "id": "cbone",
+                        "summary": "Ligar para o contador",
+                        "description": "Lembrete criado pelo CodexBridge a pedido de esteban@example.com (via ChatGPT).",
+                        "start": {"dateTime": "2099-01-01T10:00:00-03:00", "timeZone": "America/Sao_Paulo"},
+                        "htmlLink": "https://calendar.example/e1",
+                        "reminders": {"useDefault": False, "overrides": [{"method": "popup", "minutes": 30}]},
+                    }
+                ],
+                "nextPageToken": "next-1",
+            },
+        )
+
+    config = gc.CalendarConfig(credentials_file=_write_service_account(tmp_path), calendar_id="cal-1")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await gc.list_reminders(
+            config=config, client=client, signer=_fake_signer, requested_by="esteban@example.com"
+        )
+
+    assert result["items"] == [
+        {
+            "reminder_id": "cbone",
+            "calendar_id": "cal-1",
+            "summary": "Ligar para o contador",
+            "notes": "Lembrete criado pelo CodexBridge a pedido de esteban@example.com (via ChatGPT).",
+            "scheduled_for": "2099-01-01T10:00:00-03:00",
+            "timezone": "America/Sao_Paulo",
+            "lead_minutes": 30,
+            "html_link": "https://calendar.example/e1",
+        }
+    ]
+    assert result["next_page_token"] == "next-1"
+
+    params = captured_query["params"]
+    assert ("privateExtendedProperty", "source=codexbridge") in params
+    assert ("privateExtendedProperty", "requested_by=esteban@example.com") in params
+    assert ("singleEvents", "true") in params
+    assert ("orderBy", "startTime") in params
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_drops_a_cancelled_event_defensively(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/token"):
+            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {"id": "cbgone", "status": "cancelled"},
+                    {
+                        "id": "cbstill-here",
+                        "summary": "x",
+                        "start": {"dateTime": "2099-01-01T10:00:00-03:00"},
+                    },
+                ]
+            },
+        )
+
+    config = gc.CalendarConfig(credentials_file=_write_service_account(tmp_path), calendar_id="cal-1")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await gc.list_reminders(config=config, client=client, signer=_fake_signer)
+
+    assert [item["reminder_id"] for item in result["items"]] == ["cbstill-here"]
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_unconfigured_gateway_refuses_before_touching_the_network(tmp_path):
+    config = gc.CalendarConfig(credentials_file="", calendar_id="")
+
+    async def _boom(request: httpx.Request) -> httpx.Response:  # pragma: no cover - must not run
+        raise AssertionError("must not touch the network when unconfigured")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_boom)) as client:
+        with pytest.raises(gc.CalendarConfigError):
+            await gc.list_reminders(config=config, client=client, signer=_fake_signer)
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_sharing_error_names_the_client_email(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/token"):
+            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
+        return httpx.Response(404)
+
+    config = gc.CalendarConfig(credentials_file=_write_service_account(tmp_path), calendar_id="cal-1")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(gc.CalendarAccessError) as raised:
+            await gc.list_reminders(config=config, client=client, signer=_fake_signer)
+    assert FAKE_SERVICE_ACCOUNT["client_email"] in str(raised.value)
+    assert "Make changes to events" in str(raised.value)
+
+
+# --------------------------------------------------------------------------
 # check_access
 # --------------------------------------------------------------------------
 

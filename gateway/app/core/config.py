@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     oauth_default_scopes: str = (
         "codexbridge.read codexbridge.task.submit codexbridge.task.cancel "
         "codexbridge.issues.write codexbridge.conversations.write "
-        "codexbridge.reminders.write codexbridge.notifications.manage"
+        "codexbridge.reminders.write codexbridge.reminders.read codexbridge.notifications.manage"
     )
     # WK-20260830-chatgpt-entry-provider-and-delivery, issue #71/#72. A
     # reminder still needs BOTH the scope above (granted per-user via OAuth,
