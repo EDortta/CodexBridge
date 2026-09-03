@@ -41,6 +41,7 @@ from gateway.app.api.routes import nodes as nodes_routes
 from gateway.app.api.routes import missions as missions_routes
 from gateway.app.api.routes import notifications as notifications_routes
 from gateway.app.api.routes import projects as projects_routes
+from gateway.app.api.routes import reminders as reminders_routes
 from gateway.app.api.routes import sessions as sessions_routes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.db.base import Base
@@ -178,6 +179,7 @@ async def api(users_file, monkeypatch):
     app.include_router(enrollment_routes.router)
     app.include_router(discovery_routes.router)
     app.include_router(authorizations_routes.router)
+    app.include_router(reminders_routes.router)
 
     async def override():
         async with factory() as s:
@@ -1400,6 +1402,17 @@ ENDPOINT_FOR_ACTION = {
     # the 403 this loop looks for; one that has it gets a 422 for the missing
     # body, which is a non-403 and is exactly what the loop asserts.
     "notifications.manage": ("PUT", "/api/v1/notifications/preferences"),
+    # Issue #72. Neither `alice` nor `reader` in this module's registry carries
+    # either reminders scope, so every one of these is refused by
+    # `require_action` itself, before the calendar service (unconfigured in
+    # this fixture) is ever reached — the same "403 boundary only" reasoning
+    # the comments above already give for nodes/decisions.
+    "reminders.read": ("GET", "/api/v1/reminders"),
+    # No body sent, on purpose — same reasoning as `notifications.manage`
+    # above: `require_action` runs first, so a caller lacking the scope still
+    # gets the 403 this loop looks for.
+    "reminders.create": ("POST", "/api/v1/reminders"),
+    "reminders.cancel": ("DELETE", "/api/v1/reminders/{id}"),
 }
 
 # Actions with no endpoint of their own, each naming the test that covers it

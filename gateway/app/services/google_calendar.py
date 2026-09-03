@@ -1,7 +1,7 @@
 """A Google Calendar client for reminders, built to be tested without ever
 
 touching Google. WK-20260830-chatgpt-entry-provider-and-delivery, issues
-#71 (MCP tools) / #72 (REST surface, not yet built).
+#71 (MCP tools) / #72 (REST surface).
 
 ## Why the gateway, not the executor
 
@@ -33,6 +33,23 @@ folded into a base32hex event id -- exactly the alphabet Google's Calendar
 API accepts for a caller-supplied id -- so a retry with the same key hits
 Google's own `409` and this module answers `created: False` with the same
 id, durable across gateway restarts, no migration required.
+
+## `list_reminders` (issue #72)
+
+#71 deliberately shipped no `list_reminders` MCP tool -- the operator already
+has the Google Calendar app for browsing. #72's whole reason to exist is a
+phone client that does not have that app open, so the REST surface needs a
+list this module did not have. Added here, additive: `create_reminder` and
+`cancel_reminder` are byte-for-byte what #71 shipped.
+
+Filters on `extendedProperties.private.source = "codexbridge"` -- Google's own
+`privateExtendedProperty` query parameter, not a client-side filter -- so this
+can never become a way to read the rest of the shared calendar. It also
+narrows to the calling user's own `requested_by`, ANDed the same way: nothing
+in this build depends on it (one operator, one calendar, today), but the value
+was populated from day one for exactly this, and filtering by the caller's own
+identity by default is the safer failure direction the moment a second user is
+ever granted the scope.
 """
 
 from __future__ import annotations
@@ -374,6 +391,90 @@ async def cancel_reminder(
     if response.status_code not in (200, 204, 410):
         _raise_for_calendar_error(response, service_account, config)
     return {"reminder_id": reminder_id, "cancelled": True}
+
+
+def _reminder_from_event(event: dict, config: CalendarConfig) -> dict:
+    """Normalizes one Google Calendar event into this module's reminder shape.
+
+    Mirrors `create_reminder`'s return dict field-for-field, minus `created`
+    (meaningless for something already listed) -- so a caller of both
+    functions handles one shape. `notes` is a best-effort read of
+    `description`: `create_reminder` writes a boilerplate attribution line
+    ahead of the caller's own notes (see its own body), and that line is not
+    stripped back out here -- splitting it out again would be a second,
+    drifting definition of what the boilerplate looks like. Honest, not
+    exact.
+    """
+    start = event.get("start") or {}
+    overrides = ((event.get("reminders") or {}).get("overrides")) or []
+    lead_minutes = overrides[0].get("minutes", 0) if overrides else 0
+    return {
+        "reminder_id": event.get("id"),
+        "calendar_id": config.calendar_id,
+        "summary": event.get("summary", ""),
+        "notes": event.get("description"),
+        "scheduled_for": start.get("dateTime"),
+        "timezone": start.get("timeZone") or DEFAULT_TIMEZONE,
+        "lead_minutes": lead_minutes,
+        "html_link": event.get("htmlLink"),
+    }
+
+
+async def list_reminders(
+    *,
+    config: CalendarConfig,
+    client: httpx.AsyncClient,
+    signer: Signer = openssl_sign_rs256,
+    requested_by: str | None = None,
+    limit: int = 50,
+    page_token: str | None = None,
+) -> dict:
+    """CodexBridge-created reminders on the configured calendar, newest first.
+
+    Always constrained to `extendedProperties.private.source = "codexbridge"`
+    via Google's own query filter -- see the module docstring's "why" -- and,
+    when `requested_by` is given, additionally to that value. Both constraints
+    are server-side (`privateExtendedProperty` is repeatable and ANDed), never
+    applied after the fact to a broader read.
+    """
+    if not config.calendar_id or not config.credentials_file:
+        raise CalendarConfigError(
+            "Reminders are not configured on this gateway: no target calendar. The operator must "
+            "set CODEX_BRIDGE_GOOGLE_CALENDAR_ID and CODEX_BRIDGE_GOOGLE_CALENDAR_CREDENTIALS_FILE."
+        )
+    service_account = _load_service_account(config.credentials_file)
+    token = await _access_token(service_account, client=client, signer=signer)
+    headers = {"Authorization": f"Bearer {token}"}
+    params: list[tuple[str, str]] = [
+        ("privateExtendedProperty", "source=codexbridge"),
+        ("singleEvents", "true"),
+        ("orderBy", "startTime"),
+        ("maxResults", str(max(1, min(int(limit), 2500)))),
+    ]
+    if requested_by:
+        params.append(("privateExtendedProperty", f"requested_by={requested_by}"))
+    if page_token:
+        params.append(("pageToken", page_token))
+
+    url = f"{CALENDAR_API_BASE}/calendars/{config.calendar_id}/events"
+    try:
+        response = await client.get(url, headers=headers, params=params, timeout=_HTTP_TIMEOUT)
+    except httpx.TimeoutException as exc:
+        raise CalendarAccessError("timed out reaching the Google Calendar API.") from exc
+    except httpx.HTTPError as exc:
+        raise CalendarAccessError(f"could not reach the Google Calendar API: {exc}") from exc
+    if response.status_code != 200:
+        _raise_for_calendar_error(response, service_account, config)
+
+    payload = response.json()
+    items = [
+        _reminder_from_event(event, config)
+        for event in payload.get("items", [])
+        # `showDeleted` defaults to False, so this is defence in depth, not
+        # the only guard against a cancelled event slipping into a list.
+        if event.get("status") != "cancelled"
+    ]
+    return {"items": items, "next_page_token": payload.get("nextPageToken")}
 
 
 async def check_access(config: CalendarConfig, *, client: httpx.AsyncClient, signer: Signer = openssl_sign_rs256) -> dict:

@@ -60,6 +60,19 @@ CONVERSATIONS_WRITE_SCOPE = "codexbridge.conversations.write"
 # without that phone being able to rewrite what the account gets notified about.
 # Reading the preferences needs only READ_SCOPE; this scope guards the write.
 NOTIFICATIONS_MANAGE_SCOPE = "codexbridge.notifications.manage"
+# Issue #72. `codexbridge.reminders.write` already exists as a plain string
+# constant on the MCP transport (`gateway/app/mcp/server.py`, issue #71,
+# predating this catalogue's involvement with reminders at all) -- named here
+# as the same literal, not a new scope, so a token minted before this REST
+# surface existed is not silently narrower on it than it was. `.read` is new:
+# #71 shipped no MCP list tool on purpose (the operator already has the
+# Calendar app), but the REST surface's whole reason to exist is a phone
+# client browsing existing reminders, so it needs a scope of its own -- kept
+# separate from `.write` for the same reason every other read/write split in
+# this catalogue is separate: an operator may want a phone that can see
+# reminders without being able to create or cancel them.
+REMINDERS_WRITE_SCOPE = "codexbridge.reminders.write"
+REMINDERS_READ_SCOPE = "codexbridge.reminders.read"
 
 READ = "read"
 OPERATIONAL = "operational"
@@ -417,6 +430,33 @@ NOTIFICATIONS_MANAGE = Action(
     summary="Change this actor's own notification-subscription preferences.",
 )
 
+# Issue #72: REST reminders, in front of #71's `gateway/app/services/
+# google_calendar.py`. `reminders.create`/`reminders.cancel` are OPERATIONAL
+# (they change a real Calendar event, same class as `sessions.stop`);
+# `reminders.read` is READ, same as every other list/get pair in this
+# catalogue. All three added as one contiguous block, not interleaved with
+# the groups above, to keep a same-session merge trivial.
+REMINDERS_READ = Action(
+    name="reminders.read",
+    category=READ,
+    scope=REMINDERS_READ_SCOPE,
+    summary="List reminders created via CodexBridge on the operator's calendar.",
+)
+
+REMINDERS_CREATE = Action(
+    name="reminders.create",
+    category=OPERATIONAL,
+    scope=REMINDERS_WRITE_SCOPE,
+    summary="Create a reminder on the operator's Google Calendar.",
+)
+
+REMINDERS_CANCEL = Action(
+    name="reminders.cancel",
+    category=OPERATIONAL,
+    scope=REMINDERS_WRITE_SCOPE,
+    summary="Cancel a previously created reminder.",
+)
+
 
 # Order is the reported order. Grouped by class, read first, so a client that
 # renders the list without sorting produces something sensible.
@@ -459,6 +499,9 @@ CATALOGUE: tuple[Action, ...] = (
     NODES_DISCOVERIES_READ,
     NODES_DISCOVERIES_DECIDE,
     NODES_AUTHORIZATIONS_MANAGE,
+    REMINDERS_READ,
+    REMINDERS_CREATE,
+    REMINDERS_CANCEL,
 )
 
 

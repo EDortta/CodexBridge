@@ -1,17 +1,16 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-09-02 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-09-03 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 182 file(s) · 2003 symbol(s) indexed
-- Languages: config (2), python (178), shell (2)
+- 184 file(s) · 2034 symbol(s) indexed
+- Languages: config (2), python (180), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
 ## Governance
 
-- `AGENTS.md`
 - `docs/required-reading.md`
 - `docs/project-rules.md`
 - `docs/software-overview.md`
@@ -90,6 +89,7 @@ gateway/
         notifications.py  — "What this actor wants to be notified about — issue #13."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
         projects.py  — "Projects and the project operational dashboard — issue #5."
+        reminders.py  — "REST surface for reminders — issue #72, the second transport in front of"
         sessions.py  — "Agent sessions, their logs, and lifecycle control."
       scope.py  — "Which requests the API's cross-cutting rules apply to."
       setup.py  — "One call that installs every cross-cutting API behaviour."
@@ -190,6 +190,7 @@ tests/
     test_projects.py  — "Projects and the project operational dashboard — issue #5."
     test_push_preauthorization.py  — "Push pre-authorization is resolved as a recorded approval, never a bypass."
     test_reconnect_replay_resolves.py  — "Issue #17 council round 1 — the headline scenario named by findings 1, 4"
+    test_reminders_api.py  — "REST reminders — issue #72."
     test_sessions.py  — "Agent sessions, logs and control — issue #9."
     test_start_development_task.py  — "The `start_development_task` MCP tool -- the conversational entry point."
     test_store_and_mcp.py
@@ -643,6 +644,15 @@ tests/
 - `get_project_detail(project_id, principal, session)` *(async function)*
 - `get_project_summary(project_id, principal, session)` *(async function)* — "The full dashboard payload for one project: status plus the executor breakdown."
 
+### `gateway/app/api/routes/reminders.py`
+
+> REST surface for reminders — issue #72, the second transport in front of
+
+- **`CreateReminderRequest`** *(class)*
+- `create_reminder(payload, response, idempotency_key, principal, session)` *(async function)* — "Create a reminder on the operator's Google Calendar."
+- `list_reminders(response, cursor, limit, principal)` *(async function)* — "CodexBridge-created reminders on the operator's calendar, this actor's own."
+- `cancel_reminder(reminder_id, response, idempotency_key, principal, session)` *(async function)* — "Cancel a previously created reminder."
+
 ### `gateway/app/api/routes/sessions.py`
 
 > Agent sessions, their logs, and lifecycle control.
@@ -914,6 +924,7 @@ tests/
 - `parse_when(when)` — "Parses `when` as ISO 8601. A caller with no offset is assumed to mean"
 - `create_reminder()` *(async function)*
 - `cancel_reminder()` *(async function)*
+- `list_reminders()` *(async function)* — "CodexBridge-created reminders on the configured calendar, newest first."
 - `check_access(config)` *(async function)* — "Confirms the configured credential can actually read the configured"
 
 ### `gateway/app/services/issue_render.py`
@@ -2292,6 +2303,33 @@ tests/
 - `test_cancel_ack_immediately_dispatches_the_next_queued_task(factory, monkeypatch)` *(async function)* — "finding 10 (council round 2 on #17, "the sweep skeptic"): the two tests"
 - `test_handle_task_cancelled_triggers_notification(factory, monkeypatch)` *(async function)* — "issue #70: `handle_task_cancelled` lands a task in CANCELLED -- a"
 
+### `tests/integration/test_reminders_api.py`
+
+> REST reminders — issue #72.
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)*
+- `auth(token)`
+- `test_every_route_requires_a_token(api)`
+- `test_write_scope_alone_cannot_list(api)`
+- `test_read_scope_alone_cannot_create_or_cancel(api, monkeypatch)`
+- `test_a_principal_with_neither_scope_is_refused_everywhere(api)`
+- `test_create_reminder_round_trip(api, monkeypatch)` *(async function)*
+- `test_create_response_matches_the_mcp_tool_output_shape_field_for_field(api, monkeypatch)` *(async function)* — "The test plan's own words: "matches #71's MCP tool output shape"
+- `test_create_reminder_config_error_is_503_with_the_mcp_message_text(api, monkeypatch)` *(async function)* — "Same actionable message text as `/mcp` — the issue's own requirement."
+- `test_create_reminder_access_error_names_the_client_email(api, monkeypatch)` *(async function)*
+- `test_create_reminder_rejects_a_missing_required_field(api)` *(async function)*
+- `test_idempotency_key_replay_calls_the_calendar_service_once(api, monkeypatch)` *(async function)*
+- `test_idempotency_key_reused_for_a_different_body_is_refused(api, monkeypatch)` *(async function)*
+- `test_without_a_header_a_repeated_body_idempotency_key_still_dedupes_at_the_calendar(api, monkeypatch)` *(async function)* — "No `Idempotency-Key` header at all -- only the body's own `idempotencyKey`,"
+- `test_list_reminders_round_trip(api, monkeypatch)` *(async function)*
+- `test_list_reminders_reports_a_next_cursor_when_google_has_more(api, monkeypatch)` *(async function)*
+- `test_list_reminders_forwards_cursor_and_limit(api, monkeypatch)` *(async function)*
+- `test_list_reminders_config_error_is_503(api, monkeypatch)` *(async function)*
+- `test_cancel_reminder_round_trip(api, monkeypatch)` *(async function)*
+- `test_cancel_reminder_idempotency_key_replay(api, monkeypatch)` *(async function)*
+- `test_cancel_reminder_config_error_is_503_with_the_mcp_message_text(api, monkeypatch)` *(async function)*
+
 ### `tests/integration/test_sessions.py`
 
 > Agent sessions, logs and control — issue #9.
@@ -2800,6 +2838,10 @@ tests/
 - `test_credential_file_missing_a_required_field_is_actionable(tmp_path)` *(async function)*
 - `test_cancel_reminder_succeeds(tmp_path)` *(async function)*
 - `test_cancel_reminder_already_gone_is_success(tmp_path)` *(async function)*
+- `test_list_reminders_filters_by_source_and_normalizes_the_shape(tmp_path)` *(async function)*
+- `test_list_reminders_drops_a_cancelled_event_defensively(tmp_path)` *(async function)*
+- `test_list_reminders_unconfigured_gateway_refuses_before_touching_the_network(tmp_path)` *(async function)*
+- `test_list_reminders_sharing_error_names_the_client_email(tmp_path)` *(async function)*
 - `test_check_access_reports_calendar_summary_and_timezone(tmp_path)` *(async function)*
 - `test_openssl_sign_rs256_produces_a_verifiable_signature(tmp_path)` *(async function)*
 

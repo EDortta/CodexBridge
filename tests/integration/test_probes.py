@@ -276,6 +276,7 @@ def _api_route_signals() -> dict[str, bool]:
         "deviceAuthorization": any("/auth/device" in path for path in paths),
         "eventStream": any("/events" in path or "/stream" in path for path in paths),
         "artifactDownloads": any("/artifacts" in path or "/builds" in path for path in paths),
+        "reminders": any("/reminders" in path for path in paths),
     }
 
 

@@ -24,6 +24,7 @@ from gateway.app.api.routes import epics as epics_routes
 from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import issues as issues_routes
 from gateway.app.api.routes import notifications as notifications_routes
+from gateway.app.api.routes import reminders as reminders_routes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.core.agent_auth import resolve_executor_token
 from gateway.app.core.config import settings
@@ -205,6 +206,12 @@ app.include_router(authorizations_routes.router, dependencies=[Depends(RateLimit
 # (`tests/contract/test_openapi_document.py`), the same way `/oauth/*` and
 # `/mcp` sit outside it.
 app.include_router(control_ui_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
+# REST reminders (issue #72): the second transport in front of #71's
+# `gateway/app/services/google_calendar.py`, for CodexBridgeMobile, which
+# cannot call `/mcp`. Same limiter and per-route authorization as every
+# router above.
+app.include_router(reminders_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:

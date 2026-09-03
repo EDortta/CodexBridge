@@ -139,7 +139,17 @@ version_router = APIRouter()
 # only, so this would ordinarily be a minor bump; landing on 1.13.0 instead
 # of 1.7.0 is purely the reservation above, not a signal of a breaking
 # change.
-API_CONTRACT_VERSION = "1.14.0"
+#
+# 1.14.0 -> 1.17.0 (WK-20260903-gh72-reminders-rest, issue #72):
+# `POST/GET /api/v1/reminders` and `DELETE /api/v1/reminders/{reminderId}` --
+# the REST transport in front of issue #71's Google Calendar service, for
+# CodexBridgeMobile, which cannot reach `/mcp`. Additive only (three new
+# endpoints, two new schemas, no existing shape touched), so a minor bump --
+# jumping straight to 1.17.0 rather than 1.15.0 for the same reason the two
+# paragraphs above jump their own gaps: 1.15.0 and 1.16.0 are reserved for
+# other branches open this same session (WK-20260903-gh68-missions-http,
+# WK-20260903-gh81-terminology); only one bump survives the eventual merge.
+API_CONTRACT_VERSION = "1.17.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a
@@ -178,6 +188,12 @@ CAPABILITIES = {
     # flag answers "does this server speak the artifact API", which is the
     # question a client that would otherwise meet a 404 is asking.
     "artifactDownloads": True,
+    # POST/GET/DELETE /api/v1/reminders (issue #72), in front of #71's Google
+    # Calendar service. True because the routes are served, not because a
+    # calendar is configured on this deployment — an unconfigured one answers
+    # 503 dependency_unavailable at call time, same as an empty artifact
+    # catalogue answers an empty list rather than a missing route.
+    "reminders": True,
 }
 
 
