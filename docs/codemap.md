@@ -5,7 +5,7 @@
 
 ## Summary
 
-- 185 file(s) · 2096 symbol(s) indexed
+- 185 file(s) · 2112 symbol(s) indexed
 - Languages: config (2), python (181), shell (2)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
 
@@ -367,6 +367,8 @@ tests/
   - `is_known(self, task_id)` *(method)*
   - `mark_dispatched(self, task_id, engine)` *(method)*
   - `forget(self, task_id)` *(method)*
+  - `mark_cancel_requested(self, task_id)` *(method)* — "Records that a `task.cancel` arrived for `task_id`, regardless of"
+  - `is_cancel_requested(self, task_id)` *(method)*
   - `cancel(self, task_id)` *(async method)*
   - `pause(self, task_id)` *(async method)*
   - `resume(self, task_id)` *(async method)*
@@ -926,9 +928,11 @@ tests/
 
 - **`CalendarConfigError`** *(class)* — "The gateway itself is not set up for reminders -- an operator problem,"
 - **`CalendarAccessError`** *(class)* — "Google refused the request, or it could not be reached in time."
+- **`NaiveDatetimeError`** *(class)* — "`when` had no UTC offset."
+  - `__init__(self, when)` *(method)*
 - **`CalendarConfig`** *(class)*
 - `openssl_sign_rs256(signing_input, private_key_pem)` *(async function)* — "The default `Signer`: shells out to `openssl dgst -sha256 -sign`."
-- `parse_when(when)` — "Parses `when` as ISO 8601. A caller with no offset is assumed to mean"
+- `parse_when(when)` — "Parses `when` as ISO 8601 with an explicit UTC offset."
 - `create_reminder()` *(async function)*
 - `cancel_reminder()` *(async function)*
 - `list_reminders()` *(async function)* — "CodexBridge-created reminders on the configured calendar, newest first."
@@ -2076,6 +2080,8 @@ tests/
 - `test_happy_path_returns_the_fake_calendars_structured_content(db_session, monkeypatch)` *(async function)*
 - `test_second_call_with_the_same_idempotency_key_reports_created_false(db_session, monkeypatch)` *(async function)*
 - `test_calendar_error_is_reported_as_a_client_error_not_a_500(db_session, monkeypatch)` *(async function)*
+- `test_naive_when_is_reported_as_a_client_error_not_a_500(db_session, monkeypatch)` *(async function)* — "Same pattern as `test_calendar_error_is_reported_as_a_client_error_not_a_500`,"
+- `test_naive_when_is_rejected_end_to_end(db_session, monkeypatch, tmp_path)` *(async function)* — "Not monkeypatching `google_calendar.create_reminder`: the real function"
 - `test_cancel_reminder_happy_path(db_session, monkeypatch)` *(async function)*
 - `test_an_unconfigured_gateway_still_serves_submit_codex_task_normally(db_session, monkeypatch)` *(async function)* — "The most important test in this file: reminders being unconfigured,"
 
@@ -2358,6 +2364,8 @@ tests/
 - `test_create_response_matches_the_mcp_tool_output_shape_field_for_field(api, monkeypatch)` *(async function)* — "The test plan's own words: "matches #71's MCP tool output shape"
 - `test_create_reminder_config_error_is_503_with_the_mcp_message_text(api, monkeypatch)` *(async function)* — "Same actionable message text as `/mcp` — the issue's own requirement."
 - `test_create_reminder_access_error_names_the_client_email(api, monkeypatch)` *(async function)*
+- `test_create_reminder_naive_when_is_409_with_the_mcp_message_text(api, monkeypatch)` *(async function)* — "Same error-mapping pattern as the two tests above, for the specific"
+- `test_create_reminder_naive_when_is_rejected_end_to_end(api, monkeypatch, tmp_path)` *(async function)* — "Not monkeypatching `google_calendar.create_reminder`: the real function"
 - `test_create_reminder_rejects_a_missing_required_field(api)` *(async function)*
 - `test_idempotency_key_replay_calls_the_calendar_service_once(api, monkeypatch)` *(async function)*
 - `test_idempotency_key_reused_for_a_different_body_is_refused(api, monkeypatch)` *(async function)*
@@ -2597,6 +2605,8 @@ tests/
 - `test_handle_dispatch_runs_delivery_when_the_payload_carries_one(tmp_path, monkeypatch)` *(async function)*
 - `test_handle_dispatch_never_runs_delivery_without_a_delivery_payload(tmp_path, monkeypatch)` *(async function)* — "No `delivery` key at all -- today's only real shape, since no gateway"
 - `test_handle_dispatch_never_runs_delivery_after_a_failed_task(tmp_path, monkeypatch)` *(async function)*
+- `test_a_task_cancel_arriving_during_delivery_refuses_the_commit(tmp_path)` *(async function)* — "Issue #66 ARO finding F34, end to end through `_handle_dispatch` and"
+- `test_a_task_cancel_before_dispatch_does_not_prevent_a_later_unrelated_delivery(tmp_path)` *(async function)* — "`mark_cancel_requested`/`is_cancel_requested` are bracketed by"
 - `test_sandbox_for_is_read_only_for_the_read_policy_level()`
 - `test_sandbox_for_is_workspace_write_for_controlled_write_and_sensitive()`
 - `test_sandbox_for_machine_override_forces_read_only_even_for_write_levels()` — "`AgentSettings.allow_workspace_write=False` is the executor's own kill"
@@ -2878,6 +2888,10 @@ tests/
 - `test_staging_never_uses_add_all_or_a_bare_dot(tmp_path, monkeypatch)` *(async function)* — "The shared working-tree gate: staging is always by explicit path."
 - `test_no_command_ever_carries_a_force_flag(tmp_path, monkeypatch)` *(async function)*
 - `test_head_moving_between_status_and_commit_is_refused_not_forced(tmp_path, monkeypatch)` *(async function)* — "Simulates another process writing to the branch in the gap between"
+- `test_a_cancel_pending_before_the_commit_is_refused_without_committing(tmp_path)` *(async function)* — "The checkpoint F34 names explicitly: cancelled before the commit ->"
+- `test_cancellation_is_checked_exactly_once_immediately_before_commit(tmp_path, monkeypatch)` *(async function)* — "Proves the checkpoint's placement, not just its existence: `is_cancelled`"
+- `test_a_cancel_arriving_after_the_commit_checkpoint_does_not_stop_the_push(tmp_path, monkeypatch)` *(async function)* — "The other half of F34's own trade-off, stated in this module's"
+- `test_no_is_cancelled_callback_behaves_exactly_like_before(tmp_path)` *(async function)* — "Backward compatibility: every caller that predates F34 (this module's"
 
 ### `tests/unit/test_google_calendar.py`
 
@@ -2889,14 +2903,16 @@ tests/
 - `test_event_id_differs_for_a_different_user()`
 - `test_event_id_without_a_key_normalizes_text_case_and_whitespace()`
 - `test_event_id_alphabet_is_base32hex_lowercase()`
-- `test_naive_input_gets_the_default_timezone()`
+- `test_naive_input_is_rejected_not_defaulted()` — "Issue #71's own Requirements: ChatGPT already resolved the operator's"
 - `test_offset_aware_input_keeps_its_own_offset()`
 - `test_trailing_z_suffix_parses()`
 - `test_malformed_datetime_is_a_calendar_access_error()`
 - `test_unconfigured_gateway_refuses_before_touching_the_network(tmp_path)` *(async function)*
 - `test_a_time_in_the_past_is_refused(tmp_path)` *(async function)*
+- `test_create_reminder_refuses_a_naive_when_before_touching_the_network(tmp_path)` *(async function)* — "The end-to-end path, not just `parse_when` in isolation: a naive"
 - `test_more_than_two_years_out_is_refused(tmp_path)` *(async function)*
 - `test_the_event_body_matches_the_documented_shape_and_never_has_attendees(tmp_path)` *(async function)*
+- `test_created_via_is_recorded_per_transport(tmp_path)` *(async function)* — "The REST route passes `created_via="rest"` explicitly"
 - `test_a_lead_time_that_would_already_have_passed_is_clamped_to_zero(tmp_path)` *(async function)*
 - `test_idempotent_replay_returns_created_false_with_the_same_id(tmp_path)` *(async function)*
 - `test_replaying_a_deleted_reminder_id_is_refused(tmp_path)` *(async function)*

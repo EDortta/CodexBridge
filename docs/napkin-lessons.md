@@ -1821,3 +1821,76 @@ Lição mais geral: paralelizar branches troca conflito de merge por
 merge a merge, com a suíte rodando a cada passo — não treze botões de "merge"
 no GitHub. As quatro falhas acima teriam entrado silenciosamente por qualquer
 caminho mais barato.
+
+## 2026-09-03 — issue aberta não é trabalho pendente, e código no repositório não é DoD cumprida
+
+Quarenta e uma issues abertas no GitHub; três sem uma linha de código. As
+outras estavam entregues e nunca foram fechadas. Antes de dividir trabalho
+entre agentes, o levantamento barato (`ls` do módulo que a issue nomeia, grep
+do símbolo que ela promete) evitou despachar meia dúzia de agentes para
+reimplementar o que já existia.
+
+A recíproca custou mais caro e é a lição de verdade. Uma auditoria read-only da
+Definition of Done de cinco issues "entregues" contra o código de
+`development` reprovou quatro:
+
+- a #71 exige recusar `when` sem offset; o código **assumia** o fuso default em
+  silêncio, e um teste — `test_naive_input_gets_the_default_timezone` — fixava
+  esse comportamento como se fosse o pretendido;
+- a #67 tinha `queue_wait_seconds` como requisito nomeado, com zero código e
+  zero teste no repositório inteiro;
+- a #70 tinha dois itens de escopo implementados e **nenhum teste**, apesar de
+  ambos estarem no plano de teste da própria issue;
+- a #66 nunca contou ao `docs/security.md` que o push pré-autorizado existe, e
+  deixou no `service.py` um comentário afirmando que o caminho de entrega era
+  "inalcançável na prática" — dentro do arquivo que ela mesma mudou.
+
+O padrão comum: **dentro de cada branch estava tudo coerente.** Código,
+docstring e teste concordavam entre si. O que discordava era a issue, e
+nenhuma revisão de diff olha para lá. Revisar o diff responde "esta mudança
+está bem feita?"; só cruzar entrega contra requisito responde "esta mudança é a
+que foi pedida?". São perguntas diferentes, e a segunda foi a que achou um
+lembrete disparando na hora errada sem ninguém perceber.
+
+Corolário barato: quando o texto da issue e o código divergem, a divergência é
+uma decisão a registrar, não um lado a escolher em silêncio. A #71 foi
+consertada para obedecer a issue **e** a descrição da ferramenta MCP — que
+ainda mandava o ChatGPT omitir o offset — teve de ser corrigida junto, senão
+todo chamador passaria a tomar 409 seguindo a instrução publicada.
+
+## 2026-09-03 — reservar o recurso do repositório antes, não renumerar depois
+
+A lição de 2026-09-02 (número de migração é recurso do repositório, não da
+branch) foi aplicada preventivamente ao `info.version` do contrato: 1.15.0 a
+1.18.0 foram atribuídos aos agentes na largada, antes de qualquer um começar.
+Resultado: nenhuma renumeração, e a única reconciliação foi rodar
+`publish_contract.py` a cada merge para o `index.json`.
+
+O que ainda assim precisou de mão na integração foi outra coisa: **cada branch
+descreveu com precisão um mundo que deixou de existir no instante em que ela
+entrou.** O comentário da #72 explicava que "1.15.0 e 1.16.0 estão reservadas
+para branches abertas nesta sessão; só um bump sobrevive ao merge" — verdade
+enquanto escrito, falso trinta minutos depois. O da #71 dizia que as duas
+seguiam "reservadas, ainda não mescladas". Ambos reescritos no merge.
+
+Comentário que descreve o estado da concorrência envelhece por construção. Ou
+se escreve o fato durável (*por que* este número, não *quais* estão livres), ou
+se aceita reescrevê-lo na integração — mas não se deixa passar, porque o
+próximo agente lê e decide com base nele.
+
+## 2026-09-03 — a `.env` que o `awt` gera derruba a suíte no worktree
+
+Quatro agentes independentes, em worktrees diferentes, chegaram ao mesmo
+diagnóstico por caminhos diferentes: a `.env` provisionada por `awt new` mistura
+variáveis de gateway, de agente e de bookkeeping (`AWT_*`), e o
+`env_prefix="CODEX_BRIDGE_"` do `Settings` casa também com `CODEX_BRIDGE_AGENT_*`
+sob `extra="forbid"` — a coleta do pytest morre antes do primeiro teste. Pior:
+o arquivo aponta `DATABASE_URL` para um Postgres de produção, enquanto
+`docs/development.md` documenta que o desenvolvimento local cai em SQLite sem
+`.env` nenhum.
+
+O contorno que todos acharam (mover a `.env` de lado durante a rodada) é
+sintoma, não conserto: **todo worktree paralelo nasce quebrado assim.** Duas
+saídas de verdade: arquivos `.env` separados por classe de settings, ou
+`extra="ignore"` em uma delas. Até lá, a suíte que vale é a do checkout
+canônico — foi lá que a baseline e cada merge desta sessão foram medidos.
