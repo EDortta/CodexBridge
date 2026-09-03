@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -610,6 +611,164 @@ async def test_handle_dispatch_never_runs_delivery_after_a_failed_task(tmp_path:
     await service._handle_dispatch(DummyWebSocket(), envelope)
 
     assert called is False
+
+
+class _WritingRunner:
+    """Stands in for a provider that actually changed the working tree --
+
+    `_RecordingRunner` above never touches the filesystem, which is fine for
+    proving call order but leaves `deliver_changes` with nothing to stage.
+    This one writes one real file under `project_root` before reporting
+    COMPLETED, the same shape a real `codex exec`/`claude -p` run leaves
+    behind.
+    """
+
+    def mark_dispatched(self, _: str) -> None:
+        pass
+
+    def forget(self, _: str) -> None:
+        pass
+
+    async def run_task(self, *, task_id: str, project_root: Path, **_: object) -> dict:
+        (project_root / "delivered.py").write_text("print('done')\n", encoding="utf-8")
+        return {
+            "task_id": task_id,
+            "final_state": "completed",
+            "return_code": 0,
+            "duration_seconds": 0,
+            "command": [],
+            "command_redacted": [],
+            "codex_session_id": None,
+            "codex_version": "",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "last_message": "",
+            "pre_git": {},
+            "post_git": {},
+            "tests_ran": [],
+            "no_changes": False,
+            "raw_events": [],
+        }
+
+
+def _init_delivery_repo(root: Path) -> None:
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+
+    def run(args: list[str]) -> None:
+        import os
+
+        subprocess.run(args, cwd=root, check=True, capture_output=True, text=True, env={**os.environ, **env})
+
+    run(["git", "init", "-q", "-b", "development"])
+    (root / "README.md").write_text("initial\n", encoding="utf-8")
+    run(["git", "add", "README.md"])
+    run(["git", "commit", "-q", "-m", "initial commit"])
+
+
+@pytest.mark.asyncio
+async def test_a_task_cancel_arriving_during_delivery_refuses_the_commit(tmp_path: Path) -> None:
+    """Issue #66 ARO finding F34, end to end through `_handle_dispatch` and
+
+    the real `RunnerPool`/`deliver_changes` -- not a mock asserting the
+    guard was called. Mirrors how a `task.cancel` actually reaches this
+    state in production: `AgentService`'s own `_run_once` TASK_CANCEL
+    branch calls `self.runners.mark_cancel_requested(task_id)`
+    unconditionally, which is exactly what this test drives directly,
+    simulating the cancel landing while the runner has already finished and
+    delivery is under way.
+    """
+    _init_delivery_repo(tmp_path)
+
+    service = AgentService(AgentSettings(allow_git_delivery=True))
+    service.runners._runners["codex"] = _WritingRunner()
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+    # The same call `_run_once`'s TASK_CANCEL branch makes, driven directly
+    # rather than through the socket loop -- see that branch's own comment
+    # for why it is unconditional and independent of `runners.cancel()`'s
+    # own return value.
+    service.runners.mark_cancel_requested("task-cancel-mid-delivery")
+
+    websocket = DummyWebSocket()
+    envelope = AgentEnvelope(
+        message_id="dispatch-cancel-1",
+        executor_id="devel3",
+        sent_at=datetime.now(timezone.utc),
+        type=AgentMessageType.TASK_DISPATCH,
+        payload={
+            "task_id": "task-cancel-mid-delivery",
+            "project_id": "codexbridge",
+            "instruction": "do the thing",
+            "mode": "implement",
+            "timeout_seconds": 60,
+            "delivery": {"branch": "feature/uc-cancel-1", "allow_push": False},
+        },
+    )
+
+    await service._handle_dispatch(websocket, envelope)
+
+    result = AgentEnvelope.model_validate_json(websocket.messages[-1])
+    assert result.payload["final_state"] == "completed"
+    delivery = result.payload["delivery"]
+    assert delivery["outcome"] == "refused"
+    assert delivery["reason"] == "cancelled_before_commit"
+    assert delivery["commit"] is None
+    assert delivery["pushed"] is False
+
+    # Nothing was actually committed in the real repository.
+    log = subprocess.run(
+        ["git", "log", "--oneline"], cwd=tmp_path, check=True, capture_output=True, text=True
+    ).stdout
+    assert "initial commit" in log
+    assert log.count("\n") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_task_cancel_before_dispatch_does_not_prevent_a_later_unrelated_delivery(tmp_path: Path) -> None:
+    """`mark_cancel_requested`/`is_cancel_requested` are bracketed by
+
+    `mark_dispatched`/`forget` the same way `_task_engine` itself is
+    (`RunnerPool.forget`) -- a stale cancellation flag from an unrelated,
+    already-finished task must never leak onto a different task_id's
+    delivery.
+    """
+    _init_delivery_repo(tmp_path)
+
+    service = AgentService(AgentSettings(allow_git_delivery=True))
+    service.runners._runners["codex"] = _WritingRunner()
+    service.projects = {
+        "codexbridge": ProjectRegistration(project_id="codexbridge", name="CodexBridge", path=str(tmp_path))
+    }
+
+    # An earlier, unrelated task was cancelled and fully torn down.
+    service.runners.mark_dispatched("task-unrelated", "codex")
+    service.runners.mark_cancel_requested("task-unrelated")
+    service.runners.forget("task-unrelated")
+    assert service.runners.is_cancel_requested("task-unrelated") is False
+
+    websocket = DummyWebSocket()
+    envelope = AgentEnvelope(
+        message_id="dispatch-cancel-2",
+        executor_id="devel3",
+        sent_at=datetime.now(timezone.utc),
+        type=AgentMessageType.TASK_DISPATCH,
+        payload={
+            "task_id": "task-unaffected",
+            "project_id": "codexbridge",
+            "instruction": "do the thing",
+            "mode": "implement",
+            "timeout_seconds": 60,
+            "delivery": {"branch": "feature/uc-cancel-2", "allow_push": False},
+        },
+    )
+
+    await service._handle_dispatch(websocket, envelope)
+
+    result = AgentEnvelope.model_validate_json(websocket.messages[-1])
+    delivery = result.payload["delivery"]
+    assert delivery["outcome"] == "committed_only"
+    assert delivery["commit"] is not None
 
 
 # --------------------------------------------------------------------------

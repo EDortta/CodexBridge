@@ -35,6 +35,21 @@ class RunnerPool:
             if registration.implemented and registration.factory is not None
         }
         self._task_engine: dict[str, str] = {}
+        # Issue #66 ARO finding F34. A durable flag, independent of any
+        # runner's own `running` dict: `CodexRunner.cancel` (and its
+        # siblings) only ever touch a task while its process is alive, and
+        # the process has already exited -- successfully -- by the time
+        # `AgentService._handle_dispatch` runs the git delivery step
+        # (`deliver_changes`, outside any runner's sandbox and outside
+        # `self.running` entirely). Without a flag that survives the
+        # process exiting, a TASK_CANCEL landing during delivery had no
+        # record anywhere: `cancel()` below would look up a `self.running`
+        # entry that is already gone and report `False`, and the git step
+        # had no way to learn a cancel had been requested at all -- see
+        # `deliver_changes`'s own docstring for what it does with this.
+        # Bracketed by `mark_dispatched`/`forget` the same way `_task_engine`
+        # itself is, so it cannot outlive the task it was requested for.
+        self._cancel_requested: set[str] = set()
 
     def for_engine(self, engine: str) -> Runner:
         runner = self._runners.get(engine)
@@ -53,6 +68,24 @@ class RunnerPool:
         engine = self._task_engine.pop(task_id, None)
         if engine is not None:
             self._runners[engine].forget(task_id)
+        self._cancel_requested.discard(task_id)
+
+    def mark_cancel_requested(self, task_id: str) -> None:
+        """Records that a `task.cancel` arrived for `task_id`, regardless of
+
+        whether a live process was found to terminate. Called unconditionally
+        from `AgentService`'s `TASK_CANCEL` handler, the same "record the
+        request even if nothing was running" posture that handler's own
+        unconditional `task.cancelled` ack already takes (issue #17) -- see
+        that handler's comment for why an unconditional ack is correct even
+        when `cancel()` itself returns `False`. `is_cancel_requested` is what
+        `deliver_changes` polls; this is a plain set, not itself a signal to
+        tear anything down.
+        """
+        self._cancel_requested.add(task_id)
+
+    def is_cancel_requested(self, task_id: str) -> bool:
+        return task_id in self._cancel_requested
 
     async def cancel(self, task_id: str) -> bool:
         engine = self._task_engine.get(task_id)

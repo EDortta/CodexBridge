@@ -195,6 +195,24 @@ class AgentService:
                         asyncio.create_task(self._handle_forge_operation(websocket, envelope))
                     elif envelope.type == AgentMessageType.TASK_CANCEL:
                         task_id = envelope.payload["task_id"]
+                        # Issue #66 ARO finding F34, recorded BEFORE
+                        # `self.runners.cancel(task_id)` below and
+                        # unconditionally -- not gated on that call's own
+                        # return value. `cancel()` only finds a live
+                        # process to terminate; by the time this task's git
+                        # delivery step is running (`deliver_changes`,
+                        # dispatched from `_handle_dispatch` after the
+                        # runner already exited) there is no process left
+                        # for `cancel()` to find, and it would report
+                        # `False` -- exactly as it should, since there is
+                        # nothing to terminate -- while a cancel was still
+                        # genuinely requested for this task. This flag is
+                        # the only record of that request that survives
+                        # past the process exiting; see
+                        # `RunnerPool.mark_cancel_requested`'s own
+                        # docstring and `deliver_changes`'s for what reads
+                        # it.
+                        self.runners.mark_cancel_requested(task_id)
                         await self.runners.cancel(task_id)
                         # Unconditional ack. A cancel's postcondition — "not
                         # running here" — holds whether a live process was
@@ -657,6 +675,17 @@ class AgentService:
                     issue_ref=envelope.payload.get("issue_ref"),
                     engine=engine,
                     send_log=send_log,
+                    # Issue #66 ARO finding F34: a `task.cancel` can arrive
+                    # after the runner above already finished but while
+                    # this step is still working (`self.runners` still
+                    # considers `task_id` known -- `forget` below has not
+                    # run yet). `RunnerPool.is_cancel_requested` is the
+                    # durable flag `mark_cancel_requested` sets from the
+                    # TASK_CANCEL branch of `_run_once`, above; passed as a
+                    # callable rather than a bool so `deliver_changes` reads
+                    # the live value at the moment it actually checks, not
+                    # a snapshot taken before this call started.
+                    is_cancelled=lambda: self.runners.is_cancel_requested(task_id),
                 )
                 result["delivery"] = delivery_outcome.to_dict()
             await websocket.send(self._envelope(AgentMessageType.TASK_RESULT, result).model_dump_json())

@@ -83,6 +83,44 @@
     (`::test_head_moving_between_status_and_commit_is_refused_not_forced`);
     e a pós-condição do push é verificada contra o sha remoto, não apenas
     o código de saída;
+  - **um `task.cancel` que chega enquanto a entrega já está em andamento**
+    (issue #66, achado ARO **F34**: "a cancelled task that still has a
+    running git delivery step in flight ... the git step should check for
+    cancellation before committing") é tratado por uma trava dentro de
+    `deliver_changes`, não no chamador (`design-standards.md` §3):
+    `RunnerPool` grava um flag durável (`mark_cancel_requested`/
+    `is_cancel_requested`, `agent/codex_bridge_agent/runners/pool.py`) no
+    momento em que `_run_once` recebe `TASK_CANCEL` — independente do
+    retorno de `runners.cancel()`, que só encontra um processo vivo para
+    matar e já não encontra nenhum a essa altura, já que a entrega só roda
+    depois que o runner terminou. `deliver_changes` consulta esse flag
+    **uma única vez, imediatamente antes do `git commit`** — o mesmo ponto,
+    e pela mesma razão, em que `HEAD` é relido logo acima — e recusa sem
+    commitar (`outcome="refused", reason="cancelled_before_commit"`, árvore
+    staged intacta, nada é "desfeito" à força). Uma vez passado esse
+    checkpoint, o commit e qualquer push seguinte rodam até o fim sem
+    interrupção: interromper um `git push` em andamento foi descartado
+    deliberadamente (não há como este módulo reconhecer com segurança um
+    subprocesso morto no meio de uma transferência, e nenhum `--force`
+    jamais corrige isso depois). O flag é delimitado por `mark_dispatched`/
+    `forget`, os mesmos que já delimitam `_task_engine`, então a
+    cancelação de uma tarefa nunca vaza para a entrega de outra. Provado
+    contra um repositório git real (não um mock que só verifica se a trava
+    foi chamada) em
+    `tests/unit/test_git_delivery.py::test_a_cancel_pending_before_the_commit_is_refused_without_committing`,
+    `::test_cancellation_is_checked_exactly_once_immediately_before_commit`,
+    `::test_a_cancel_arriving_after_the_commit_checkpoint_does_not_stop_the_push`
+    e, de ponta a ponta através de `_handle_dispatch`/`RunnerPool` reais, em
+    `tests/unit/test_agent_service.py::
+    test_a_task_cancel_arriving_during_delivery_refuses_the_commit`/
+    `::test_a_task_cancel_before_dispatch_does_not_prevent_a_later_unrelated_delivery`.
+    Nenhum campo, ferramenta, estado ou coluna foi renomeado; `reason` já
+    existia em `DeliveryOutcome`/`delivery_result_json` e só ganhou mais um
+    valor possível — `GET /api/v1/missions/{id}/delivery` (issue #69)
+    continua mapeando os mesmos nove campos de sempre
+    (`gateway/app/api/routes/missions.py::_DELIVERY_RESULT_FIELDS`), então
+    esse `reason` específico não é servido por esse endpoint hoje — ver
+    "Lacunas assumidas para endurecimento" abaixo;
   - uma trava adicional contra "`SENSITIVE` vira `read-only` por engano"
     (o mesmo modo de falha da issue #34: saída 0, nenhuma mudança, nenhum
     erro) é fixada por `tests/unit/test_agent_service.py::
@@ -336,6 +374,51 @@ formas de dar rede a essa operação; duas foram descartadas.
 
 ## Lacunas assumidas para endurecimento
 
+* **`GET /api/v1/missions/{id}/delivery` não expõe o `reason` da entrega,
+  inclusive o novo `cancelled_before_commit` (issue #66, F34).**
+  `_DELIVERY_RESULT_FIELDS` (`gateway/app/api/routes/missions.py`) mapeia
+  só nove campos — `branch`, `baseBranch`, `headCommit`, `commitSubject`,
+  `filesChanged`, `insertions`, `deletions`, `pushed`, `deliveryOutcome` —
+  deliberadamente sem `**data` passthrough, e `reason` nunca esteve entre
+  eles, para nenhum motivo de recusa (`forbidden_path:...`, `head_moved:...`,
+  `push_verification_failed`, ou agora `cancelled_before_commit`). Um
+  operador lendo esse endpoint hoje distingue "recusado" de "commitado" e
+  de "commitado mas não empurrado" (os campos `deliveryOutcome`/`pushed`
+  já bastam para isso), mas não distingue POR QUÊ foi recusado sem olhar
+  `delivery_result_json` bruto no banco ou o log do executor
+  (`task.delivery_cancelled:<id>`, emitido por `deliver_changes` no mesmo
+  ponto em que recusa). `deliveryOutcome` é um enum fechado no contrato
+  (`docs/api/codex-bridge.openapi.yaml::MissionDeliveryOutcome`) e não foi
+  alterado por esta entrega — abrir um valor específico para "recusado por
+  cancelamento" exigiria mudar esse contrato, fora do escopo desta issue.
+  Fechar esta lacuna é decisão do operador: versionar o contrato para
+  adicionar `reason` (ou um outcome próprio) a essa resposta, ou aceitar
+  que a distinção fica em `delivery_result_json`/logs, não na API.
+* **Uma corrida pré-existente entre `task.cancelled` e `task.result` no
+  gateway pode mostrar uma tarefa como `cancelled` por um instante mesmo
+  quando a entrega termina com sucesso (branch de verdade no remoto).**
+  Achada ao investigar F34, não introduzida por esta entrega e não corrigida
+  por ela — está fora do escopo desta issue, que é sobre o passo de git no
+  executor, não sobre reconciliação de estado no gateway.
+  `AgentService._run_once` responde a `TASK_CANCEL` imediatamente,
+  mandando `task.cancelled` de volta antes que a entrega em andamento
+  termine (`gateway/app/main.py::handle_task_cancelled` grava
+  `TaskState.CANCELLED` sem condição nenhuma). Quando a entrega termina
+  depois — mesmo tendo sido recusada por `cancelled_before_commit`, ou
+  tendo commitado e empurrado porque o cancelamento chegou tarde demais
+  (ver o bullet acima sobre o checkpoint único) — `TASK_RESULT` chega e
+  `store.store_result`/`update_task_state` sobrescrevem o estado sem
+  checar transição alguma, então o estado final do lado gateway é sempre o
+  que `TASK_RESULT` diz por último, e a leitura `CANCELLED` no meio é
+  apenas transitória. Isso já é verdade para QUALQUER entrega recusada
+  hoje, não é novo neste PR; fica registrado aqui porque é exatamente a
+  situação que a issue nomeia como "a task reported cancelled while its
+  branch is live" — o `delivery_result_json` está correto em qualquer
+  ponto dessa corrida, é o `TaskModel.state` que pode ler `cancelled`
+  momentaneamente enquanto o branch já existe no remoto. Fechar isso é
+  uma mudança de `gateway/app/main.py`/`store.py` (validar transição de
+  estado, ou não sobrescrever um estado terminal com outro), fora dos
+  arquivos que esta entrega toca.
 * **A entrega com push pré-autorizado (issue #66) não tem, neste checkout,
   teste de ponta a ponta com um socket real gateway↔executor, nem registro de
   um push de verdade contra um remoto real.** A suíte cobre cada lado

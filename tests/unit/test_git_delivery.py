@@ -454,3 +454,177 @@ async def test_head_moving_between_status_and_commit_is_refused_not_forced(tmp_p
     # The concurrent commit is untouched -- nothing was reset or force-pushed.
     log = _run(["git", "log", "-1", "--pretty=%s"], tmp_path).stdout.strip()
     assert log == "concurrent write"
+
+
+# --------------------------------------------------------------------------
+# Issue #66 ARO finding F34: a task.cancel arriving while delivery is still
+# in flight. Against a real repository, the same way head_moved is proven
+# above -- not a mock asserting the guard was merely called.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_pending_before_the_commit_is_refused_without_committing(tmp_path: Path):
+    """The checkpoint F34 names explicitly: cancelled before the commit ->
+
+    nothing is committed, the outcome is `refused`, and the staged tree is
+    left exactly as `git add` left it -- inspectable, not unstaged.
+    """
+    _init_repo(tmp_path, branch="feature/uc-200")
+    (tmp_path / "app.py").write_text("print('changed')\n", encoding="utf-8")
+    head_before = _run(["git", "rev-parse", "HEAD"], tmp_path).stdout.strip()
+
+    outcome = await deliver_changes(
+        project_root=tmp_path,
+        delivery=_delivery(branch="feature/uc-200"),
+        settings=_settings(),
+        task_id="t-cancel-1",
+        issue_ref=None,
+        engine="claude",
+        send_log=_collect_logs,
+        is_cancelled=lambda: True,
+    )
+
+    assert outcome.attempted is True
+    assert outcome.outcome == "refused"
+    assert outcome.reason == "cancelled_before_commit"
+    assert outcome.commit is None
+    assert outcome.pushed is False
+
+    # Nothing committed: HEAD did not move.
+    head_after = _run(["git", "rev-parse", "HEAD"], tmp_path).stdout.strip()
+    assert head_after == head_before
+    # And nothing was unstaged either -- the file is still staged, exactly
+    # what a cancelled-but-inspectable tree means.
+    staged = _run(["git", "diff", "--cached", "--name-only"], tmp_path).stdout.strip()
+    assert staged == "app.py"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_is_checked_exactly_once_immediately_before_commit(tmp_path: Path, monkeypatch):
+    """Proves the checkpoint's placement, not just its existence: `is_cancelled`
+
+    must not be consulted before `git add` has staged the real changes (an
+    earlier check could refuse work that was never actually dangerous yet),
+    and it is polled fresh at that one point rather than cached from an
+    earlier read.
+    """
+    import agent.codex_bridge_agent.git_delivery as git_delivery
+
+    _init_repo(tmp_path, branch="feature/uc-201")
+    (tmp_path / "app.py").write_text("print('changed')\n", encoding="utf-8")
+
+    calls: list[str] = []
+    real_run_git = git_delivery.run_git
+
+    async def recording_run_git(project_root, *args, **kwargs):
+        calls.append(args[0] if args else "")
+        return await real_run_git(project_root, *args, **kwargs)
+
+    monkeypatch.setattr(git_delivery, "run_git", recording_run_git)
+
+    poll_count = {"n": 0}
+
+    def is_cancelled() -> bool:
+        poll_count["n"] += 1
+        # Only report cancelled once staging has actually happened -- if the
+        # checkpoint fired earlier than intended, "add" would never appear
+        # in `calls` at all.
+        return "add" in calls
+
+    outcome = await deliver_changes(
+        project_root=tmp_path,
+        delivery=_delivery(branch="feature/uc-201"),
+        settings=_settings(),
+        task_id="t-cancel-2",
+        issue_ref=None,
+        engine="claude",
+        send_log=_collect_logs,
+        is_cancelled=is_cancelled,
+    )
+
+    assert "add" in calls
+    assert "commit" not in calls
+    assert outcome.outcome == "refused"
+    assert outcome.reason == "cancelled_before_commit"
+    # Polled exactly once: this module reads the live value at the
+    # checkpoint, it does not loop or re-poll.
+    assert poll_count["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_arriving_after_the_commit_checkpoint_does_not_stop_the_push(tmp_path: Path, monkeypatch):
+    """The other half of F34's own trade-off, stated in this module's
+
+    docstring: once the pre-commit checkpoint has already passed, a cancel
+    becoming true afterward (e.g. while `git push` is running) must not tear
+    anything down -- the push still completes and is still verified.
+    """
+    import agent.codex_bridge_agent.git_delivery as git_delivery
+
+    origin = tmp_path.parent / "origin-cancel.git"
+    _run(["git", "init", "-q", "--bare", "-b", "development", str(origin)], tmp_path.parent)
+
+    repo = tmp_path / "work"
+    repo.mkdir()
+    _init_repo(repo, branch="development")
+    _run(["git", "remote", "add", "origin", str(origin)], repo)
+    _run(["git", "push", "origin", "development"], repo)
+    (repo / "app.py").write_text("print('changed')\n", encoding="utf-8")
+
+    real_run_git = git_delivery.run_git
+    cancelled_flag = {"value": False}
+
+    async def push_time_cancel_run_git(project_root, *args, **kwargs):
+        result = await real_run_git(project_root, *args, **kwargs)
+        if "commit" in args:
+            # The cancel arrives AFTER the pre-commit checkpoint has already
+            # been read and passed -- i.e. too late to refuse. `commit` is
+            # invoked as `-c user.name=... -c user.email=... commit -m ...`,
+            # so `args[0]` is `-c`, not `commit` -- membership, not a
+            # positional check, the same way the existing force-flag test
+            # in this file already scans commit calls.
+            cancelled_flag["value"] = True
+        return result
+
+    monkeypatch.setattr(git_delivery, "run_git", push_time_cancel_run_git)
+
+    outcome = await deliver_changes(
+        project_root=repo,
+        delivery=_delivery(branch="feature/uc-202", allow_push=True, base_branch="development"),
+        settings=_settings(),
+        task_id="t-cancel-3",
+        issue_ref=None,
+        engine="claude",
+        send_log=_collect_logs,
+        is_cancelled=lambda: cancelled_flag["value"],
+    )
+
+    assert outcome.outcome == "committed_and_pushed"
+    assert outcome.pushed is True
+    assert outcome.remote_sha == outcome.commit
+
+
+@pytest.mark.asyncio
+async def test_no_is_cancelled_callback_behaves_exactly_like_before(tmp_path: Path):
+    """Backward compatibility: every caller that predates F34 (this module's
+
+    own materialize call site, and every other test in this file) never
+    passes `is_cancelled` at all -- confirms the default is "never
+    cancelled", not a crash on a missing argument.
+    """
+    _init_repo(tmp_path, branch="feature/uc-203")
+    (tmp_path / "app.py").write_text("print('changed')\n", encoding="utf-8")
+
+    outcome = await deliver_changes(
+        project_root=tmp_path,
+        delivery=_delivery(branch="feature/uc-203"),
+        settings=_settings(),
+        task_id="t-no-cancel",
+        issue_ref=None,
+        engine="claude",
+        send_log=_collect_logs,
+    )
+
+    assert outcome.outcome == "committed_only"
+    assert outcome.commit is not None
