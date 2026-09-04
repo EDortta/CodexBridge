@@ -301,7 +301,7 @@ class Settings(BaseSettings):
     def effective_oauth_issuer(self) -> str:
         return (self.oauth_issuer_url or self.public_base_url).rstrip("/")
 
-    model_config = SettingsConfigDict(env_prefix="CODEX_BRIDGE_", env_file=".env")
+    model_config = SettingsConfigDict(env_prefix="CODEX_BRIDGE_", env_file=".env", extra="ignore")
 
 
 settings = Settings()

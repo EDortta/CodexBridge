@@ -32,3 +32,17 @@ def test_a_replay_window_at_the_documented_ceiling_is_accepted(field) -> None:
 def test_a_negative_replay_window_is_rejected(field) -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **{field: -1})
+
+
+def test_settings_ignores_unknown_or_cross_prefixed_env_fields() -> None:
+    # Ensures worktree-generated .env (e.g. from awt with CODEX_BRIDGE_AGENT_* or UNKNOWN_*)
+    # does not fail validation due to extra fields.
+    settings = Settings(_env_file=None, unknown_custom_field="value", agent_custom="value")
+    assert settings.app_name == "codex-bridge-gateway"
+
+
+def test_agent_settings_ignores_unknown_env_fields() -> None:
+    from agent.codex_bridge_agent.config import AgentSettings
+
+    agent_settings = AgentSettings(_env_file=None, unknown_agent_field="value")
+    assert agent_settings.executor_id == "T610"
