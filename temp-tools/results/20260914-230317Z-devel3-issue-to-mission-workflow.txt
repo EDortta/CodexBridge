@@ -1,0 +1,543 @@
+=== CodexBridge #44 issue-to-Mission implementation ===
+timestamp: 2026-09-14T20:03:17-03:00
+host: devel3
+branch: development
+head-before: 79e3d7760c9452f4ab2d7005d5c499629f6a303d
+
+--- status before ---
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/results/20260914-230317Z-devel3-issue-to-mission-workflow.txt
+
+--- codex version ---
+codex-cli 0.154.0
+
+--- Codex implementation run ---
+OpenAI Codex v0.154.0
+--------
+workdir: /home/esteban/Sync/Projects/AI/CodexBridge
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a0a229-25a4-7a70-a4c4-3479a1a8ba83
+--------
+user
+You are implementing CodexBridge issue #44 on the CURRENT development checkout. Implement the feature; do not stop at planning.
+
+Source issue #44: "Implement issue-to-mission development workflow".
+
+Objective:
+Allow an operator to select an issue and tell CodexBridge to resolve it as one governed, durable Mission.
+
+Existing foundations already present and MUST be reused rather than duplicated:
+- durable Mission aggregate from #43 is complete and green;
+- provider-neutral local issue/epic APIs and MCP tooling from #78 exist;
+- SCM/GitHub binding and executor-owned external operations from #79/#80 exist;
+- start_development_task / node routing baseline exists;
+- Mission, Task/Session, Bridge Node, Executor and Engine are distinct concepts;
+- security rules: no generic shell, no path leakage, no provider secrets to coding agents, authorization fail-closed, approval gates preserved.
+
+Required workflow:
+1. Resolve project and source issue through the provider-neutral issue integration already in the repo. Do not hard-wire GitHub as the domain owner.
+2. Snapshot the execution-relevant source issue state: source identity/provider/ref, revision/version signal when available, title, body/description, comments that matter to execution, labels and dependency references supported by the existing model/provider layer.
+3. Persist that snapshot or an immutable canonical representation tied to the Mission so later issue edits do not silently rewrite the Mission's planning basis.
+4. Build Mission objective/constraints from the issue snapshot while preserving the durable Mission identity.
+5. Route through existing planning/review policy and node/project authorization. Do not bypass policy to make the workflow convenient.
+6. Schedule/route the first execution attempt using the existing Mission/Task machinery.
+7. Ensure delivery evidence remains attached to the Mission/attempt and can later be linked back to the source issue.
+8. Detect material source-issue change after Mission creation. Surface a clear replan/decision condition; do not silently continue on stale intent.
+9. Never close the source issue solely because the agent process/task exited successfully. Closure/update must remain an explicit policy-controlled external operation with delivery evidence.
+
+Idempotency requirement:
+Repeated equivalent operator requests for the same project + source issue + intent must not create duplicate active Missions. Use the repository's existing idempotency/concurrency conventions; do not invent an unsafe global singleton rule. A genuinely new run after a completed/cancelled Mission should remain possible by explicit intent/revision/key.
+
+API/MCP/operator behavior:
+- Add the narrowest operator-facing REST and/or MCP entrypoint consistent with existing architecture so a caller can say effectively `resolve issue X for project Y`.
+- ChatGPT and future MOBO clients must use the same domain service/store path.
+- Responses must return traceable mission_id, source issue identity/snapshot metadata, current state and relevant task/attempt identifiers without exposing local filesystem paths, commands or provider secrets.
+- Preserve current API compatibility. If public contract changes, bump/publish the next contract version using established repository scripts/conventions and update tests/docs/codemap.
+
+Data model / persistence:
+- Prefer adding explicit source snapshot fields/table/entity only if needed for durability and immutability. Do not overload TaskModel.
+- If schema changes are needed, add the NEXT migration after current migrations and cover upgrade from existing databases. Never rely on create_all as migration.
+- Keep append-only Mission timeline events for creation/material issue change/replan conditions.
+
+Testing acceptance:
+Add or repair tests proving at least:
+- one request creates one durable Mission linked to the source issue snapshot;
+- repeated equivalent request is idempotent and returns/reuses the same active Mission rather than duplicating it;
+- a second deliberate run can be created when policy/idempotency key/revision says it is new intent;
+- snapshot survives issue changes and restart/database reload;
+- material source change while running is detected and produces waiting-human/blocked/replan decision semantics rather than silently mutating objective;
+- source issue is NOT auto-closed merely because execution completes;
+- project/node authorization remains enforced;
+- response/MCP surfaces do not leak local paths, raw commands or provider credentials;
+- existing Mission, Session, issue, SCM/forge and contract tests remain green.
+
+Implementation rules:
+- inspect current code/tests/docs before editing;
+- modify the checkout directly;
+- do not commit, push, reset, checkout another branch, or alter credentials;
+- do not weaken/delete tests to obtain green;
+- do not install/upgrade global dependencies;
+- reuse existing provider-neutral issue and SCM abstractions;
+- use terminology from issue #81: Mission, Bridge Node, Executor, Engine, Project, Workspace, SCM provider/repository host; avoid introducing new operator-facing jargon.
+
+Run focused tests while working, then at minimum:
+python3 -m pytest -q tests/integration/test_missions.py tests/integration/test_mcp_epics_issues.py tests/integration/test_forge_wiring.py tests/integration/test_start_development_task.py 2>/dev/null || true
+python3 -m pytest -q tests/unit/test_apply_migrations.py tests/unit/test_schema_guard.py
+python3 -m pytest -q tests/contract
+python3 -m pytest -q
+
+governancekit --root . map
+
+At the end print exactly:
+ISSUE_TO_MISSION:
+IDEMPOTENCY:
+SNAPSHOT_AND_DRIFT:
+AUTHORIZATION:
+CONTRACT:
+MIGRATION:
+FOCUSED_TESTS:
+CONTRACT_TESTS:
+FULL_SUITE:
+BLOCKERS:
+FILES_CHANGED:
+codex
+Esteban, vou começar pelos gates do projeto nesta própria checkout: identidade, placeholders, concorrência e índice de leitura. Depois disso entro no código e implemento diretamente, sem commit/push/deploy.
+exec
+/bin/bash -lc "grep -rnE '\\{\\{[A-Z][A-Z0-9_]*\\}\\}' AGENTS.md .docs/" in /home/esteban/Sync/Projects/AI/CodexBridge
+ exited 1 in 0ms:
+exec
+/bin/bash -lc "test -f .governancekit-identity.json && sed -n '1,220p' .governancekit-identity.json || true" in /home/esteban/Sync/Projects/AI/CodexBridge
+ succeeded in 0ms:
+{
+  "operator_name": "Esteban",
+  "host_id": "devel3",
+  "instance_path": "/home/esteban/Sync/Projects/AI/CodexBridge",
+  "sibling_path": "",
+  "assigned_ports": [],
+  "branch_ownership": "development"
+}
+
+exec
+/bin/bash -lc 'date +%H:%M' in /home/esteban/Sync/Projects/AI/CodexBridge
+ succeeded in 0ms:
+20:03
+
+exec
+/bin/bash -lc "sed -n '1,220p' /home/esteban/.codex/memories/MEMORY.md" in /home/esteban/Sync/Projects/AI/CodexBridge
+ succeeded in 0ms:
+# Task Group: job-outreach Elena supervised Tatão persona battery and iClinic alert interpretation
+
+scope: use when interpreting related inbound CRM email without repeated alerts, or running the real Tatão WhatsApp persona battery with consent, live critique, objective evaluation, and controlled auto-cure
+applies_to: cwd=/home/esteban/Sync/Projects/InovacaoSistemas/job-outreach; reuse_rule=checkout-, real-contact-, and runtime-sensitive: re-check the actual chat target, persistent state, quota/window, timer, agent stability, and branch before sending, scheduling, or calling the system healthy
+
+## Task 1: consolidate iClinic inbound thread and suppress duplicate urgency alerts, success
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-09T23-15-59-vb4P-job_outreach_tatao_bateria_24_testes_autocura_iclinic.md (cwd=/home/esteban/Sync/Projects/InovacaoSistemas/job-outreach, rollout_path=/home/esteban/.codex/sessions/2026/09/09/rollout-2026-09-09T20-16-00-01a08874-ef69-76a2-8b00-d3513e1836bf.jsonl, updated_at=2026-09-10T00:14:19+00:00, thread_id=01a08874-ef69-76a2-8b00-d3513e1836bf, one outbound and three distinct iClinic replies confirmed)
+
+### keywords
+
+- iClinic, data/outreach.db, `_ja_avisou_algo_tao_urgente`, `_process_inbound`, Message-ID, In-Reply-To, References, `fetch_since`, BODY.PEEK[], `Alerta suprimido (já avisado)`, IMAP, rc=124
+
+## Task 2: implement and publish 24-scenario Tatão battery with evaluation and auto-cure, success
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-09T23-15-59-vb4P-job_outreach_tatao_bateria_24_testes_autocura_iclinic.md (cwd=/home/esteban/Sync/Projects/InovacaoSistemas/job-outreach, rollout_path=/home/esteban/.codex/sessions/2026/09/09/rollout-2026-09-09T20-16-00-01a08874-ef69-76a2-8b00-d3513e1836bf.jsonl, updated_at=2026-09-10T00:14:19+00:00, thread_id=01a08874-ef69-76a2-8b00-d3513e1836bf, commit `63d5aae` published to `development` and `main`; focused tests passed)
+
+### keywords
+
+- Tatão, Elena, `persona_test_control.py`, PERSONA_TEST_TATAO_CHAT, AGENT_TEST_COLD_CONTACT_JID, awaiting_acceptance, awaiting_tatao_evaluation, awaiting_autocure, needs_revision, `persona-test-state.json`, `tatao-battery.jsonl`, `run-tatao-persona-battery.py`, OnCalendar, systemd-analyze, ConnectionRefusedError, 63d5aae
+
+## Task 3: recover the 1:1 review result and diagnose Elena DMs, calendar, and escalation, partial
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-09T15-33-58-ceSO-revisao_canal_1a1_e_diagnostico_agenda_elena.md (cwd=/home/esteban/Sync/Projects/InovacaoSistemas/job-outreach, rollout_path=/home/esteban/.codex/sessions/2026/09/09/rollout-2026-09-09T12-33-58-01a086cd-efb6-78a0-8acf-3f36f5e65c8e.jsonl, updated_at=2026-09-09T18:11:56+00:00, thread_id=01a086cd-efb6-78a0-8acf-3f36f5e65c8e, diagnostic only; no formatting/rescheduling implementation)
+
+### keywords
+
+- canal 1:1, `concilio-canal-potavel.md`, `ultimo.json`, 7,16, 7,58, 72 conversas, `_verify_grounded`, `calendar-pending.json`, `_handle_meeting_request`, `calendar free-slots`, `calendar book`, Google Calendar, `93012499628062@lid`, remarcação
+
+## User preferences
+
+- when inbound iClinic replies were repeating, the user said “a interação pelo e-mail deve ser interpretada” -> treat related responses as one conversation, preserve history, and alert only genuinely new information. [Task 1]
+- when requesting a real supervised scenario, the user wanted “agora você é fulano/a...”, consent, critique “ao vivo,” and Tatão’s objective evaluation -> identify character, role, and company; require explicit `SIM`; then clearly mark critique and obtain the evaluation before advancing. [Task 2]
+- when the user required that critique + evaluation “auto-curem a Elena para a seguinte interação” and set “não mais do que quatro por dia,” except explicit consent -> persist guidance, apply it to the next interaction, retain the change/test record, and enforce the quota/window in system state rather than only documentation. [Task 2]
+- when asking “como ficamos na revisão do 1:1” -> give an evidence-based status that distinguishes the raw score, corrected score, and a genuinely new cycle. [Task 3]
+- when the user said “falta um pouco de formatação”, wanted dates as “2026-SET-11 às 11:00”, and said “acompanha os logs” -> operator DMs need short labeled paragraphs and human-readable dates; for a live test, follow inbound, processing, outbound, receipt, and final state before reporting. [Task 3]
+- when a contact asks to change an online meeting -> Elena should conduct remarcação and make clear she consulted the operator’s Google Calendar before offering slots; event context must be human-readable (contact, company, focus, location, salary discussion). [Task 3]
+
+## Reusable knowledge
+
+- `data/outreach.db` showed one outbound iClinic email on 02/09 and three distinct replies on 02/09, 04/09, and 09/09: the issue was fragmented/repeated alerts, not multiple sends. The watcher uses `Message-ID`, `In-Reply-To`/`References`, IMAP `SINCE`, and `BODY.PEEK[]`; suppression does not delete the stored message. [Task 1]
+- `tests/scenarios/helena-cold-outreach-personas.md` contains 24 scenarios (#1–#24), although the old contract said 12. `wa-hub-client/src/persona_test_control.py` persists consent, active state, Tatão evaluation, auto-cure, revision, quota, and approval. [Task 2]
+- Tatão evaluates `naturalidade`, `clareza`, `fidelidade`, `relevancia`, `conforto`, `confianca`, `continuidade`, `objetivo`, and `geral` from 0–10. Critical dimensions `naturalidade`, `curriculum`, `personality`, `boundary`, `escalation`, `privacy`, `context`, and `meeting` must all be >=8 with no critical identity/privacy/context/escalation failure. [Task 2]
+- Runtime artifacts: unversioned `wa-hub-client/data/persona-test-state.json`; audit log `reports/personas/tatao-battery.jsonl`; idempotent scheduler `scripts/run-tatao-persona-battery.py`. The real recipient is exclusively `PERSONA_TEST_TATAO_CHAT`, never simulation constant `AGENT_TEST_COLD_CONTACT_JID`; messages received outside the start window can still be answered, but no new scenario may open. [Task 2]
+- The deployed exception opened at most one scenario on 09/09 and resumed 10/09 and 11/09 at 09:15 BRT, with new openings through 16:30 and normal limit four/day. Final observed state was scenario #1 (Mariana Lopes / SoftPrime Tecnologia) in `awaiting_acceptance`. [Task 2]
+- The 1:1 battery is 24 scenarios × 3 passes = 72 conversations; approval is 9/10, no vetoes, no pass below 7, and no scenario average below 8. The corrected reading was 7.58/10 with zero real vetoes, still failed; `ultimo.json` retains the superseded raw 7.16/five-false-positive reading. Do not call 7.58 a new cycle. [Task 3]
+- Current meeting flow is `agent.py::_handle_meeting_request`: read-only `calendar free-slots --limit 3`, numeric selection -> `calendar book`, persistent state `data/calendar-pending.json`. Google Calendar access and `America/Sao_Paulo` were confirmed; the remaining issue is UX/workflow, not access. [Task 3]
+
+## Failures and how to do differently
+
+- symptom: full IMAP enumeration times out after connect (`rc=124`) -> cause: incomplete mailbox read -> fix: do not turn partial evidence into destructive action or an inventory-complete claim; use the confirmed thread/data instead. [Task 1]
+- symptom: agent has an initial PID after `ensure-up.sh --restart` but dies with `ConnectionRefusedError` to the shared hub -> cause: transient hub unavailability -> fix: verify with `ps`/`kill -0` after several seconds and inspect logs; the detached `nohup setsid python3 src/agent.py` relaunch was stable in this rollout. [Task 2]
+- symptom: combined-date `OnCalendar` fails validation -> cause: `OnCalendar=2026-09-10,2026-09-11 ...` is invalid -> fix: use separate `OnCalendar` directives and validate with `systemd-analyze calendar` and `systemd-analyze verify`. [Task 2]
+- symptom: old tests assume four scenarios on the exceptional date or an out-of-window start -> cause: stale test assumptions -> fix: align focused tests to the adopted quota/window and do not mark completion when the critical gate fails. [Task 2]
+- symptom: reports disagree about 1:1 score -> cause: raw JSON was not updated after a rubric correction -> fix: label raw versus corrected artefacts and persist seat justifications before a new valid measurement. [Task 3]
+- symptom: Elena says the operator must reschedule, shows ISO/JID-only agenda details, or a test is declared complete too early -> cause: rescheduling has no explicit path, presentation leaks implementation values, and logs were not followed end-to-end -> fix: implement and test an explicit remarcação path and human event rendering; track the full message lifecycle. This rollout diagnosed, but did not fix, those items. [Task 3]
+
+# Task Group: wa-hub Elena external-contact auto-claim, persistent context, and production deployment
+
+scope: use when external Elena contacts arrive through PN/LID aliases, need a deterministic claim owner/history, or an authorized wa-hub production release is requested
+applies_to: cwd=/home/esteban/Sync/Projects/wa-hub; reuse_rule=checkout-, production-, and dirty-worktree-sensitive: review governance/concurrency and preserve unrelated local files; before merging `development`, confirm whether accumulated branch commits are in scope
+
+## Task 1: implement PR-E53 auto-claim and external-contact context, success
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-09T17-15-42-lfuO-pr_e53_auto_claim_context_production_deploy.md (cwd=/home/esteban/Sync/Projects/wa-hub, rollout_path=/home/esteban/.codex/sessions/2026/09/09/rollout-2026-09-09T14-15-42-01a0872b-15c0-7802-80f4-29b54f917caa.jsonl, updated_at=2026-09-09T17:48:03+00:00, thread_id=01a0872b-15c0-7802-80f4-29b54f917caa, implemented, deployed, and health-checked)
+
+### keywords
+
+- PR-E53, number-claims.json, conversationKey, PN, LID, canonical identity, `/messages/send`, `/messages/ask`, `/messages/send-media`, number-claim-registry.ts, WebSocket, replay, bc723f2, aecc51e, `./run.sh deploy`, Bad MAC
+
+## Task 2: close delivery session and preserve the next real-world test, success
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-09T17-15-42-lfuO-pr_e53_auto_claim_context_production_deploy.md (cwd=/home/esteban/Sync/Projects/wa-hub, rollout_path=/home/esteban/.codex/sessions/2026/09/09/rollout-2026-09-09T14-15-42-01a0872b-15c0-7802-80f4-29b54f917caa.jsonl, updated_at=2026-09-09T17:48:03+00:00, thread_id=01a0872b-15c0-7802-80f4-29b54f917caa, handoff/RESUME updated; merged worktree removed)
+
+### keywords
+
+- handoff.md, RESUME.md, docs/napkin-lessons.md, PN/LID real conversation, worktree, close session
+
+## User preferences
+
+- when the user authorized “commit merge push restart em produção” -> execute the complete delivery cycle while preserving unrelated files. [Task 1]
+- when the user said “fecha sessão” -> update handoff/RESUME/lessons, inventory worktrees, and leave one explicit next operational action. [Task 2]
+
+## Reusable knowledge
+
+- External claims persist in `number-claims.json`; `conversationKey` is a stable hash of `clientId` plus canonical identity. PN/LID aliases aggregate the history, and deterministic conflict resolution occurs before send. The WS/replay envelope carries owner, aliases, conversationKey, routedBy, correlation, and audio/transcription fields. [Task 1]
+- Auto-claim covers `/messages/send`, `/messages/ask`, and `/messages/send-media`. Focused validation: `npm run validate`, registry test 2/2, and `git diff --check` passed. `validate-contracts.py` could not complete without a TTY and was not claimed approved. [Task 1]
+- Published path: commit `bc723f2`, `main` merge `aecc51e`, push both branches, then `./run.sh deploy`; container was healthy and `/health` returned connected. Post-deploy Baileys `Bad MAC` warnings occurred during replay but session stabilized. The next recorded check is one real external Elena PN/LID conversation. [Task 1][Task 2]
+
+## Failures and how to do differently
+
+- symptom: a merge from `development` brings accumulated earlier commits -> cause: branch scope was not confirmed -> fix: ask whether all accumulated commits or only the issue commit should be promoted. [Task 1]
+- symptom: formal council is unavailable or replay logs contain `Bad MAC` -> cause: checkout capability/transient Baileys session state -> fix: record an auditable kit waiver; distinguish warnings from final connected health and validate the actual health endpoint. [Task 1]
+
+# Task Group: IP2 HTML5/vanilla-JS editorial operations guide and Git publication
+
+scope: use when documenting IP2 translation, review, covers, scheduling, or silent WordPress publication in a practical self-contained page, then publishing the requested branch workflow
+applies_to: cwd=/home/esteban/Sync/Projects/IP2; reuse_rule=checkout- and publication-sensitive: confirm effective checkout/script availability and preserve pre-existing submodule changes; a WordPress post publish must be verified separately from static deployment
+
+## Task 1: create and publish consultable editorial operations guide, success
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-09T23-55-08-dNI8-ip2_guia_operacao_editorial_html5_js.md (cwd=/home/esteban/Sync/Projects/IP2, rollout_path=/home/esteban/.codex/sessions/2026/09/09/rollout-2026-09-09T20-55-08-01a08898-c40d-7c00-ad2e-bcd6f2662a3c.jsonl, updated_at=2026-09-10T00:06:50+00:00, thread_id=01a08898-c40d-7c00-ad2e-bcd6f2662a3c, `fc81608` fast-forwarded and pushed to both branches)
+
+### keywords
+
+- IP2, `docs/operacao-editorial.html`, HTML5, JavaScript vanilla, localStorage, `scripts-wp/`, `schedule_article.py`, email_suppressed, WordPress REST, `next-revision-name.sh`, development, main, fc81608, `git diff --check`, `new Function`
+
+## Task 2: prepare the denominational-series blog campaign, unexecuted
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-11T00-26-51-XsJj-preparar_serie_denominacoes_blog.md (cwd=/home/esteban/Sync/Projects/IP2, rollout_path=/home/esteban/.codex/sessions/2026/09/10/rollout-2026-09-10T21-26-51-01a08ddc-2c52-7a01-85bb-3db05e33f531.jsonl, updated_at=2026-09-11T00:30:39+00:00, thread_id=01a08ddc-2c52-7a01-85bb-3db05e33f531, request only; no files edited)
+
+### keywords
+
+- denominacoes-resumo.md, denominacoes-serie-1-corinto.md, denominacoes-serie-2-a-cruz-no-centro.md, denominacoes-serie-3-unidade-sem-monotonia.md, denominacoes-serie-4-no-concreto.md, `blog/artigos`, revisão editorial, traduções, imagens, quartas-feiras, 0610
+
+## User preferences
+
+- when the user asked “resume isso tudo em uma HTML5/JS vanilla que eu possa consultar” -> provide a practical, searchable, self-contained reference rather than chat links or explanation only. [Task 1]
+- when explicitly authorizing “cria a branch development. cria a documentação. faz merge na main. push” -> complete the requested cycle: branch, documentation, focused commit, fast-forward `main`, and push both branches. [Task 1]
+- when treating `denominacoes-resumo.md` plus articles 1–4 as a series -> keep review, translations, title/phrase image treatment, and release calendar coherent as one campaign; leave the work in Git for human review. Confirm ambiguous calendar wording such as “0610” before scheduling. [Task 2]
+
+## Reusable knowledge
+
+- `docs/operacao-editorial.html` covers preparation, translation, review, media/covers, scheduling/publication, silent publication, validation, and file map. Its HTML5/CSS/vanilla JS includes search/filter, a `localStorage` checklist, copy-command buttons, and responsive layout. [Task 1]
+- Important paths: `blog/artigos/*.md`, `blog/artigos/traducoes/<slug>/`, `blog/artigos/media/`, `admin/api/main.py`, `admin/api/providers/translation.py`, `admin/api/services/covers.py`, and `scriptorium/tools/next-revision-name.sh`. Admin endpoints include `/articles/<slug>/translate` and `/articles/<slug>/covers`; translation attempts NVIDIA then falls back to OpenAI. [Task 1]
+- `schedule_article.py` accepts `--status publish`, `--date`, `--languages`, `--skip-translate`, and `--image-by-lang`. Confirm post status, language, date, URLs, and attachments through WordPress REST; silent publication needs explicit `email_suppressed: true`. This is distinct from a static-mirror deploy. [Task 1]
+- `scripts-wp/` was referenced but absent in this checkout; do not present commands from it as executable until the checkout supplying them is confirmed. Commit `fc81608` changed only the guide; pre-existing `blog` and `obras` changes remained preserved. [Task 1]
+- Target files for the pending campaign are the five `blog/artigos/denominacoes-*.md` files named in Task 2. Infer image conventions from existing repository images; no further image specification or execution evidence exists. [Task 2]
+
+## Failures and how to do differently
+
+- symptom: `apply_patch` rejects a large HTML file with `invalid hunk` -> cause: internal lines lack hunk `+` prefixes -> fix: generate the content as a string and correctly prefix every added line before applying. [Task 1]
+- symptom: documentation suggests WordPress scripts can run locally -> cause: `scripts-wp/` is absent from the current checkout -> fix: state the checkout boundary and confirm the executable source before running it. [Task 1]
+- symptom: push appears started but remote status is unknown -> cause: asynchronous push was not awaited -> fix: wait for completion and verify remote branches before continuing. [Task 1]
+- symptom: a series request is treated as completed -> cause: the rollout records only the request -> fix: inspect source articles and existing images, clarify languages/calendar, perform review/translations/assets, verify generated files, then commit for review. [Task 2]
+
+# Task Group: alt-claude operational wrapper, installer/Pages site, and slave executor
+
+scope: use when aligning the operational wrapper, comparing its local copies, publishing the `alt-claude` installer/Pages site, or querying `alt-claude-slave`
+applies_to: cwd=/home/esteban/scripts/alt-claude and /home/esteban/Sync/Projects/AI/alt-claude; reuse_rule=host-, checkout-, installed-wrapper-, and credential-sensitive: never expose credential contents; distinguish the operational scripts copy from the documented/UI project copy, and re-check effective provider behavior before claiming success
+
+## Task 1: unify Copilot configuration and repair the installed wrapper, success
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-08T13-32-15-eNvi-corrigir_alt_claude_copilot_codex_gateways.md (cwd=/home/esteban/scripts/alt-claude, rollout_path=/home/esteban/.codex/sessions/2026/09/08/rollout-2026-09-08T10-32-15-01a08138-25bf-7c62-9291-a294701060d8.jsonl, updated_at=2026-09-08T14:57:49+00:00, thread_id=01a08138-25bf-7c62-9291-a294701060d8, Copilot `ping` -> `pong` validated)
+
+### keywords
+
+- alt-claude, copilot-api v2.5.3, COPILOT_API_HOME, copilot.env, `debug --api-home PATH --json`, `start --api-home PATH --port PORT`, `ℹ Migrating...`, --bare, ENABLE_CLAUDEAI_MCP_SERVERS, ALT_CLAUDE_NO_BARE, Text file busy
+
+## Task 2: install and authenticate the Codex proxy, success
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-08T13-32-15-eNvi-corrigir_alt_claude_copilot_codex_gateways.md (cwd=/home/esteban/scripts/alt-claude, rollout_path=/home/esteban/.codex/sessions/2026/09/08/rollout-2026-09-08T10-32-15-01a08138-25bf-7c62-9291-a294701060d8.jsonl, updated_at=2026-09-08T14:57:49+00:00, thread_id=01a08138-25bf-7c62-9291-a294701060d8, account authentication confirmed by user)
+
+### keywords
+
+- claude-codex-proxy v1.0.5, `claude-codex-proxy start`, PORT, `accounts add --no-browser`, `accounts list`, `Unknown command: serve`, `RESOURCE_EXHAUSTED: All accounts rate-limited`, 429
+
+## Task 3: include Gemini (agy) in alt-claude scope, unimplemented
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-08T16-43-19-TGVL-configure_gemini_agy_in_alt_claude.md (cwd=/home/esteban/scripts, rollout_path=/home/esteban/.codex/sessions/2026/09/08/rollout-2026-09-08T13-43-19-01a081e7-13b2-7142-8438-bba8e5c8782d.jsonl, updated_at=2026-09-08T16:44:46+00:00, thread_id=01a081e7-13b2-7142-8438-bba8e5c8782d, request recorded; no edit or validation)
+
+### keywords
+
+- Gemini, agy, alt-claude/alt-claude, configuration, provider
+
+## Task 4: compare the local `alt-claude` copies, success
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-09T21-10-47-BV2p-comparar_versoes_alt_claude_scripts_sync.md (cwd=/home/esteban/scripts, rollout_path=/home/esteban/.codex/sessions/2026/09/09/rollout-2026-09-09T18-10-47-01a08802-4f7e-7cc1-ba5f-f54b8e566861.jsonl, updated_at=2026-09-09T21:13:09+00:00, thread_id=01a08802-4f7e-7cc1-ba5f-f54b8e566861, read-only comparison)
+
+### keywords
+
+- /home/esteban/scripts/alt-claude, /home/esteban/Sync/Projects/AI/alt-claude, `~/.local/bin/alt-claude`, SHA-256, `bash -n`, `--list`, Permission denied, fee503c, cca3d3a
+
+## Task 5: consolidate installer and publish multilingual GitHub Pages landing page, success
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-09T21-15-48-6M2D-alt_claude_installer_github_pages_multilingual_examples.md (cwd=/home/esteban/Sync/Projects/AI/alt-claude, rollout_path=/home/esteban/.codex/sessions/2026/09/09/rollout-2026-09-09T18-15-48-01a08806-e71c-7193-a324-7ed4e4351b63.jsonl, updated_at=2026-09-09T23:37:35+00:00, thread_id=01a08806-e71c-7193-a324-7ed4e4351b63, installer and live Pages content published)
+
+### keywords
+
+- install.sh, install2.sh, ALT_CLAUDE_INSTALL_DIR, 0755, docs/index.html, GitHub Pages, `data-language`, pt-BR, `id="exemplos"`, alt-claude-laguna, alt-claude-nemotron, alt-claude-north-mini-code, cache-control, 63352f3
+
+## Task 6: query `alt-claude-slave` system, models, and repositories, success
+
+### rollout_summary_files
+
+- rollout_summaries/2026-09-13T13-54-21-q0Ha-consultar_status_modelos_repositorios_alt_claude_slave.md (cwd=/home/esteban/Sync/Projects/AI/alt-claude, rollout_path=/home/esteban/.codex/sessions/2026/09/13/rollout-2026-09-13T10-54-21-01a09b0c-2dfd-7343-9985-15d3ffc899c4.jsonl, updated_at=2026-09-13T13:56:09+00:00, thread_id=01a09b0c-2dfd-7343-9985-15d3ffc899c4, executor available; no active task)
+
+### keywords
+
+- mcp__alt_claude_slave, system_status, models_list, repositories_list, task_submit, allowed_files, qwen-coder-3b, qwen-coder-7b, qwen-coder-1.5b, deepseek-coder-lite, Q4_K_M, /srv/alt-claude/repos/alt-claude-slave
+
+## User preferences
+
+- when local providers were being organized, the user asked that they stay “mais ou menos parecidos”, under the same `.env` folder -> keep provider configuration/state under `~/.config/credentials/personal/ai` and reuse an existing login after checking its state rather than requesting another login. [Task 1]
+- when changing the wrapper, the user asked that it always be installed -> synchronize `~/.local/bin/alt-claude` after every source change and verify the installed copy, not just the checkout file. [Task 1]
+- when the user repeated “precisamos usar gemini (agy) em alt-claude/alt-claude tb” -> treat that exact wrapper/path as part of Gemini configuration scope; it remains a request, not a completed implementation. [Task 3]
+
+exec
+/bin/bash -lc 'governancekit --root . concurrency' in /home/esteban/Sync/Projects/AI/CodexBridge
+ succeeded in 449ms:
+Open in this repository (integration branch: development)
+  worktrees: 1    branches carrying unmerged work: 10
+
+  * CodexBridge    development                                                   this session
+    (no worktree)  feature/control-ui-and-mobo-orch                              +4 commits
+    (no worktree)  feature/gh-5/expose-projects-and-project-operational-summary  +3 commits
+    (no worktree)  feature/gh-6/expose-operational-decisions-api                 +1 commit
+    (no worktree)  feature/gh-7/expose-missions-and-mission-control-api          +1 commit
+    (no worktree)  feature/gh-73/control-plane-domain                            +1 commit
+    (no worktree)  feature/gh-8/expose-epics-and-issues-api                      +1 commit
+    (no worktree)  pr22-branch                                                   +1 commit
+    (no worktree)  pr22-review                                                   +1 commit
+    (no worktree)  worktree-agent-a6ccca9046c4c9a4d                              +2 commits
+    (no worktree)  worktree-agent-acdbaeefd3b195d55                              +2 commits
+
+  10 open beyond this session. Working on another one requires the operator's authorization.
+
+HARD STOP: the closing budget is spent. Start no new work — drive handoff / RESUME / napkin to completion.
+
+codex
+Esteban, o gate do próprio projeto bloqueou a implementação agora.
+
+O `governancekit --root . concurrency` reportou **HARD STOP**: orçamento de fechamento já gasto, com **1 worktree ativa** e **10 branches locais com trabalho não mesclado**. Pela regra carregada em `AGENTS.md`, neste estado eu não posso iniciar trabalho novo; só posso conduzir fechamento/handoff até você autorizar explicitamente a exceção ou ajustar o estado de sessão.
+
+ISSUE_TO_MISSION:
+IDEMPOTENCY:
+SNAPSHOT_AND_DRIFT:
+AUTHORIZATION: bloqueado pelo hard stop de governança antes de inspeção/edição
+CONTRACT:
+MIGRATION:
+FOCUSED_TESTS:
+CONTRACT_TESTS:
+FULL_SUITE:
+BLOCKERS: governancekit hard-stop às 20:03 America/Sao_Paulo; 10 frentes abertas além desta sessão
+FILES_CHANGED: nenhum
+
+
+tokens used
+18,693
+Esteban, o gate do próprio projeto bloqueou a implementação agora.
+
+O `governancekit --root . concurrency` reportou **HARD STOP**: orçamento de fechamento já gasto, com **1 worktree ativa** e **10 branches locais com trabalho não mesclado**. Pela regra carregada em `AGENTS.md`, neste estado eu não posso iniciar trabalho novo; só posso conduzir fechamento/handoff até você autorizar explicitamente a exceção ou ajustar o estado de sessão.
+
+ISSUE_TO_MISSION:
+IDEMPOTENCY:
+SNAPSHOT_AND_DRIFT:
+AUTHORIZATION: bloqueado pelo hard stop de governança antes de inspeção/edição
+CONTRACT:
+MIGRATION:
+FOCUSED_TESTS:
+CONTRACT_TESTS:
+FULL_SUITE:
+BLOCKERS: governancekit hard-stop às 20:03 America/Sao_Paulo; 10 frentes abertas além desta sessão
+FILES_CHANGED: nenhum
+
+
+
+--- status after Codex ---
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/results/20260914-230317Z-devel3-issue-to-mission-workflow.prompt.txt
+?? temp-tools/results/20260914-230317Z-devel3-issue-to-mission-workflow.txt
+
+--- focused #44 tests ---
+........................................................................ [ 47%]
+........................................................................ [ 94%]
+........                                                                 [100%]
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+152 passed, 2 warnings in 12.07s
+
+--- migration/schema tests ---
+......................                                                   [100%]
+22 passed in 16.97s
+
+--- contract tests ---
+........................................................................ [ 47%]
+........................................................................ [ 94%]
+.........                                                                [100%]
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+153 passed, 2 warnings in 18.96s
+
+--- full suite ---
+........................................................................ [  4%]
+........................................................................ [  9%]
+........................................................................ [ 14%]
+........................................................................ [ 18%]
+........................................................................ [ 23%]
+....................sssssssss........................................... [ 28%]
+........................................................................ [ 33%]
+........................................................................ [ 37%]
+........................................................................ [ 42%]
+........................................................................ [ 47%]
+........................................................................ [ 52%]
+........................................................................ [ 56%]
+........................................................................ [ 61%]
+........................................................................ [ 66%]
+........................................................................ [ 71%]
+........................................................................ [ 75%]
+........................................................................ [ 80%]
+........................................................................ [ 85%]
+........................................................................ [ 90%]
+........................................................................ [ 94%]
+........................................................................ [ 99%]
+........                                                                 [100%]
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1511 passed, 9 skipped, 2 warnings in 111.35s (0:01:51)
+
+--- codemap refresh ---
+Code map written to: /home/esteban/Sync/Projects/AI/CodexBridge/docs/codemap.md
+  197 file(s) · 2195 symbol(s) indexed
+
+--- final status ---
+ M docs/codemap.md
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/results/20260914-230317Z-devel3-issue-to-mission-workflow.prompt.txt
+?? temp-tools/results/20260914-230317Z-devel3-issue-to-mission-workflow.txt
+
+RESULT_CODES codex=0 focused=0 migration=0 contract=0 full=0 codemap=0
+RESULT_FILE=temp-tools/results/20260914-230317Z-devel3-issue-to-mission-workflow.txt

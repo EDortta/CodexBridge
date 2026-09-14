@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 195 file(s) · 2195 symbol(s) indexed
-- Languages: config (2), python (184), shell (9)
+- 197 file(s) · 2195 symbol(s) indexed
+- Languages: config (2), python (184), shell (11)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `temp-tools`, `tests`
 
 ## Governance
@@ -156,6 +156,8 @@ temp-tools/
   05-devel3-validate-durable-missions-python3.sh
   06-devel3-reconcile-mission-files-and-validate.sh
   07-devel3-fix-mission-regressions-and-validate.sh
+  08-devel3-finalize-mission-required-files.sh
+  09-devel3-implement-issue-to-mission-workflow.sh
 tests/
   conftest.py
   contract/
