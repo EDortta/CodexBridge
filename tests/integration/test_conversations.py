@@ -286,8 +286,8 @@ async def test_create_rejects_context_references_spanning_two_projects(api) -> N
     assert response.json()["details"][0]["code"] == "mixed_project"
 
 
-async def test_create_accepts_a_session_decision_or_mission_reference_to_the_same_task(api) -> None:
-    """session/decision/mission all name the same TaskModel row."""
+async def test_create_accepts_session_decision_and_mission_context_references(api) -> None:
+    """The first task attempt keeps id compatibility with its durable mission."""
     task = await make_task(api.factory, "p1")
     for context_type in ("session", "decision", "mission"):
         response = api.post(

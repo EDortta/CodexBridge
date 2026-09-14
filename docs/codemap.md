@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 187 file(s) · 2168 symbol(s) indexed
-- Languages: config (2), python (182), shell (3)
+- 189 file(s) · 2187 symbol(s) indexed
+- Languages: config (2), python (183), shell (4)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `temp-tools`, `tests`
 
 ## Governance
@@ -85,7 +85,7 @@ gateway/
         epics.py  — "Epics — issue #8."
         events.py  — "Near-real-time delivery of what changed, and the backlog behind it — issue #13."
         issues.py  — "Issues — issue #8."
-        missions.py  — "Missions: the mission-control view of the same run Sessions exposes — issue #7."
+        missions.py  — "Missions: durable operator intent with TaskModel execution attempts."
         nodes.py  — "Bridge Nodes — the fleet visibility surface of issue #73, Stage 2."
         notifications.py  — "What this actor wants to be notified about — issue #13."
         probes.py  — "Liveness, readiness and version — what a client asks before anything else."
@@ -128,6 +128,7 @@ gateway/
       issue_render.py  — "Pure markdown renderer for epic materialization -- issue #78, Commit 2a."
       issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
       metrics.py
+      mission_types.py
       notify.py  — "Out-of-band completion notification by email."
       store.py
     version.py  — "The single statement of this application's version."
@@ -149,6 +150,7 @@ shared/
   security.py
 temp-tools/
   01-devel3-refresh-codemap-and-test.sh
+  02-devel3-implement-mission-aggregate.sh
 tests/
   conftest.py
   contract/
@@ -184,7 +186,7 @@ tests/
     test_issue_materialize_result.py  — "`issue.materialize_result` handling in the `/agent/ws` message loop --"
     test_mcp_epics_issues.py  — "The epics/issues MCP tools -- issue #78."
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
-    test_missions.py  — "Missions: the mission-control view of Sessions — issue #7."
+    test_missions.py  — "Missions: durable operator intent with TaskModel execution attempts."
     test_node_enrollment_ws.py  — "Enrolled/revoked nodes at the `/agent/ws` handshake — issue #76 (minimal"
     test_nodes.py  — "Bridge Node fleet visibility — issue #73 Stage 2."
     test_oauth_authorize.py  — "The browser OAuth form — the *other* caller of the password check."
@@ -619,7 +621,7 @@ tests/
 
 ### `gateway/app/api/routes/missions.py`
 
-> Missions: the mission-control view of the same run Sessions exposes — issue #7.
+> Missions: durable operator intent with TaskModel execution attempts.
 
 - **`MissionCancelRequest`** *(class)* — "Issue #36: an operator-typed reason has nowhere to go without this."
 - **`CreateMissionDelivery`** *(class)* — "Wire shape of `shared.protocol.DeliveryRequest` — issue #68/#66."
@@ -627,7 +629,7 @@ tests/
 - **`CreateMissionRequest`** *(class)* — "`POST /api/v1/missions` — issue #68."
 - `list_missions(response, project_id, stage, state, risk, blocked, cursor, limit, principal, session)` *(async function)* — "Missions the caller may see, newest first."
 - `get_mission(mission_id, response, principal, session)` *(async function)*
-- `create_mission(payload, response, idempotency_key, principal, session)` *(async function)* — "Create a mission — the first HTTP exposure of `codexbridge.task.submit`."
+- `create_mission(payload, response, idempotency_key, principal, session)` *(async function)* — "Create a durable mission and its first execution attempt."
 - `get_mission_timeline(mission_id, response, cursor, limit, principal, session)` *(async function)* — "The mission's recorded events, oldest first — the order a narrative reads in."
 - `get_mission_delivery(mission_id, response, principal, session)` *(async function)* — "Branch, head commit, changed-file list and diff statistics — never content."
 - `cancel_mission(mission_id, response, if_match, idempotency_key, body, principal, session)` *(async function)* — "Cancel a mission that is queued, waiting, running or awaiting approval."
@@ -833,6 +835,9 @@ tests/
 - **`DiscoveredResourceModel`** *(class)* — "Something a node can see that Control has not necessarily adopted."
 - **`ProjectModel`** *(class)*
 - **`TaskModel`** *(class)*
+- **`MissionModel`** *(class)* — "Durable operator intent, distinct from execution attempts."
+- **`MissionAttemptModel`** *(class)*
+- **`MissionEventModel`** *(class)*
 - **`EpicModel`** *(class)*
 - **`IssueModel`** *(class)*
 - **`ConversationModel`** *(class)* — "A contextual thread linked to at least one product entity — issue #10."
@@ -970,6 +975,13 @@ tests/
 
 - `render_metrics()`
 
+### `gateway/app/services/mission_types.py`
+
+- **`MissionState`** *(class)*
+- **`MissionTransitionError`** *(class)*
+- `mission_state_from_task_state(task_state)`
+- `assert_legal_transition(current, target)`
+
 ### `gateway/app/services/notify.py`
 
 > Out-of-band completion notification by email.
@@ -989,13 +1001,15 @@ tests/
 - `get_project_for_caller(session, project_id, project_ids)` *(async function)* — "A project the caller may see, or None."
 - `executors_by_project(session, project_ids)` *(async function)* — "`{project_id: [executors allowed to run it]}`, ordered by executor id."
 - `executors_allowing_project(session, project_id)` *(async function)* — "Executors whose allowlist names this one project. See `executors_by_project`."
-- `project_task_counts(session, project_ids)` *(async function)* — "Per-project task counts, in one grouped query rather than one query per row."
+- `project_task_counts(session, project_ids)` *(async function)* — "Per-project task/session and durable mission counts."
 - `latest_project_activity_at(session, project_id)` *(async function)* — "The most recent task creation time for a project, or None if it has none."
 - `get_task(session, task_id)` *(async function)*
 - `list_recent_tasks(session, limit, states)` *(async function)* — "`states` narrows to a caller-given set of `TaskState` values."
 - `effective_task_modes(session, executor, project)` *(async function)* — "The task modes `executor` may actually run on `project`, right now."
 - `require_active_node_project_authorization(session, executor, project, mode)` *(async function)* — "Fail closed for an explicitly Node-directed task submission."
-- `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email, can_approve_push, require_active_binding)` *(async function)*
+- `transition_mission_state(session, mission, target_state)` *(async function)*
+- `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email, can_approve_push, require_active_binding, mission_id, attempt_reason)` *(async function)*
+- `retry_mission(session, mission_id)` *(async function)*
 - `mark_executor_connected(session, executor_id, connected)` *(async function)*
 - `executor_is_live(executor)` — "Whether an executor should be presented as connected right now."
 - `ensure_node_for_executor(session, executor)` *(async function)* — "The Bridge Node bound to `executor`, creating and binding one if needed."
@@ -1042,6 +1056,10 @@ tests/
 - `store_message_receipt(session, message_id, executor_id, message_type)` *(async function)*
 - `list_tasks_page(session)` *(async function)* — "Tasks the caller may see, newest first, over-fetched by one."
 - `get_task_for_projects(session, task_id, project_ids)` *(async function)* — "A task the caller may see, or None."
+- `get_mission_for_projects(session, mission_id, project_ids)` *(async function)*
+- `get_mission_active_task(session, mission)` *(async function)*
+- `list_mission_attempts(session, mission_id)` *(async function)*
+- `list_mission_events_page(session, mission_id)` *(async function)*
 - `get_recent_logs(session, task_id)` *(async function)* — "The most recent log lines, oldest-first within the slice."
 - `list_tasks_requiring_cancel_replay(session, executor_id)` *(async function)* — "Cancelled tasks whose executor has not yet acknowledged the cancellation."
 - `list_tasks_requiring_control_replay(session, executor_id)` *(async function)* — "Tasks stuck in a pending pause/resume/restart, waiting for a `task.ack`"
@@ -1050,9 +1068,9 @@ tests/
 - `decision_state_of(row)` — "The caller-facing decision state for either source -- `pending`, or"
 - `list_decisions_page(session)` *(async function)* — "Decisions the caller may see, newest first, over-fetched by one (issue"
 - `get_decision_for_projects(session, decision_id, project_ids)` *(async function)* — "A decision the caller may see, or None — "not a decision" included"
-- `mission_risk(task)` — "The mission-control risk level for one task (issue #7). See `_risk_filter_clause`."
-- `mission_stage(task)`
-- `list_missions_page(session)` *(async function)* — "Missions (tasks, in mission-control framing) the caller may see, newest"
+- `mission_risk(mission)` — "The mission-control risk level for one durable mission."
+- `mission_stage(mission)`
+- `list_missions_page(session)` *(async function)* — "Durable missions the caller may see, newest first."
 - `list_task_events_page(session, task_id)` *(async function)* — "A mission's timeline, oldest first — the order a narrative reads in (issue #7)."
 - `list_mobile_events_page(session)` *(async function)* — "Deliverable audit rows after `after`, oldest first, with their project."
 - `audit_cursor_status(session, after)` *(async function)* — "Whether resuming from `after` can be done without a silent gap."
@@ -1712,7 +1730,7 @@ tests/
 - `test_create_with_a_context_reference_in_a_hidden_project_is_not_found(api)` *(async function)* — "Unauthorized entity references are rejected without disclosing hidden resources."
 - `test_create_with_an_unknown_context_id_is_not_found(api)` *(async function)* — "A reference to something that does not exist answers exactly like a hidden one."
 - `test_create_rejects_context_references_spanning_two_projects(api)` *(async function)*
-- `test_create_accepts_a_session_decision_or_mission_reference_to_the_same_task(api)` *(async function)* — "session/decision/mission all name the same TaskModel row."
+- `test_create_accepts_session_decision_and_mission_context_references(api)` *(async function)* — "The first task attempt keeps id compatibility with its durable mission."
 - `test_create_derives_project_id_from_the_context_and_deduplicates(api)` *(async function)*
 - `test_a_project_outside_the_caller_visibility_is_not_found_when_used_as_context(api)` *(async function)*
 - `test_a_retried_conversation_create_does_not_create_a_second_conversation(api)` *(async function)*
@@ -2112,7 +2130,7 @@ tests/
 
 ### `tests/integration/test_missions.py`
 
-> Missions: the mission-control view of Sessions — issue #7.
+> Missions: durable operator intent with TaskModel execution attempts.
 
 - `users_file(tmp_path)`
 - `api(users_file, monkeypatch)` *(async function)* — "A real app over a real database, seeded with two projects."
@@ -2161,8 +2179,14 @@ tests/
 - `test_explain_of_an_invisible_mission_is_not_found(api)` *(async function)*
 - `test_a_token_without_the_submit_scope_cannot_create_a_mission(api)` *(async function)*
 - `test_creating_a_mission_and_reading_it_back(api)` *(async function)* — "Issue #68's Definition of Done, verbatim: create, then GET the same id."
-- `test_create_does_not_reopen_the_identity_question(api)` *(async function)* — "F01 (issue #68's own ARO): no new id space, no new TaskState."
+- `test_created_mission_is_a_real_aggregate_backed_by_a_task_attempt(api)` *(async function)*
 - `test_a_retried_create_replays_instead_of_creating_twice(api)` *(async function)*
+- `test_mission_survives_database_session_restart(api)` *(async function)*
+- `test_mission_api_reads_mission_not_mutated_task_state(api)` *(async function)*
+- `test_retry_creates_a_new_attempt_without_losing_history(api)` *(async function)*
+- `test_illegal_mission_transition_is_refused(api)` *(async function)*
+- `test_mission_timeline_records_attempt_creation_and_completion(api)` *(async function)*
+- `test_mission_response_does_not_leak_command_or_provider_secret(api)` *(async function)*
 - `test_create_resolves_an_executor_automatically_when_none_is_named(api)` *(async function)*
 - `test_an_executor_not_onboarded_for_the_project_is_a_conflict(api)` *(async function)*
 - `test_a_mission_in_an_invisible_project_cannot_be_created(api)` *(async function)*

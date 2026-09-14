@@ -1,9 +1,8 @@
 """Conversations and contextual messaging — issue #10.
 
 A **conversation** is a thread linked to one or more product entities — a
-project, a session/decision/mission (all the same `TaskModel`, under three
-vocabularies — see `docs/api/README.md`'s "Decisions" and "Missions"
-sections), or an issue. Every conversation carries at least one such
+project, a session/decision task, a durable mission, or an issue. Every
+conversation carries at least one such
 **context reference**, resolved and authorization-checked the same way
 `epics.py:link_issue` resolves both sides of an epic-issue link: the route
 loads each referenced entity through the existing `*_for_projects` getter, so
@@ -371,9 +370,10 @@ async def create_conversation(
             entity = await store.get_project_for_caller(session, ref.id, projects)
         elif ref.type == "issue":
             entity = await store.get_issue_for_projects(session, ref.id, projects)
+        elif ref.type == "mission":
+            entity = await store.get_mission_for_projects(session, ref.id, projects)
         else:
-            # "session" and "decision" and "mission" are the same TaskModel
-            # under three vocabularies — see the module docstring.
+            # "session" and "decision" still name TaskModel rows.
             entity = await store.get_task_for_projects(session, ref.id, projects)
         if entity is None:
             raise _context_not_found(ref.type)

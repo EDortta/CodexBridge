@@ -786,48 +786,39 @@ of a concurrent write racing the read that produced the `ETag`.
 `GET /api/v1/missions`, `GET .../{id}`, `GET .../{id}/timeline`,
 `POST .../{id}/cancel`, `POST .../{id}/explain`.
 
-### There is no separate mission entity
+### Mission is now durable operator intent
 
-A **mission** is the same `TaskModel` row `GET /api/v1/sessions` (issue #9)
-serves, reframed in mission-control vocabulary. This codebase's domain model
-has no dependency graph, no "related entities" table and no execution-progress
-percentage, so this issue does not invent them:
+Issue #43 introduces a real **Mission** aggregate, persisted in `missions`,
+with append-only `mission_events` and one-or-more `mission_attempts`. A Mission
+is what the operator asked CodexBridge to achieve; `TaskModel` remains the
+executor-facing attempt/session machinery. Retrying or replanning creates a new
+Task attempt under the same Mission, so the operator-visible Mission id stays
+stable while previous attempts remain inspectable.
 
-- `objective` is the instruction; `assignedAgent` is the executor id — the
-  same value `Session.executorId` names, under the name issue #7 asked for.
-- `stage` is a coarse three-phase grouping over `state`
-  (`store.mission_stage`): `pending` (`queued`, `waiting_executor`), `active`
-  (`running`, `awaiting_approval`, and issue #16's `pausing`/`paused`/
-  `resuming`/`restarting`), `done` (every terminal state). `state` itself is
-  returned unchanged and remains its own, finer filter — the issue asks for
-  both, and they are not the same thing.
-- `risk` is `shared/policy.py:policy_level_for_mode`, overridden to
-  `sensitive` when `approval_state` recorded that a submitted instruction
-  matched a sensitive keyword (`store.mission_risk`). It is not a live
-  re-evaluation of the instruction text, and for every `TaskMode` value that
-  function itself returns, it can only be `read` or `controlled_write` — the
-  `sensitive` branch in `policy_level_for_mode` is unreachable for a real
-  mode and exists only as a fallback for a future one.
-- `blocked` / `blockedReason` is `state == awaiting_approval`, given a machine
-  code and a human summary. This is the acceptance criterion ("every blocked
-  mission includes a machine-readable reason and human-readable summary") and
-  the only condition this build can report: it is the only state a mission is
-  held in without the agent protocol having a way to move it forward on its
-  own.
-- The timeline is `audit_events` rows filtered to the mission's id, oldest
-  first, summarized through a per-event-type allowlist rather than the raw
-  stored payload — the payload carries fields (`policy_level`, `via`,
-  `requested_by_user_id`) never audited for what they may contain, and this
-  is public API surface.
+- `objective` is stored on `MissionModel.objective`; attempts copy it into
+  `TaskModel.instruction` for the executor protocol.
+- `assignedAgent`, `engine`, `issueRef`, mode/policy, delivery request,
+  timestamps, final outcome and `revision` live on the Mission, not inferred
+  from current task state.
+- `stage` is a coarse grouping over Mission states: `pending`
+  (`draft`, `planning`, `queued`, `scheduled`, `waiting_executor`), `active`
+  (`running`, `testing`, `reviewing`, `waiting_human`, `blocked`, `paused`),
+  and `done` (`completed`, `failed`, `cancelled`).
+- `risk` is derived from the Mission's requested policy/mode, with
+  `sensitive` recorded at creation when policy evaluation escalated the
+  request.
+- `blocked` / `blockedReason` covers `waiting_human` and `blocked`. For
+  compatibility, the list filter still accepts the old task state
+  `awaiting_approval` and maps it to `waiting_human`.
+- The timeline reads `mission_events`, oldest first. Material state changes
+  and attempt creation/completion are recorded there; raw executor logs stay
+  on the session/task surfaces.
 
-`dependencies` and `relatedEntities`, named in issue #7's Scope section, are
-**not implemented**. Nothing in this codebase links one task to another task
-or to any other entity, so there is no data to expose — and shipping an
-always-empty array would be a field a mobile client can build a list UI
-around and never see populated, the same failure the capability flags exist
-to prevent (see "Rate limiting" → `CAPABILITIES` reasoning above). A future
-issue that adds real task dependencies or cross-references should add these
-fields then, backed by real data.
+`dependencies` and `relatedEntities`, named in issue #7's Scope section, remain
+**not implemented**. The Mission aggregate makes multiple attempts auditable,
+but it still does not define a dependency graph between missions or arbitrary
+entities. A future issue that adds real dependencies should add those fields
+then, backed by real rows.
 
 ### What this issue does NOT deliver, and why
 
@@ -839,22 +830,19 @@ the only command this issue's acceptance criteria named. `cancel` maps to
 `task.cancel`, exactly as `stop` does for sessions, and is the one lifecycle
 command this API offers for missions.
 
-### Cancel and stop are two doors onto the same lock
+### Cancel and stop are related doors
 
 `POST /api/v1/missions/{id}/cancel` and `POST /api/v1/sessions/{id}/stop`
-both call `store.update_task_state(..., TaskState.CANCELLED)` on the same
-row and write the same audit event type, `task.stopped_by_actor` — with
-`via` distinguishing which door was used. A mobile client working entirely in
-mission-control vocabulary never needs to know `/sessions` exists; a client
-already using `/sessions` is not asked to migrate. The two endpoints are
-independent implementations (concurrency, idempotency and audit each written
-once per router) rather than one sharing a helper, so that this issue does
-not touch `gateway/app/api/routes/sessions.py`'s already-tested code path.
+both still act on the active `TaskModel` attempt because the executor protocol
+knows task ids, not mission ids. The mission endpoint additionally updates the
+Mission aggregate and writes `mission.cancelled_by_actor` to the Mission
+timeline. A mobile client working entirely in mission-control vocabulary never
+needs to know `/sessions` exists; a client already using `/sessions` is not
+asked to migrate.
 
 **Issue #36's `reason` is a missions-door-only addition, not shared by this
 lock.** `/sessions/{id}/stop` still writes `task.stopped_by_actor` with no
-`reason` key at all — the two doors are no longer identical, only
-"same event type, same row." A client that only ever cancels through
+`reason` key at all — the two doors are no longer identical. A client that only ever cancels through
 `/sessions` has nowhere to send an operator-typed reason today; issue #36's
 own scope (`gh issue view 36`) names only the missions endpoint and
 CodexBridgeMobile's mission-control cancel dialog, so extending `/stop` to
@@ -886,26 +874,18 @@ the body entirely, behaves exactly as before — this is purely additive
 
 ### State-transition validation
 
-`cancel` refuses with `409 conflict` outside `CANCELLABLE`, which is
-`shared.protocol.STOPPABLE_TASK_STATES` itself — the same set sessions'
-`STOPPABLE` names, reused rather than duplicated (issue #17's review already
-caught one local copy of this set silently missing
-`paused`/`pausing`/`resuming`/`restarting`; a mission is the same
-`TaskModel` sessions cancels, so a second copy here would risk the identical
-drift). This is issue #7's acceptance criterion ("state-transition commands
-validate the current mission state").
+Mission state transitions are centralized in
+`gateway/app/services/mission_types.py`. The route does not carry its own
+transition table. `cancel` also checks the active task against
+`shared.protocol.STOPPABLE_TASK_STATES`, because the executor still receives
+`task.cancel`.
 
 ### Create (issue #68)
 
-`POST /api/v1/missions` is the first HTTP exposure of `codexbridge.task.submit`
-(`permissions.MISSIONS_CREATE`). Before this issue, task creation existed only
-as the MCP tool `submit_codex_task`; `CodexBridgeMobile` had no way to launch
-anything. This does not add a new entity or a new id space: it creates the
-exact same `TaskModel` row `submit_codex_task`/`start_development_task` (MCP)
-already create, and the response is the same `Mission` shape `GET
-/api/v1/missions/{missionId}` already returns — council finding F01
-(`mission`/`session`/`decision` are one row today) is deliberately not
-reopened here; see #43 for that question.
+`POST /api/v1/missions` creates the durable Mission and its first Task
+attempt. `start_development_task` follows the same store path and returns both
+`mission_id` and `task_id`. The older `submit_codex_task` remains task-shaped
+for compatibility, but now also records the generated Mission id.
 
 **`executorId` is optional and resolved automatically when omitted**, the
 same way `start_development_task` resolves it: the project's onboarded
@@ -1123,8 +1103,7 @@ it on sign-in.
 
 A **conversation** is a thread linked to at least one product entity. A
 **context reference** names the entity: `project` (`ProjectModel`), `session`
-/ `decision` / `mission` (all the same `TaskModel` row, under the three
-vocabularies "Decisions" and "Missions" above already use), or `issue`
+/ `decision` (`TaskModel`), `mission` (`MissionModel`), or `issue`
 (`IssueModel`, issue #8).
 
 ### `artifact` is not a context type

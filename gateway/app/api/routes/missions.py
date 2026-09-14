@@ -1,24 +1,12 @@
-"""Missions: the mission-control view of the same run Sessions exposes — issue #7.
+"""Missions: durable operator intent with TaskModel execution attempts.
 
-A **mission** is a `TaskModel`, the same row `/api/v1/sessions` (issue #9)
-serves. There is no separate mission entity in this codebase's domain model —
-no dependency graph, no "related entities" table, no execution-progress
-percentage — so this router does not invent one. It reframes the fields that
-already exist (`instruction`, `executor_id`, `mode`, `state`, `approval_state`,
-the `audit_events` rows `record_event` already writes) in mission-control
-vocabulary, and adds only what is derivable from them:
+A **mission** is a `MissionModel`: the operator-visible objective and lifecycle.
+`TaskModel` remains the executor-facing attempt/session row. The first attempt
+keeps id compatibility by sharing the Mission id; retries/replans create new
+Task ids under the same Mission.
 
-- `stage` is a three-phase grouping over `TaskState`
-  (`store.mission_stage`) — coarser than `state`, which is exposed unchanged
-  and remains its own filter.
-- `risk` is `shared/policy.py:policy_level_for_mode`, overridden to
-  `sensitive` when `approval_state` recorded that escalation at creation
-  (`store.mission_risk`). It is not a new scoring model.
-- `blocked` / `blockedReason` is `state == awaiting_approval`, the same
-  condition Sessions already reports as `interventionRequired`, given a
-  machine code and a human summary.
-- The timeline is `audit_events` filtered to this task, oldest first — the
-  same rows `task.stopped_by_actor` and friends already write, not a new log.
+`stage`, `risk`, `blocked`, `blockedReason`, and the timeline are derived from
+Mission state and `mission_events`, not inferred from a task list.
 
 `dependencies` and `relatedEntities`, named in the issue's Scope section, are
 **not implemented**: no schema in this codebase links one task to another or
@@ -48,7 +36,7 @@ from gateway.app.api.errors import CONFLICT, NOT_FOUND, PERMISSION_DENIED, VALID
 from gateway.app.api.routes.sessions import redact
 from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.db.session import get_session
-from gateway.app.models.entities import AuditEventModel, ExecutorModel, IssueModel, ProjectModel, TaskModel
+from gateway.app.models.entities import ExecutorModel, IssueModel, MissionEventModel, MissionModel, ProjectModel, TaskModel
 from gateway.app.services import store
 from gateway.app.services.audit import record_event
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
@@ -169,16 +157,16 @@ def _cursor_time(value: datetime) -> str:
     return value.isoformat()
 
 
-def _blocked_reason(task: TaskModel) -> dict | None:
+def _blocked_reason(mission: MissionModel) -> dict | None:
     """Machine-readable code plus human summary — the acceptance criterion verbatim.
 
     `awaiting_approval` is the only reason this build can report: it is the
     only state a mission is held in without the agent protocol having a way to
     move it forward on its own.
     """
-    if task.state != TaskState.AWAITING_APPROVAL.value:
+    if mission.state not in {"waiting_human", "blocked"}:
         return None
-    summary = redact(task.approval_reason) or "Held for approval before it may proceed."
+    summary = redact(mission.last_error) or "Held for operator input before it may proceed."
     return {"code": BLOCKED_REASON_AWAITING_APPROVAL, "summary": summary}
 
 
@@ -201,7 +189,7 @@ def _delivery_dto(raw_json: str | None) -> dict | None:
     }
 
 
-def _mission_dto(task: TaskModel) -> dict:
+def _mission_dto(mission: MissionModel, active_task: TaskModel | None = None) -> dict:
     """Mobile representation of a mission.
 
     Omits `ProjectModel.path`, the command line and the stored result blob —
@@ -214,28 +202,28 @@ def _mission_dto(task: TaskModel) -> dict:
     the create response — there is no second, narrower DTO for create alone.
     """
     return {
-        "id": task.id,
-        "projectId": task.project_id,
-        "assignedAgent": task.executor_id,
-        "objective": redact(task.instruction),
-        "mode": task.mode,
-        "state": task.state,
-        "stage": store.mission_stage(task),
-        "risk": store.mission_risk(task),
-        "blocked": task.state == TaskState.AWAITING_APPROVAL.value,
-        "blockedReason": _blocked_reason(task),
-        "priority": task.priority,
-        "revision": task.revision,
-        "createdAt": _iso(task.created_at),
-        "startedAt": _iso(task.started_at),
-        "completedAt": _iso(task.completed_at),
-        "expiresAt": _iso(task.expires_at),
-        "approvalState": task.approval_state,
-        "requestedBy": task.requested_by_email or task.requested_by_user_id,
-        "lastError": redact(task.last_error),
-        "engine": task.engine,
-        "issueRef": task.issue_ref,
-        "delivery": _delivery_dto(task.delivery_json),
+        "id": mission.id,
+        "projectId": mission.project_id,
+        "assignedAgent": mission.selected_executor_id,
+        "objective": redact(mission.objective),
+        "mode": mission.requested_mode,
+        "state": mission.state,
+        "stage": store.mission_stage(mission),
+        "risk": store.mission_risk(mission),
+        "blocked": mission.state in {"waiting_human", "blocked"},
+        "blockedReason": _blocked_reason(mission),
+        "priority": mission.priority,
+        "revision": mission.revision,
+        "createdAt": _iso(mission.created_at),
+        "startedAt": _iso(mission.started_at),
+        "completedAt": _iso(mission.completed_at),
+        "expiresAt": _iso(mission.expires_at),
+        "approvalState": active_task.approval_state if active_task else None,
+        "requestedBy": mission.requested_by_email or mission.requested_by_user_id,
+        "lastError": redact(mission.last_error),
+        "engine": mission.selected_engine,
+        "issueRef": mission.source_ref,
+        "delivery": _delivery_dto(mission.delivery_json),
     }
 
 
@@ -272,7 +260,8 @@ def _resolve_states(state: list[str] | None, stage: list[str] | None) -> list[st
     """
     if not state and not stage:
         return None
-    from_state = set(state) if state else None
+    aliases = {TaskState.AWAITING_APPROVAL.value: "waiting_human"}
+    from_state = {aliases.get(item, item) for item in state} if state else None
     from_stage: set[str] | None = None
     if stage:
         from_stage = set()
@@ -341,9 +330,9 @@ async def list_missions(
         rows,
         limit=size,
         scope=scope,
-        position_of=lambda task: {"createdAt": _cursor_time(task.created_at), "id": task.id},
+        position_of=lambda mission: {"createdAt": _cursor_time(mission.created_at), "id": mission.id},
     )
-    return {"items": [_mission_dto(task) for task in page], "page": info}
+    return {"items": [_mission_dto(mission) for mission in page], "page": info}
 
 
 @router.get("/missions/{mission_id}", tags=["missions"])
@@ -353,12 +342,13 @@ async def get_mission(
     principal: AuthenticatedPrincipal = Depends(require_action(permissions.MISSIONS_READ)),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    task = await store.get_task_for_projects(session, mission_id, visible_projects(principal))
-    if task is None:
+    mission = await store.get_mission_for_projects(session, mission_id, visible_projects(principal))
+    if mission is None:
         raise _not_found()
-    response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(task.revision)
+    active_task = await store.get_mission_active_task(session, mission)
+    response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(mission.revision)
     response.headers["Cache-Control"] = "no-store"
-    return _mission_dto(task)
+    return _mission_dto(mission, active_task)
 
 
 def _validation_error(field: str, code: str, message: str) -> ApiError:
@@ -493,14 +483,7 @@ async def create_mission(
     principal: AuthenticatedPrincipal = Depends(require_action(permissions.MISSIONS_CREATE)),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Create a mission — the first HTTP exposure of `codexbridge.task.submit`.
-
-    Today this is the same `TaskModel` row `submit_codex_task`/
-    `start_development_task` (MCP) create; it does not introduce a new id
-    space, a new `TaskState`, or a new meaning for any `_mission_dto` field —
-    council finding F01 (mission/session/decision are one row) is
-    deliberately not re-opened here (issue #68's own ARO).
-    """
+    """Create a durable mission and its first execution attempt."""
     from gateway.app.main import hub  # imported late: main includes this router
 
     projects = visible_projects(principal)
@@ -597,8 +580,11 @@ async def create_mission(
     # duplicated elsewhere.
     await hub.dispatch_available(task.executor_id)
     await session.refresh(task)
+    mission = await store.get_mission_for_projects(session, task.mission_id or task.id, visible_projects(principal))
+    if mission is None:
+        raise _not_found()
 
-    body = _mission_dto(task)
+    body = _mission_dto(mission, task)
     if claim is not None:
         await idempotency.complete(
             session,
@@ -610,7 +596,7 @@ async def create_mission(
             claim=claim,
             request_fingerprint=fingerprint,
         )
-    response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(task.revision)
+    response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(mission.revision)
     return body
 
 
@@ -632,6 +618,16 @@ def _timeline_summary(event_type: str, payload: dict) -> str:
     """
     if event_type == "task.created":
         return "Mission created."
+    if event_type == "mission.created":
+        return "Mission created."
+    if event_type == "mission.attempt_created":
+        number = payload.get("attemptNumber") or "new"
+        return f"Execution attempt {number} created."
+    if event_type == "mission.attempt_completed":
+        state = payload.get("task_state") or "unknown"
+        return f"Execution attempt completed with {state}."
+    if event_type == "mission.replanned":
+        return "Mission replanned for another attempt."
     if event_type == "task.state_changed":
         state = payload.get("state") or "unknown"
         error = redact(payload.get("error")) if payload.get("error") else None
@@ -645,19 +641,22 @@ def _timeline_summary(event_type: str, payload: dict) -> str:
     if event_type == "task.stopped_by_actor":
         reason = redact(payload.get("reason")) if payload.get("reason") else None
         return "Cancelled by an operator." + (f" {reason}" if reason else "")
+    if event_type == "mission.cancelled_by_actor":
+        reason = redact(payload.get("reason")) if payload.get("reason") else None
+        return "Cancelled by an operator." + (f" {reason}" if reason else "")
     if event_type == "task.recovered":
         state = payload.get("state") or "unknown"
         return f"Recovered after a gateway restart; marked {state}."
     return "Mission event recorded."
 
 
-def _timeline_dto(event: AuditEventModel) -> dict:
+def _timeline_dto(event: MissionEventModel) -> dict:
     payload = _safe_payload(event.payload_json)
     return {
         "type": event.event_type,
         "at": _iso(event.created_at),
-        "state": payload.get("state"),
-        "actor": payload.get("actor_id"),
+        "state": event.state or payload.get("state"),
+        "actor": event.actor_id or payload.get("actor_id"),
         "summary": _timeline_summary(event.event_type, payload),
     }
 
@@ -672,8 +671,8 @@ async def get_mission_timeline(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """The mission's recorded events, oldest first — the order a narrative reads in."""
-    task = await store.get_task_for_projects(session, mission_id, visible_projects(principal))
-    if task is None:
+    mission = await store.get_mission_for_projects(session, mission_id, visible_projects(principal))
+    if mission is None:
         raise _not_found()
 
     size = pagination.parse_limit(limit)
@@ -682,10 +681,10 @@ async def get_mission_timeline(
 
     after = None
     if cursor:
-        position = pagination.decode_cursor(scope, cursor, expect={"createdAt": str, "id": int})
+        position = pagination.decode_cursor(scope, cursor, expect={"createdAt": str, "id": str})
         after = (position["createdAt"], position["id"])
 
-    rows = await store.list_task_events_page(session, mission_id, after=after, limit=size)
+    rows = await store.list_mission_events_page(session, mission_id, after=after, limit=size)
     page, info = pagination.paginate(
         rows,
         limit=size,
@@ -720,7 +719,7 @@ def _delivery_unavailable(reason: str) -> dict:
     return {"available": False, "reason": reason}
 
 
-def _delivery_evidence_dto(task: TaskModel) -> dict:
+def _delivery_evidence_dto(mission: MissionModel, task: TaskModel | None) -> dict:
     """`GET /api/v1/missions/{missionId}/delivery` — issue #69.
 
     Reads `tasks.delivery_result_json` (`DeliveryOutcome.to_dict()`, written
@@ -734,14 +733,14 @@ def _delivery_evidence_dto(task: TaskModel) -> dict:
     (F26: artifact transport, and anything resembling one, is explicitly out
     of this issue's scope).
     """
-    if task.delivery_json is None:
+    if mission.delivery_json is None:
         # No delivery was ever requested for this mission — distinct from "it
         # was requested but has not produced a result yet", which the caller
         # needs to tell apart from "nothing changed" (this issue's own
         # acceptance criterion).
         return _delivery_unavailable("no_delivery_requested")
-    if task.delivery_result_json is None:
-        if store.mission_stage(task) != "done":
+    if task is None or task.delivery_result_json is None:
+        if store.mission_stage(mission) != "done":
             return _delivery_unavailable("mission_not_finished")
         return _delivery_unavailable("delivery_step_did_not_run")
 
@@ -767,11 +766,12 @@ async def get_mission_delivery(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Branch, head commit, changed-file list and diff statistics — never content."""
-    task = await store.get_task_for_projects(session, mission_id, visible_projects(principal))
-    if task is None:
+    mission = await store.get_mission_for_projects(session, mission_id, visible_projects(principal))
+    if mission is None:
         raise _not_found()
+    task = await store.get_mission_active_task(session, mission)
     response.headers["Cache-Control"] = "no-store"
-    return _delivery_evidence_dto(task)
+    return _delivery_evidence_dto(mission, task)
 
 
 async def _dispatch_cancel(hub: AgentHub, task: TaskModel) -> bool:
@@ -818,9 +818,12 @@ async def cancel_mission(
     reason = body.reason if body else None
 
     projects = visible_projects(principal)
-    task = await store.get_task_for_projects(session, mission_id, projects)
-    if task is None:
+    mission = await store.get_mission_for_projects(session, mission_id, projects)
+    if mission is None:
         raise _not_found()
+    task = await store.get_mission_active_task(session, mission)
+    if task is None:
+        raise ApiError(status_code=409, code=CONFLICT, message="Mission has no active execution attempt.")
 
     # `reason` folds into the fingerprint, same as `routes/decisions.py`'s
     # `_resolve`: a retry with the *same* key and the *same* reason is the
@@ -840,21 +843,21 @@ async def cancel_mission(
         if isinstance(outcome, idempotency.ReplayedResponse):
             response.status_code = outcome.status_code
             response.headers["Idempotent-Replay"] = "true"
-            fresh = await store.get_task_for_projects(session, mission_id, projects)
-            if fresh is not None:
-                response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(fresh.revision)
+            fresh_mission = await store.get_mission_for_projects(session, mission_id, projects)
+            if fresh_mission is not None:
+                response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(fresh_mission.revision)
             return outcome.body
         claim = outcome
 
     try:
-        concurrency.require_if_match(if_match, task.revision)
+        concurrency.require_if_match(if_match, mission.revision)
 
-        if task.state not in CANCELLABLE:
+        if mission.state in {"completed", "failed", "cancelled"} or task.state not in CANCELLABLE:
             raise ApiError(
                 status_code=409,
                 code=CONFLICT,
-                message=f"A mission in state {task.state!r} cannot be cancelled.",
-                headers={concurrency.ETAG_HEADER: concurrency.etag_for(task.revision)},
+                message=f"A mission in state {mission.state!r} cannot be cancelled.",
+                headers={concurrency.ETAG_HEADER: concurrency.etag_for(mission.revision)},
             )
 
         notified = await _dispatch_cancel(hub, task)
@@ -876,6 +879,15 @@ async def cancel_mission(
                 "reason": reason,
             },
         )
+        await store.transition_mission_state(
+            session,
+            mission,
+            mission.state,
+            task_id=task.id,
+            actor_id=principal.user_id,
+            event_type="mission.cancelled_by_actor",
+            payload={"reason": reason, "executor_notified": notified},
+        )
         await session.commit()
     except Exception:
         if claim is not None:
@@ -888,7 +900,8 @@ async def cancel_mission(
             )
         raise
 
-    body = _mission_dto(updated)
+    await session.refresh(mission)
+    body = _mission_dto(mission, updated)
     body["executorNotified"] = notified
     if claim is not None:
         await idempotency.complete(
@@ -901,7 +914,7 @@ async def cancel_mission(
             claim=claim,
             request_fingerprint=fingerprint,
         )
-    response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(updated.revision)
+    response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(mission.revision)
     return body
 
 
@@ -918,36 +931,37 @@ async def explain_mission(
     `blocked`) so a client does not need a second call to explain a block.
     No model, no executor round trip.
     """
-    task = await store.get_task_for_projects(session, mission_id, visible_projects(principal))
-    if task is None:
+    mission = await store.get_mission_for_projects(session, mission_id, visible_projects(principal))
+    if mission is None:
         raise _not_found()
+    task = await store.get_mission_active_task(session, mission)
 
-    stderr = await store.get_recent_logs(session, mission_id, stream="stderr", limit=20)
+    stderr = await store.get_recent_logs(session, task.id, stream="stderr", limit=20) if task else []
 
     reasons = []
-    if task.state == TaskState.EXPIRED.value:
+    if mission.final_outcome == TaskState.EXPIRED.value:
         reasons.append("The mission passed its expiry time before completing.")
-    if task.state == TaskState.LOST.value:
+    if mission.final_outcome == TaskState.LOST.value:
         reasons.append(
             "The gateway restarted while this mission was running and the executor "
             "never reported a result."
         )
-    if task.state == TaskState.CANCELLED.value:
+    if mission.state == "cancelled":
         reasons.append("The mission was cancelled.")
-    if task.approval_state and task.state == TaskState.AWAITING_APPROVAL.value:
-        reasons.append("The mission is held for approval and has not started.")
-    if task.last_error:
+    if mission.state in {"waiting_human", "blocked"}:
+        reasons.append("The mission is held for operator input and has not started.")
+    if mission.last_error:
         reasons.append("The executor reported an error.")
 
     return {
-        "missionId": task.id,
-        "state": task.state,
-        "stage": store.mission_stage(task),
-        "risk": store.mission_risk(task),
-        "blocked": task.state == TaskState.AWAITING_APPROVAL.value,
-        "blockedReason": _blocked_reason(task),
+        "missionId": mission.id,
+        "state": mission.state,
+        "stage": store.mission_stage(mission),
+        "risk": store.mission_risk(mission),
+        "blocked": mission.state in {"waiting_human", "blocked"},
+        "blockedReason": _blocked_reason(mission),
         "reasons": reasons or ["No failure recorded for this mission."],
-        "lastError": redact(task.last_error),
+        "lastError": redact(mission.last_error),
         "recentStderr": [
             {"offset": row.offset, "line": redact(row.line), "at": _iso(row.created_at)}
             for row in stderr

@@ -132,9 +132,8 @@ app.include_router(projects.router, dependencies=[Depends(RateLimitDependency(ra
 # same approval flow the MCP transport's approve_codex_task tool already drives.
 app.include_router(decisions.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
-# Missions (issue #7): the mission-control view of the same TaskModel rows,
-# with objective/stage/risk/blocked framing and a timeline. Same limiter and
-# the same per-route authorization as sessions.router.
+# Missions: durable operator intent with TaskModel execution attempts. Same
+# limiter and the same per-route authorization as sessions.router.
 app.include_router(missions.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 # The mobile credential lifecycle (issue #4): sign-in, refresh, revocation, and

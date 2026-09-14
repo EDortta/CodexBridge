@@ -23,6 +23,9 @@ from gateway.app.models.entities import (
     ForgeOperationModel,
     IssueModel,
     MessageReceiptModel,
+    MissionAttemptModel,
+    MissionEventModel,
+    MissionModel,
     NotificationPreferenceModel,
     NodeInviteModel,
     NodeModel,
@@ -71,8 +74,15 @@ from gateway.app.services.issue_types import (
     ISSUE_STATUSES,
     IssuePlanningError,
 )
+from gateway.app.services.mission_types import (
+    MissionState,
+    MissionTransitionError,
+    assert_legal_transition,
+    mission_state_from_task_state,
+)
 from shared.policy import evaluate_task_policy, forge_operation_policy_level
 from shared.protocol import (
+    AgentEngine,
     ApprovalDecision,
     BindingState,
     Capability,
@@ -81,6 +91,7 @@ from shared.protocol import (
     DiscoveredState,
     DiscoveryReport,
     DiscoveryRoot,
+    DeliveryRequest,
     ExecutorRegistration,
     NodeAnnouncement,
     ForgeOperationKind,
@@ -91,6 +102,7 @@ from shared.protocol import (
     STOPPABLE_TASK_STATES,
     SubmitTaskRequest,
     TaskMode,
+    TaskPriority,
     TaskState,
     capabilities_to_modes,
 )
@@ -119,6 +131,8 @@ AUTH_SWEEPABLE_EVENT_TYPES = frozenset(
 # `event_types.DELIVERABLE_ENTITY_TYPES` and can never reach the mobile event
 # stream — the same construction that keeps `auth` rows off it.
 NOTIFICATION_ENTITY_TYPE = "notification"
+
+MISSION_ENTITY_TYPE = "mission"
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -361,20 +375,11 @@ async def executors_allowing_project(session: AsyncSession, project_id: str) -> 
 async def project_task_counts(
     session: AsyncSession, project_ids: list[str] | None
 ) -> dict[str, dict[str, int]]:
-    """Per-project task counts, in one grouped query rather than one query per row.
+    """Per-project task/session and durable mission counts.
 
     Returns `{project_id: {"total": n, "pendingDecisions": n, "activeMissions": n}}`.
-    A project absent from tasks entirely is simply absent from the returned
+    A project absent from tasks/missions entirely is simply absent from the returned
     dict — callers default to zero.
-
-    `pendingDecisions` counts `AWAITING_APPROVAL` — the same `TaskModel.state`
-    issue #9's sessions API already reports as `interventionRequired`, read
-    under the vocabulary issue #6 (decisions) will eventually give it its own
-    endpoint for. `activeMissions` counts `STOPPABLE_TASK_STATES` — every
-    non-terminal state — under the vocabulary issue #7 (missions) will give the
-    same rows their own endpoint. Both issues are still open; this reads the
-    one entity (`TaskModel`) that already exists rather than inventing a second
-    one to summarize.
     """
     if project_ids is not None and not project_ids:
         return {}
@@ -390,7 +395,16 @@ async def project_task_counts(
         bucket["total"] += count
         if state == TaskState.AWAITING_APPROVAL.value:
             bucket["pendingDecisions"] += count
-        if state in STOPPABLE_TASK_STATES:
+    mission_statement = (
+        select(MissionModel.project_id, MissionModel.state, func.count(MissionModel.id))
+        .group_by(MissionModel.project_id, MissionModel.state)
+    )
+    if project_ids is not None:
+        mission_statement = mission_statement.where(MissionModel.project_id.in_(project_ids))
+    mission_result = await session.execute(mission_statement)
+    for project_id, state, count in mission_result.all():
+        bucket = counts.setdefault(project_id, {"total": 0, "pendingDecisions": 0, "activeMissions": 0})
+        if state not in {MissionState.COMPLETED.value, MissionState.FAILED.value, MissionState.CANCELLED.value}:
             bucket["activeMissions"] += count
     return counts
 
@@ -560,6 +574,145 @@ async def require_active_node_project_authorization(
         )
 
 
+async def _record_mission_event(
+    session: AsyncSession,
+    mission_id: str,
+    event_type: str,
+    *,
+    state: str | None = None,
+    task_id: str | None = None,
+    actor_id: str | None = None,
+    payload: dict | None = None,
+) -> None:
+    session.add(
+        MissionEventModel(
+            id=str(uuid4()),
+            mission_id=mission_id,
+            event_type=event_type,
+            state=state,
+            task_id=task_id,
+            actor_id=actor_id,
+            payload_json=json.dumps(payload or {}, ensure_ascii=True),
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+
+
+async def transition_mission_state(
+    session: AsyncSession,
+    mission: MissionModel,
+    target_state: str,
+    *,
+    task_id: str | None = None,
+    actor_id: str | None = None,
+    event_type: str = "mission.state_changed",
+    payload: dict | None = None,
+) -> MissionModel:
+    assert_legal_transition(mission.state, target_state)
+    now = datetime.now(timezone.utc)
+    mission.state = target_state
+    mission.updated_at = now
+    mission.revision += 1
+    if target_state == MissionState.RUNNING.value and mission.started_at is None:
+        mission.started_at = now
+    if target_state in {MissionState.COMPLETED.value, MissionState.FAILED.value, MissionState.CANCELLED.value}:
+        mission.completed_at = now
+        mission.final_outcome = target_state
+    await _record_mission_event(
+        session,
+        mission.id,
+        event_type,
+        state=mission.state,
+        task_id=task_id,
+        actor_id=actor_id,
+        payload=payload,
+    )
+    return mission
+
+
+async def _create_mission_for_request(
+    session: AsyncSession,
+    request: SubmitTaskRequest,
+    *,
+    mission_id: str,
+    initial_state: str,
+    requested_by_user_id: str | None,
+    requested_by_email: str | None,
+) -> MissionModel:
+    now = datetime.now(timezone.utc)
+    policy = evaluate_task_policy(request)
+    mission = MissionModel(
+        id=mission_id,
+        project_id=request.project_id,
+        objective=request.instruction,
+        source_ref=request.issue_ref,
+        requested_mode=request.mode.value,
+        requested_policy=policy.level.value,
+        selected_executor_id=request.executor_id,
+        selected_engine=request.engine.value,
+        state=initial_state,
+        priority=request.priority.value,
+        run_when_available=request.run_when_available,
+        expires_at=_as_utc(request.expires_at),
+        timeout_seconds=request.timeout_seconds,
+        delivery_json=request.delivery.model_dump_json() if request.delivery is not None else None,
+        created_at=now,
+        updated_at=now,
+        requested_by_user_id=requested_by_user_id,
+        requested_by_email=requested_by_email,
+        revision=1,
+    )
+    session.add(mission)
+    await _record_mission_event(
+        session,
+        mission.id,
+        "mission.created",
+        state=mission.state,
+        actor_id=requested_by_user_id,
+        payload={"project_id": request.project_id, "mode": request.mode.value, "engine": request.engine.value},
+    )
+    return mission
+
+
+async def _attach_attempt_to_mission(
+    session: AsyncSession,
+    mission: MissionModel,
+    task: TaskModel,
+    *,
+    reason: str,
+    actor_id: str | None = None,
+) -> MissionAttemptModel:
+    current = await session.execute(
+        select(func.max(MissionAttemptModel.attempt_number)).where(MissionAttemptModel.mission_id == mission.id)
+    )
+    attempt_number = int(current.scalar_one_or_none() or 0) + 1
+    attempt = MissionAttemptModel(
+        id=str(uuid4()),
+        mission_id=mission.id,
+        task_id=task.id,
+        attempt_number=attempt_number,
+        reason=reason,
+        created_at=datetime.now(timezone.utc),
+    )
+    task.mission_id = mission.id
+    mission.active_task_id = task.id
+    mission.selected_executor_id = task.executor_id
+    mission.selected_engine = task.engine
+    mission.updated_at = datetime.now(timezone.utc)
+    mission.revision += 1
+    session.add(attempt)
+    await _record_mission_event(
+        session,
+        mission.id,
+        "mission.attempt_created",
+        state=mission.state,
+        task_id=task.id,
+        actor_id=actor_id,
+        payload={"attemptNumber": attempt_number, "reason": reason},
+    )
+    return attempt
+
+
 async def create_task(
     session: AsyncSession,
     request: SubmitTaskRequest,
@@ -569,6 +722,8 @@ async def create_task(
     requested_by_email: str | None = None,
     can_approve_push: bool = False,
     require_active_binding: bool = False,
+    mission_id: str | None = None,
+    attempt_reason: str = "initial",
 ) -> TaskModel:
     executor = await session.get(ExecutorModel, request.executor_id)
     if executor is None or not executor.enabled:
@@ -629,8 +784,34 @@ async def create_task(
     # is allowed to grant it.
     if not policy.approved or push_preauthorized:
         state = TaskState.AWAITING_APPROVAL
+    mission_state = mission_state_from_task_state(state.value)
+    task_id = str(uuid4())
+    if mission_id is not None:
+        mission = await session.get(MissionModel, mission_id)
+        if mission is None:
+            raise ValueError("unknown_mission")
+        if mission.project_id != request.project_id:
+            raise ValueError("mission_project_mismatch")
+        await transition_mission_state(
+            session,
+            mission,
+            mission_state,
+            actor_id=requested_by_user_id,
+            event_type="mission.replanned",
+            payload={"attempt_reason": attempt_reason},
+        )
+    else:
+        mission = await _create_mission_for_request(
+            session,
+            request,
+            mission_id=task_id,
+            initial_state=mission_state,
+            requested_by_user_id=requested_by_user_id,
+            requested_by_email=requested_by_email,
+        )
     task = TaskModel(
-        id=str(uuid4()),
+        id=task_id,
+        mission_id=mission.id,
         executor_id=request.executor_id,
         project_id=request.project_id,
         instruction=request.instruction,
@@ -656,6 +837,13 @@ async def create_task(
         policy_level=policy.level.value if state == TaskState.AWAITING_APPROVAL else None,
     )
     session.add(task)
+    await _attach_attempt_to_mission(
+        session,
+        mission,
+        task,
+        reason=attempt_reason,
+        actor_id=requested_by_user_id,
+    )
     await record_event(
         session,
         "task",
@@ -698,6 +886,48 @@ async def create_task(
         )
         await session.commit()
         await session.refresh(task)
+    return task
+
+
+async def retry_mission(
+    session: AsyncSession,
+    mission_id: str,
+    *,
+    executor_online: bool,
+    reason: str = "retry",
+    requested_by_user_id: str | None = None,
+    requested_by_email: str | None = None,
+) -> TaskModel:
+    mission = await session.get(MissionModel, mission_id)
+    if mission is None:
+        raise ValueError("unknown_mission")
+    if mission.selected_executor_id is None:
+        raise ValueError("mission_has_no_executor")
+    expires_at = mission.expires_at
+    if expires_at is None or _as_utc(expires_at) <= datetime.now(timezone.utc):
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(7200, 2 * int(mission.timeout_seconds or 3600)))
+    delivery = DeliveryRequest.model_validate_json(mission.delivery_json) if mission.delivery_json else None
+    task = await create_task(
+        session,
+        SubmitTaskRequest(
+            executor_id=mission.selected_executor_id,
+            project_id=mission.project_id,
+            instruction=mission.objective,
+            mode=TaskMode(mission.requested_mode),
+            timeout_seconds=int(mission.timeout_seconds or 3600),
+            priority=TaskPriority(mission.priority),
+            run_when_available=mission.run_when_available,
+            expires_at=expires_at,
+            engine=AgentEngine(mission.selected_engine or "codex"),
+            issue_ref=mission.source_ref,
+            delivery=delivery,
+        ),
+        executor_online=executor_online,
+        requested_by_user_id=requested_by_user_id or mission.requested_by_user_id,
+        requested_by_email=requested_by_email or mission.requested_by_email,
+        mission_id=mission.id,
+        attempt_reason=reason,
+    )
     return task
 
 
@@ -1844,6 +2074,7 @@ async def update_task_state(session: AsyncSession, task_id: str, state: TaskStat
     task = await session.get(TaskModel, task_id)
     if task is None:
         raise ValueError("unknown_task")
+    previous_state = task.state
     task.state = state.value
     if state == TaskState.RUNNING:
         task.started_at = datetime.now(timezone.utc)
@@ -1853,6 +2084,20 @@ async def update_task_state(session: AsyncSession, task_id: str, state: TaskStat
         task.last_error = error
     task.revision += 1
     await record_event(session, "task", task.id, "task.state_changed", {"state": task.state, "error": error})
+    if task.mission_id:
+        mission = await session.get(MissionModel, task.mission_id)
+        if mission is not None and mission.active_task_id == task.id:
+            mission_target = mission_state_from_task_state(task.state)
+            if error:
+                mission.last_error = error
+            await transition_mission_state(
+                session,
+                mission,
+                mission_target,
+                task_id=task.id,
+                event_type="mission.state_changed",
+                payload={"task_state": task.state, "previous_task_state": previous_state, "error": error},
+            )
     await session.commit()
     await session.refresh(task)
     return task
@@ -1897,6 +2142,17 @@ async def decide_task_approval(
         "task.approval_decision",
         {"decision": decision.value, "reason": reason, "state": task.state},
     )
+    if task.mission_id:
+        mission = await session.get(MissionModel, task.mission_id)
+        if mission is not None and mission.active_task_id == task.id:
+            await transition_mission_state(
+                session,
+                mission,
+                mission_state_from_task_state(task.state),
+                task_id=task.id,
+                event_type="mission.approval_decision",
+                payload={"decision": decision.value, "reason": reason, "task_state": task.state},
+            )
     await session.commit()
     await session.refresh(task)
     return task
@@ -2212,6 +2468,17 @@ async def recover_tasks_after_startup(session: AsyncSession) -> dict[str, int]:
             task.completed_at = now
             task.revision += 1
             await record_event(session, "task", task.id, "task.recovered", {"state": task.state})
+            if task.mission_id:
+                mission = await session.get(MissionModel, task.mission_id)
+                if mission is not None and mission.active_task_id == task.id:
+                    await transition_mission_state(
+                        session,
+                        mission,
+                        mission_state_from_task_state(task.state),
+                        task_id=task.id,
+                        event_type="mission.recovered",
+                        payload={"task_state": task.state},
+                    )
             recovered["expired"] += 1
         elif task.state in {
             TaskState.RUNNING.value,
@@ -2224,6 +2491,17 @@ async def recover_tasks_after_startup(session: AsyncSession) -> dict[str, int]:
             task.completed_at = now
             task.revision += 1
             await record_event(session, "task", task.id, "task.recovered", {"state": task.state})
+            if task.mission_id:
+                mission = await session.get(MissionModel, task.mission_id)
+                if mission is not None and mission.active_task_id == task.id:
+                    await transition_mission_state(
+                        session,
+                        mission,
+                        mission_state_from_task_state(task.state),
+                        task_id=task.id,
+                        event_type="mission.recovered",
+                        payload={"task_state": task.state},
+                    )
             recovered["lost"] += 1
     await session.commit()
     return recovered
@@ -2259,6 +2537,25 @@ async def store_result(session: AsyncSession, task_id: str, result: dict, final_
     task.completed_at = datetime.now(timezone.utc)
     task.revision += 1
     await record_event(session, "task", task.id, "task.result", {"state": task.state})
+    if task.mission_id:
+        mission = await session.get(MissionModel, task.mission_id)
+        if mission is not None and mission.active_task_id == task.id:
+            attempt = (
+                await session.execute(
+                    select(MissionAttemptModel).where(MissionAttemptModel.task_id == task.id)
+                )
+            ).scalar_one_or_none()
+            if attempt is not None:
+                attempt.completed_at = task.completed_at
+                attempt.outcome = task.state
+            await transition_mission_state(
+                session,
+                mission,
+                mission_state_from_task_state(task.state),
+                task_id=task.id,
+                event_type="mission.attempt_completed",
+                payload={"task_state": task.state},
+            )
     await session.commit()
     await session.refresh(task)
     return task
@@ -2831,6 +3128,54 @@ async def get_task_for_projects(
     return task
 
 
+async def get_mission_for_projects(
+    session: AsyncSession, mission_id: str, project_ids: list[str] | None
+) -> MissionModel | None:
+    mission = await session.get(MissionModel, mission_id)
+    if mission is None:
+        return None
+    if project_ids is not None and mission.project_id not in project_ids:
+        return None
+    return mission
+
+
+async def get_mission_active_task(session: AsyncSession, mission: MissionModel) -> TaskModel | None:
+    if mission.active_task_id is None:
+        return None
+    return await session.get(TaskModel, mission.active_task_id)
+
+
+async def list_mission_attempts(session: AsyncSession, mission_id: str) -> list[MissionAttemptModel]:
+    result = await session.execute(
+        select(MissionAttemptModel)
+        .where(MissionAttemptModel.mission_id == mission_id)
+        .order_by(MissionAttemptModel.attempt_number.asc())
+    )
+    return list(result.scalars())
+
+
+async def list_mission_events_page(
+    session: AsyncSession,
+    mission_id: str,
+    *,
+    after: tuple[str, str] | None = None,
+    limit: int = 50,
+) -> list[MissionEventModel]:
+    statement = select(MissionEventModel).where(MissionEventModel.mission_id == mission_id)
+    if after is not None:
+        created_at, event_id = after
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+        statement = statement.where(
+            or_(
+                MissionEventModel.created_at > created_at,
+                and_(MissionEventModel.created_at == created_at, MissionEventModel.id > event_id),
+            )
+        )
+    statement = statement.order_by(MissionEventModel.created_at.asc(), MissionEventModel.id.asc()).limit(limit + 1)
+    result = await session.execute(statement)
+    return list(result.scalars())
+
 
 async def get_recent_logs(
     session: AsyncSession, task_id: str, *, stream: str | None = None, limit: int = 20
@@ -3245,8 +3590,8 @@ _READ_MODES = {TaskMode.ANALYZE.value, TaskMode.REVIEW.value, TaskMode.TEST.valu
 _CONTROLLED_WRITE_MODES = {TaskMode.EDIT.value, TaskMode.IMPLEMENT.value}
 
 
-def _risk_filter_clause(risk: list[str]):
-    """A WHERE clause matching tasks whose derived risk is one of `risk` (issue #7).
+def _mission_risk_filter_clause(risk: list[str]):
+    """A WHERE clause matching missions whose derived risk is one of `risk`.
 
     Built at the query level, not applied after loading: filtering after
     loading is how a page's `hasMore` ends up describing rows the caller may
@@ -3254,67 +3599,56 @@ def _risk_filter_clause(risk: list[str]):
     """
     clauses = []
     if PolicyLevel.SENSITIVE.value in risk:
-        clauses.append(TaskModel.approval_state == PolicyLevel.SENSITIVE.value)
+        clauses.append(MissionModel.requested_policy == PolicyLevel.SENSITIVE.value)
     modes: set[str] = set()
     if PolicyLevel.READ.value in risk:
         modes |= _READ_MODES
     if PolicyLevel.CONTROLLED_WRITE.value in risk:
         modes |= _CONTROLLED_WRITE_MODES
     if modes:
-        # `approval_state` is NULL for every task never held for approval —
-        # which is most of them — and `column != value` on a NULL is NULL,
-        # not true, under SQL's three-valued logic. `!=` alone silently
-        # dropped every non-sensitive row that had never been through
-        # approval; the `IS NULL` arm is what keeps them in.
         clauses.append(
             and_(
-                TaskModel.mode.in_(modes),
+                MissionModel.requested_mode.in_(modes),
                 or_(
-                    TaskModel.approval_state.is_(None),
-                    TaskModel.approval_state != PolicyLevel.SENSITIVE.value,
+                    MissionModel.requested_policy.is_(None),
+                    MissionModel.requested_policy != PolicyLevel.SENSITIVE.value,
                 ),
             )
         )
     return or_(*clauses) if clauses else None
 
 
-# Coarse buckets over `TaskState`, for the mission-control "stage" filter and
-# field (issue #7). `state` (exact) and `stage` (this grouping) are
-# deliberately two different filters: `state` is what the sessions API already
-# exposes verbatim, `stage` is the three-phase view a mission-control list
-# groups by.
+# Coarse buckets over `MissionState`, for the mission-control "stage" filter.
 MISSION_STAGE_STATES: dict[str, tuple[str, ...]] = {
-    "pending": (TaskState.QUEUED.value, TaskState.WAITING_EXECUTOR.value),
+    "pending": (MissionState.DRAFT.value, MissionState.PLANNING.value, MissionState.QUEUED.value, MissionState.SCHEDULED.value, MissionState.WAITING_EXECUTOR.value),
     "active": (
-        TaskState.RUNNING.value,
-        TaskState.AWAITING_APPROVAL.value,
-        TaskState.PAUSING.value,
-        TaskState.PAUSED.value,
-        TaskState.RESUMING.value,
-        TaskState.RESTARTING.value,
+        MissionState.RUNNING.value,
+        MissionState.TESTING.value,
+        MissionState.REVIEWING.value,
+        MissionState.WAITING_HUMAN.value,
+        MissionState.BLOCKED.value,
+        MissionState.PAUSED.value,
     ),
     "done": (
-        TaskState.COMPLETED.value,
-        TaskState.FAILED.value,
-        TaskState.CANCELLED.value,
-        TaskState.EXPIRED.value,
-        TaskState.LOST.value,
+        MissionState.COMPLETED.value,
+        MissionState.FAILED.value,
+        MissionState.CANCELLED.value,
     ),
 }
 
 
-def mission_risk(task: TaskModel) -> str:
-    """The mission-control risk level for one task (issue #7). See `_risk_filter_clause`."""
-    if task.approval_state == PolicyLevel.SENSITIVE.value:
+def mission_risk(mission: MissionModel) -> str:
+    """The mission-control risk level for one durable mission."""
+    if mission.requested_policy == PolicyLevel.SENSITIVE.value:
         return PolicyLevel.SENSITIVE.value
-    if task.mode in _READ_MODES:
+    if mission.requested_mode in _READ_MODES:
         return PolicyLevel.READ.value
     return PolicyLevel.CONTROLLED_WRITE.value
 
 
-def mission_stage(task: TaskModel) -> str:
+def mission_stage(mission: MissionModel) -> str:
     for stage, states in MISSION_STAGE_STATES.items():
-        if task.state in states:
+        if mission.state in states:
             return stage
     return "done"
 
@@ -3328,43 +3662,42 @@ async def list_missions_page(
     blocked: bool | None = None,
     after: tuple[str, str] | None = None,
     limit: int = 50,
-) -> list[TaskModel]:
-    """Missions (tasks, in mission-control framing) the caller may see, newest
-    first (issue #7).
+) -> list[MissionModel]:
+    """Durable missions the caller may see, newest first.
 
     Same shape as `list_tasks_page`: `project_ids` of None is unrestricted
     (admin), an empty list means the caller sees nothing, and every filter is
     applied to the query rather than after loading. Over-fetches by one so the
     caller can report `hasMore` without a second COUNT.
     """
-    statement = select(TaskModel)
+    statement = select(MissionModel)
     if project_ids is not None:
         if not project_ids:
             return []
-        statement = statement.where(TaskModel.project_id.in_(project_ids))
+        statement = statement.where(MissionModel.project_id.in_(project_ids))
     if states:
-        statement = statement.where(TaskModel.state.in_(states))
+        statement = statement.where(MissionModel.state.in_(states))
     if risk:
-        clause = _risk_filter_clause(risk)
+        clause = _mission_risk_filter_clause(risk)
         if clause is not None:
             statement = statement.where(clause)
         else:
             return []
     if blocked is True:
-        statement = statement.where(TaskModel.state == TaskState.AWAITING_APPROVAL.value)
+        statement = statement.where(MissionModel.state.in_([MissionState.WAITING_HUMAN.value, MissionState.BLOCKED.value]))
     elif blocked is False:
-        statement = statement.where(TaskModel.state != TaskState.AWAITING_APPROVAL.value)
+        statement = statement.where(~MissionModel.state.in_([MissionState.WAITING_HUMAN.value, MissionState.BLOCKED.value]))
     if after is not None:
-        created_at, task_id = after
+        created_at, mission_id = after
         if isinstance(created_at, str):
             created_at = datetime.fromisoformat(created_at)
         statement = statement.where(
             or_(
-                TaskModel.created_at < created_at,
-                and_(TaskModel.created_at == created_at, TaskModel.id < task_id),
+                MissionModel.created_at < created_at,
+                and_(MissionModel.created_at == created_at, MissionModel.id < mission_id),
             )
         )
-    statement = statement.order_by(TaskModel.created_at.desc(), TaskModel.id.desc()).limit(limit + 1)
+    statement = statement.order_by(MissionModel.created_at.desc(), MissionModel.id.desc()).limit(limit + 1)
     result = await session.execute(statement)
     return list(result.scalars())
 

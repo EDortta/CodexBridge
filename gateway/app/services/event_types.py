@@ -47,15 +47,14 @@ lists in `NOT_DELIVERED`. A future author who adds an audit event has to decide
 what the mobile client sees; they cannot decide it by accident. "Nothing" is an
 available answer — it just has to be written down with its reason.
 
-## Sessions, missions and decisions are one row under three names
+## Sessions, missions and decisions
 
-`docs/api/README.md` already establishes that a session, a mission and a decision
-are the same `TaskModel` row seen through three vocabularies. This module does not
-triple every event to match: it emits **one** event per audit row, with
-`entity.kind` naming the vocabulary that fits what happened — `decision` for the
-approval lifecycle, `session` for everything else. The id is the same id, so a
-mission-control client fetches `/api/v1/missions/{id}` with it and a session
-client fetches `/api/v1/sessions/{id}`.
+The mobile event stream is still sourced from `audit_events`, most of which are
+task/session events. Issue #43 gives Mission its own aggregate and timeline
+(`mission_events`) instead of tripling every task audit row here. Decision
+events remain decision-shaped; ordinary task execution events remain
+session-shaped. Mission-control clients read the durable mission timeline from
+`/api/v1/missions/{id}/timeline`.
 
 ## Types declared here and never emitted by this build
 

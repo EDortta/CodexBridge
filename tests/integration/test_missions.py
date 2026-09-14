@@ -1,12 +1,4 @@
-"""Missions: the mission-control view of Sessions — issue #7.
-
-Missions reuse `TaskModel` and `audit_events` rather than introducing a new
-entity (see the module docstring in `gateway/app/api/routes/missions.py` and
-`docs/api/README.md` "Missions (issue #7)"), so these tests are weighted
-towards what issue #7 actually adds: the stage/risk/blocked derivation, the
-timeline, and that `cancel` validates transitions and is audited — not
-serialization already covered by `tests/integration/test_sessions.py`.
-"""
+"""Missions: durable operator intent with TaskModel execution attempts."""
 
 from __future__ import annotations
 
@@ -334,7 +326,8 @@ async def test_objective_and_assigned_agent_are_the_instruction_and_the_executor
 async def test_stage_groups_state_into_three_phases(api, state: str, stage: str) -> None:
     task = await make_task(api.factory, "p1", state=state)
     body = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN)).json()
-    assert body["state"] == state
+    expected_state = "waiting_human" if state == "awaiting_approval" else state
+    assert body["state"] == expected_state
     assert body["stage"] == stage
 
 
@@ -358,7 +351,7 @@ async def test_a_sensitive_instruction_overrides_risk_to_sensitive(api) -> None:
     """The keyword-escalation path recorded on `approval_state` at creation."""
     task = await make_task(api.factory, "p1", instruction="run terraform apply now", mode=TaskMode.IMPLEMENT)
     body = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN)).json()
-    assert body["state"] == "awaiting_approval"
+    assert body["state"] == "waiting_human"
     assert body["risk"] == "sensitive"
 
 
@@ -848,26 +841,25 @@ async def test_creating_a_mission_and_reading_it_back(api) -> None:
     assert fetched == created
 
 
-async def test_create_does_not_reopen_the_identity_question(api) -> None:
-    """F01 (issue #68's own ARO): no new id space, no new TaskState.
-
-    The created row is readable through the exact same id `GET
-    /api/v1/sessions/{id}` and `GET /api/v1/decisions/{id}` would use for the
-    same `TaskModel` row — this test only asserts the mission side, since the
-    row itself (not a parallel one) is the whole claim.
-    """
-    from shared.protocol import TaskState as _TaskState
-
+async def test_created_mission_is_a_real_aggregate_backed_by_a_task_attempt(api) -> None:
     created = api.post(
         "/api/v1/missions",
         headers=auth(ALICE_TOKEN),
         json={"projectId": "p1", "objective": "analyze it", "mode": "analyze", "timeoutSeconds": 60},
     ).json()
-    assert created["state"] in {s.value for s in _TaskState}
 
     async with api.factory() as s:
+        from gateway.app.models.entities import MissionAttemptModel, MissionModel
+        from sqlalchemy import select
+
+        mission = await s.get(MissionModel, created["id"])
         task = await store.get_task(s, created["id"])
-    assert task is not None
+        attempts = (await s.execute(select(MissionAttemptModel).where(MissionAttemptModel.mission_id == created["id"]))).scalars().all()
+    assert mission is not None
+    assert task is not None, "first attempt keeps id compatibility with legacy mission ids"
+    assert task.mission_id == mission.id
+    assert len(attempts) == 1
+    assert attempts[0].task_id == task.id
     assert task.project_id == "p1"
 
 
@@ -890,6 +882,78 @@ async def test_a_retried_create_replays_instead_of_creating_twice(api) -> None:
 
         rows = (await s.execute(select(TaskModel).where(TaskModel.project_id == "p1"))).scalars().all()
     assert len(rows) == 1
+
+
+async def test_mission_survives_database_session_restart(api) -> None:
+    created = api.post(
+        "/api/v1/missions",
+        headers=auth(ALICE_TOKEN),
+        json={"projectId": "p1", "objective": "persist me", "mode": "analyze", "timeoutSeconds": 60},
+    ).json()
+
+    async with api.factory() as fresh_session:
+        from gateway.app.models.entities import MissionModel
+
+        mission = await fresh_session.get(MissionModel, created["id"])
+
+    assert mission is not None
+    assert mission.objective == "persist me"
+
+
+async def test_mission_api_reads_mission_not_mutated_task_state(api) -> None:
+    task = await make_task(api.factory, "p1", instruction="operator objective")
+    async with api.factory() as s:
+        stored = await store.get_task(s, task.id)
+        stored.instruction = "attempt-local rewritten instruction"
+        await s.commit()
+
+    body = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN)).json()
+    assert body["objective"] == "operator objective"
+
+
+async def test_retry_creates_a_new_attempt_without_losing_history(api) -> None:
+    task = await make_task(api.factory, "p1", state="failed")
+    async with api.factory() as s:
+        retry = await store.retry_mission(s, task.mission_id, executor_online=True, reason="retry")
+        attempts = await store.list_mission_attempts(s, task.mission_id)
+
+    assert retry.id != task.id
+    assert retry.mission_id == task.mission_id
+    assert [attempt.task_id for attempt in attempts] == [task.id, retry.id]
+    assert [attempt.attempt_number for attempt in attempts] == [1, 2]
+
+
+async def test_illegal_mission_transition_is_refused(api) -> None:
+    task = await make_task(api.factory, "p1", state="completed")
+    async with api.factory() as s:
+        mission = await store.get_mission_for_projects(s, task.mission_id, None)
+        with pytest.raises(ValueError):
+            await store.transition_mission_state(s, mission, "running")
+
+
+async def test_mission_timeline_records_attempt_creation_and_completion(api) -> None:
+    task = await make_task(api.factory, "p1", state="running")
+    async with api.factory() as s:
+        await store.store_result(s, task.id, {"final_state": "completed"}, TaskState.COMPLETED)
+
+    body = api.get(f"/api/v1/missions/{task.mission_id}/timeline", headers=auth(ALICE_TOKEN)).json()
+    types = [item["type"] for item in body["items"]]
+    assert "mission.created" in types
+    assert "mission.attempt_created" in types
+    assert "mission.attempt_completed" in types
+    assert [item["at"] for item in body["items"]] == sorted(item["at"] for item in body["items"])
+
+
+async def test_mission_response_does_not_leak_command_or_provider_secret(api) -> None:
+    task = await make_task(api.factory, "p1", state="running")
+    async with api.factory() as s:
+        stored = await store.get_task(s, task.id)
+        stored.command_json = json.dumps(["codex", "exec", "--provider-secret", "sk-should-not-leak"])
+        await s.commit()
+
+    text = api.get(f"/api/v1/missions/{task.mission_id}", headers=auth(ALICE_TOKEN)).text
+    assert "provider-secret" not in text
+    assert "sk-should-not-leak" not in text
 
 
 async def test_create_resolves_an_executor_automatically_when_none_is_named(api) -> None:
@@ -1060,7 +1124,7 @@ async def test_delivery_pre_authorization_flows_through_like_the_mcp_path(api) -
     assert response.status_code == 201
     body = response.json()
     assert body["approvalState"] == "approved"
-    assert body["state"] != "awaiting_approval"
+    assert body["state"] != "waiting_human"
     assert body["delivery"] == {
         "branch": "feature/ship-it",
         "allowPush": True,

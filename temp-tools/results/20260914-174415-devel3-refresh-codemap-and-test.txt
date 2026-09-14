@@ -1,0 +1,562 @@
+
+
+===== CodexBridge devel3 collection =====
+timestamp: 2026-09-14T17:44:15-03:00
+host: devel3
+repo: /home/esteban/Sync/Projects/AI/CodexBridge
+output: temp-tools/results/20260914-174415-devel3-refresh-codemap-and-test.txt
+
+
+===== Repository state before changes =====
+## feature/control-ui-and-mobo-orch
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/
+HEAD: 153676d1d6a3f43febcd462768ebd6301a26b3ae
+branch: feature/control-ui-and-mobo-orch
+remote names:
+origin
+
+
+===== Tool versions =====
+Python 3.10.12
+AI-GovernanceKit: 0.3.2
+AI-Agents default: v1.2.1
+AI-Agents project: v1.2.1
+Project root: /home/esteban/Sync/Projects/AI/CodexBridge
+Status: up to date
+Integration: ok — AI-Agents contract v1.2.1 is compatible with GovernanceKit 0.3.2
+codex-cli 0.154.0
+2.1.270 (Claude Code)
+gh version 2.97.0 (2026-07-31)
+https://github.com/cli/cli/releases/tag/v2.97.0
+
+
+===== Refresh docs/codemap.md =====
+Code map written to: /home/esteban/Sync/Projects/AI/CodexBridge/docs/codemap.md
+  186 file(s) · 2168 symbol(s) indexed
+governancekit map exit: 0
+
+
+===== Codemap diff after refresh =====
+ M docs/codemap.md
+ docs/codemap.md | 82 ++++++++++++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 72 insertions(+), 10 deletions(-)
+diff --git a/docs/codemap.md b/docs/codemap.md
+index b198294..82b8015 100644
+--- a/docs/codemap.md
++++ b/docs/codemap.md
+@@ -1,12 +1,12 @@
+ # Code Map · codex-bridge
+ 
+-> Generated: 2026-09-03 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
++> Generated: 2026-09-14 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+ > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
+ 
+ ## Summary
+ 
+-- 185 file(s) · 2112 symbol(s) indexed
+-- Languages: config (2), python (181), shell (2)
++- 186 file(s) · 2168 symbol(s) indexed
++- Languages: config (2), python (182), shell (2)
+ - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `tests`
+ 
+ ## Governance
+@@ -52,7 +52,7 @@ agent/
+       claude.py  — "Claude Code as a second `Runner`, issue #41a."
+       codex.py
+       pool.py  — "The facade `AgentService` talks to instead of a single hardcoded runner."
+-      registry.py  — "Which `AgentEngine` values have a real `Runner` behind them."
++      registry.py  — "Extensible engine registry for CodexBridge."
+     service.py
+ deploy/
+   incus/
+@@ -193,6 +193,7 @@ tests/
+     test_reconnect_replay_resolves.py  — "Issue #17 council round 1 — the headline scenario named by findings 1, 4"
+     test_reminders_api.py  — "REST reminders — issue #72."
+     test_sessions.py  — "Agent sessions, logs and control — issue #9."
++    test_smoke.py  — "High-level smoke tests for CodexBridge's ChatGPT/MCP entry path."
+     test_start_development_task.py  — "The `start_development_task` MCP tool -- the conversational entry point."
+     test_store_and_mcp.py
+     test_task_status_and_list_read_surfaces.py  — "`get_task_status` / `list_recent_tasks` additive read-surface fields."
+@@ -377,9 +378,19 @@ tests/
+ 
+ ### `agent/codex_bridge_agent/runners/registry.py`
+ 
+-> Which `AgentEngine` values have a real `Runner` behind them.
++> Extensible engine registry for CodexBridge.
+ 
+-- **`EngineRegistration`** *(class)*
++- **`EngineAdapter`** *(class)* — "Protocol for engine adapters that can discover, probe, and instantiate engines."
++  - `get_engine_name(self)` *(method)* — "Return the canonical engine identifier."
++  - `get_engine_display_name(self)` *(method)* — "Return a human-readable name for the engine."
++  - `is_binary_installed(self)` *(method)* — "Check if the engine binary is available on the system."
++  - `probe_availability(self)` *(async method)* — "Check if the engine is fully available with authentication."
++  - `instantiate(self, settings)` *(async method)* — "Create a runner instance for this engine."
++- **`EngineRegistration`** *(class)* — "Engine registration with implementation status and factory."
++- `get_all_engines()` — "Get all engines including core, candidates, and custom."
++- `register_custom_engine(engine_name, adapter, factory, implemented, installed, probe_available, authenticated)` — "Register a custom engine adapter or implementation."
++- `discover_available_engines()` — "Discover and probe all available engines."
++- `get_engine_info(engine_name)` — "Get registration information for a specific engine."
+ 
+ ### `agent/codex_bridge_agent/service.py`
+ 
+@@ -516,7 +527,7 @@ tests/
+ 
+ - `control_home(request, session)` *(async function)*
+ - `control_node_detail(node_id, request, cursor, state, session)` *(async function)*
+-- `control_invite(request)` *(async function)*
++- `control_invite(request, session)` *(async function)*
+ 
+ ### `gateway/app/api/routes/conversations.py`
+ 
+@@ -808,7 +819,7 @@ tests/
+ 
+ ### `gateway/app/mcp/tools.py`
+ 
+-- `tool_definitions()`
++- `tool_definitions(default_engine)`
+ 
+ ### `gateway/app/models/entities.py`
+ 
+@@ -981,7 +992,8 @@ tests/
+ - `get_task(session, task_id)` *(async function)*
+ - `list_recent_tasks(session, limit, states)` *(async function)* — "`states` narrows to a caller-given set of `TaskState` values."
+ - `effective_task_modes(session, executor, project)` *(async function)* — "The task modes `executor` may actually run on `project`, right now."
+-- `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email, can_approve_push)` *(async function)*
++- `require_active_node_project_authorization(session, executor, project, mode)` *(async function)* — "Fail closed for an explicitly Node-directed task submission."
++- `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email, can_approve_push, require_active_binding)` *(async function)*
+ - `mark_executor_connected(session, executor_id, connected)` *(async function)*
+ - `executor_is_live(executor)` — "Whether an executor should be presented as connected right now."
+ - `ensure_node_for_executor(session, executor)` *(async function)* — "The Bridge Node bound to `executor`, creating and binding one if needed."
+@@ -1068,7 +1080,10 @@ tests/
+ - `list_conversation_messages_page(session)` *(async function)* — "A conversation's messages, oldest first — the order a thread reads in."
+ - **`AmbiguousProjectReference`** *(class)* — "More than one project matched a `start_development_task` reference."
+   - `__init__(self, candidates)` *(method)*
++- **`AmbiguousNodeReference`** *(class)* — "More than one Bridge Node matched a conversational node reference."
++  - `__init__(self, candidates)` *(method)*
+ - `resolve_project_reference(session, text)` *(async function)* — "Resolves "project Y" to exactly one registered project."
++- `resolve_node_reference(session, text)` *(async function)* — "Resolve an operator's machine name to exactly one Bridge Node."
+ - `estimate_task_duration_seconds(session)` *(async function)* — "A duration estimate for `start_development_task`'s `eta_seconds`,"
+ - `create_artifact(session)` *(async function)* — "Record an artifact and, for an APK, its build metadata."
+ - `artifact_is_retained(artifact, now)` — "Whether the artifact is still inside its retention window."
+@@ -1188,6 +1203,7 @@ tests/
+ - `hash_token(token)`
+ - `hash_resource_key(value)` — "A fixed-width (64 hex chars), indexable stand-in for an unbounded string."
+ - `sanitize_log_line(line)`
++- `redact_sensitive_text(value)` — "Sanitize free text immediately before it crosses a public boundary."
+ - `ensure_within_root(root, target)`
+ - `filtered_environment(allowed_keys)`
+ 
+@@ -1639,6 +1655,11 @@ tests/
+ 
+ > CodexBridge Control's server-rendered screens — issue #73 Stage 5.
+ 
++- **`DummyHub`** *(class)*
++  - `__init__(self)` *(method)*
++  - `is_connected(self, executor_id)` *(method)*
++  - `dispatch_next(self, executor_id)` *(async method)*
++  - `send(self, executor_id, envelope)` *(async method)*
+ - `basic(username, password)`
+ - `users_file(tmp_path)`
+ - `api(users_file, monkeypatch)` *(async function)*
+@@ -1663,9 +1684,11 @@ tests/
+ - `test_control_node_detail_warns_that_modify_and_deliver_need_more_than_admin_scope(api)` *(async function)*
+ - `test_control_node_detail_mints_no_audit_event(api)` *(async function)* — "Reading a page, and the token minted for its own fetch() calls, are not audited."
+ - `test_control_node_detail_embeds_a_real_bearer_token_for_its_own_fetch_calls(api)` *(async function)* — "The page-scoped token is an ordinary row in the same table `/api/v1/**` reads."
++- `test_project_adopted_from_control_can_be_targeted_by_mcp_node_and_project(api)` *(async function)* — "The Control-panel adoption state is exactly what MCP later consumes."
+ - `test_control_invite_requires_a_credential(api)` *(async function)*
+ - `test_control_invite_without_the_admin_scope_is_forbidden(api)` *(async function)*
+-- `test_control_invite_explains_the_gap_honestly(api)` *(async function)* — "Positive control for the previous two, and the point of this screen today:"
++- `test_control_invite_renders_warning_when_principal_lacks_invite_permission(api, monkeypatch)` *(async function)*
++- `test_control_invite_renders_active_form_for_admin(api)` *(async function)* — "Verifies 200 for admin, form, input, token minting, and script instructions."
+ 
+ ### `tests/integration/test_conversations.py`
+ 
+@@ -2425,6 +2448,22 @@ tests/
+ - `test_terminal_escapes_are_stripped(api)` *(async function)* — "`]0;title` retitles a CLI consumer's window."
+ - `test_the_instruction_is_redacted_like_everything_else(api)` *(async function)* — "It sat raw beside a redacted lastError; it is free text a human writes."
+ 
++### `tests/integration/test_smoke.py`
++
++> High-level smoke tests for CodexBridge's ChatGPT/MCP entry path.
++
++- **`DummyHub`** *(class)*
++  - `__init__(self)` *(method)*
++  - `is_connected(self, executor_id)` *(method)*
++  - `dispatch_next(self, executor_id)` *(async method)*
++  - `send(self, executor_id, envelope)` *(async method)*
++- `db_session()` *(async function)*
++- `test_happy_path_targets_devel3_node_for_project_without_exposing_paths(db_session)` *(async function)* — "The operator can name a Bridge Node and logical Project from MCP."
++- `test_explicit_node_project_request_requires_binding_and_authorization(db_session)` *(async function)* — "A logical Project registered in the Gateway is not enough for a named Node."
++- `test_explicit_node_routing_never_spills_to_another_online_node(db_session)` *(async function)* — "If devel3 is named, another connected executor must not receive the task."
++- `test_mcp_task_result_projects_only_sanitized_public_fields(db_session)` *(async function)* — "Persisted provider details can be rich; MCP receives only a safe projection."
++- `test_engine_registry_accepts_implemented_engines_and_rejects_unknown(db_session)` *(async function)* — "The MCP entrypoint validates engines through the extensible registry."
++
+ ### `tests/integration/test_start_development_task.py`
+ 
+ > The `start_development_task` MCP tool -- the conversational entry point.
+@@ -2435,7 +2474,20 @@ tests/
+   - `dispatch_next(self, executor_id)` *(async method)*
+   - `send(self, executor_id, envelope)` *(async method)*
+ - `db_session()` *(async function)*
++- `test_tool_schema_exposes_the_operator_facing_node_selector()`
+ - `test_happy_path_resolves_project_and_returns_eta_fields(db_session)` *(async function)*
++- `test_operator_can_target_a_bridge_node_by_its_human_name(db_session)` *(async function)*
++- `test_named_node_requires_an_active_workspace_binding(db_session)` *(async function)*
++- `test_named_node_rejects_an_inactive_workspace_binding(db_session)` *(async function)*
++- `test_named_node_requires_an_active_project_authorization(db_session)` *(async function)*
++- `test_named_node_rejects_a_revoked_project_authorization(db_session)` *(async function)*
++- `test_named_node_requires_the_capability_for_the_requested_mode(db_session)` *(async function)*
++- `test_legacy_submission_without_node_keeps_pre_binding_behavior(db_session)` *(async function)*
++- `test_named_node_never_spills_to_another_online_node(db_session)` *(async function)*
++- `test_node_and_legacy_executor_selectors_cannot_be_combined(db_session)` *(async function)*
++- `test_unknown_node_reference_is_404(db_session)` *(async function)*
++- `test_named_node_must_have_an_executor_onboarded_for_the_project(db_session)` *(async function)*
++- `test_ambiguous_node_prefix_is_409_and_names_candidates(db_session)` *(async function)*
+ - `test_resolves_project_by_unique_prefix(db_session)` *(async function)* — ""unclai" resolves uniquely to "unclaimed" -- proven by getting past"
+ - `test_ambiguous_project_reference_is_409_naming_every_candidate(db_session)` *(async function)*
+ - `test_unknown_project_reference_is_404(db_session)` *(async function)*
+@@ -2479,6 +2531,8 @@ tests/
+ - `test_mcp_approve_dispatches_to_a_connected_idle_executor(mcp_hub_factory)` *(async function)* — "Issue #20 asks this of the REST path specifically because the MCP"
+ - `test_mcp_approve_records_the_deciding_actor(mcp_hub_factory)` *(async function)* — "Issue #19: only the generic `task.approval_decision` (written inside"
+ - `test_mcp_reject_and_request_revision_do_not_dispatch(mcp_hub_factory)` *(async function)*
++- `test_get_task_result_omits_internal_payload_and_redacts_free_text(db_session)` *(async function)*
++- `test_task_status_and_logs_redact_executor_controlled_diagnostics(db_session)` *(async function)*
+ - `test_mcp_continue_codex_session_carries_the_parents_engine_forward(mcp_hub_factory)` *(async function)* — "Council round 1, "the sweep skeptic": before this fix, every"
+ - `test_mcp_continue_codex_session_succeeds_without_datetime_crash(mcp_hub_factory)` *(async function)* — "Issue #23: `continue_codex_session` forwards `parent.expires_at` —"
+ - `test_mcp_continue_codex_session_dispatches_to_a_connected_idle_executor(mcp_hub_factory)` *(async function)* — "Issue #24: unlike its sibling `submit_codex_task` (same file), this"
+@@ -2596,6 +2650,7 @@ tests/
+ - `test_dispatch_failure_returns_task_result(tmp_path)` *(async function)*
+ - `test_an_unregistered_project_is_still_refused_when_auto_project_root_is_unset(tmp_path)` *(async function)* — "Default behavior, unchanged by the new opt-in setting existing at"
+ - `test_auto_project_root_resolves_a_project_the_static_allowlist_does_not_know(tmp_path)` *(async function)* — "WK-20260830-chatgpt-entry-provider-and-delivery: with the opt-in root"
++- `test_run_forever_logs_sanitized_connection_failure_and_retries(monkeypatch, caplog)` *(async function)*
+ - `test_machine_token_travels_in_a_header_not_the_url(monkeypatch)` *(async function)* — "The token in the query string was logged verbatim 107 times (#15)."
+ - `test_connect_kwargs_are_accepted_by_the_real_installed_websockets_library()` *(async function)* — "Drives the REAL `websockets.connect`, not a fake -- every other test in"
+ - `test_pause_resume_and_restart_controls_acknowledge_over_the_socket(monkeypatch)` *(async function)* — "Drives the real `_run_once` dispatch loop, not a copy of it."
+@@ -2719,6 +2774,8 @@ tests/
+ - `test_a_replay_window_far_past_the_overflow_point_is_rejected_at_startup(field)`
+ - `test_a_replay_window_at_the_documented_ceiling_is_accepted(field)`
+ - `test_a_negative_replay_window_is_rejected(field)`
++- `test_settings_ignores_unknown_or_cross_prefixed_env_fields()`
++- `test_agent_settings_ignores_unknown_env_fields()`
+ 
+ ### `tests/unit/test_discover_projects.py`
+ 
+@@ -2751,6 +2808,7 @@ tests/
+ - `test_stale_row_reappearing_with_only_a_revoked_authorization_reverts_to_adopted(db_session)` *(async function)* — "The negative half of the pair above: a REVOKED authorization must not"
+ - `test_record_discovery_report_never_writes_authorization_or_projects(db_session)` *(async function)* — "The property that makes "the node proposes, the panel adopts" true by"
+ - `test_a_matching_auto_authorize_root_grants_nothing_from_a_report_alone(db_session)` *(async function)* — "The invariant this PR must not break: a node cannot authorize itself."
++- `test_adoption_onboards_the_project_for_the_node_executor(db_session)` *(async function)* — "An adopted project is immediately targetable by the same node's executor."
+ - `test_resource_key_is_a_fixed_width_hash_and_resource_path_carries_the_real_path(db_session)` *(async function)* — "The defect this PR fixes: a MySQL `varchar(255)` cannot hold every"
+ - `test_a_pre_migration_row_self_heals_its_resource_key_on_next_report(db_session)` *(async function)* — "A row written before 0013 has `resource_key` = the raw path (the"
+ - `test_a_large_report_does_not_cost_one_round_trip_per_candidate(db_session)` *(async function)* — "247 candidates -- the real root that motivated this work, rounded up"
+@@ -2892,6 +2950,9 @@ tests/
+ - `test_cancellation_is_checked_exactly_once_immediately_before_commit(tmp_path, monkeypatch)` *(async function)* — "Proves the checkpoint's placement, not just its existence: `is_cancelled`"
+ - `test_a_cancel_arriving_after_the_commit_checkpoint_does_not_stop_the_push(tmp_path, monkeypatch)` *(async function)* — "The other half of F34's own trade-off, stated in this module's"
+ - `test_no_is_cancelled_callback_behaves_exactly_like_before(tmp_path)` *(async function)* — "Backward compatibility: every caller that predates F34 (this module's"
++- `test_push_verification_succeeds_against_a_single_branch_clones_narrow_refspec(tmp_path)` *(async function)*
++- `test_push_verification_flags_a_real_mismatch_distinctly_from_unreachable(tmp_path, monkeypatch)` *(async function)* — "The other half of collapsing two situations into one `reason`: once"
++- `test_push_verification_unreachable_is_a_distinct_reason_from_a_real_mismatch(tmp_path, monkeypatch)` *(async function)* — "`ls-remote` itself failing (network gone right after a successful"
+ 
+ ### `tests/unit/test_google_calendar.py`
+ 
+@@ -3079,6 +3140,7 @@ tests/
+ - `test_no_registered_engines_env_allowlist_overlaps_another()` — "Env custody must never be unioned across providers (council finding"
+ - `test_gh_token_is_on_the_forge_allowlist_and_nowhere_else()` — "Positive control, spelled out by name rather than left implicit in the"
+ - `test_unimplemented_engines_are_declared_not_absent()` — "Every `AgentEngine` value is a registered candidate, whether or not it"
++- `test_custom_engine_registration()` — "Test that custom engines can be registered and discovered."
+ - `test_pool_defaults_to_codex_and_rejects_unknown_engines()`
+ - `test_pool_routes_control_messages_only_to_dispatched_tasks()` *(async function)*
+ 
+
+
+===== Contract suite =====
+$ .venv/bin/pytest tests/contract -q
+........................................................................ [ 47%]
+........................................................................ [ 94%]
+.........                                                                [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.10/site-packages/fastapi/testclient.py:1
+  /home/esteban/Sync/Projects/AI/CodexBridge/.venv/lib/python3.10/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+.venv/lib/python3.10/site-packages/pythonjsonlogger/jsonlogger.py:11
+  /home/esteban/Sync/Projects/AI/CodexBridge/.venv/lib/python3.10/site-packages/pythonjsonlogger/jsonlogger.py:11: DeprecationWarning: pythonjsonlogger.jsonlogger has been moved to pythonjsonlogger.json
+    warnings.warn(
+
+gateway/app/main.py:354
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:354: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+.venv/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/Sync/Projects/AI/CodexBridge/.venv/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+153 passed, 4 warnings in 19.74s
+
+[exit=0] Contract suite
+
+
+===== Focused ChatGPT/MCP execution tests =====
+$ .venv/bin/pytest tests/integration/test_start_development_task.py tests/integration/test_mcp_epics_issues.py tests/integration/test_forge_mcp_tools.py tests/integration/test_forge_wiring.py tests/integration/test_smoke.py -q
+........................................................................ [ 84%]
+.............                                                            [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.10/site-packages/fastapi/testclient.py:1
+  /home/esteban/Sync/Projects/AI/CodexBridge/.venv/lib/python3.10/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+.venv/lib/python3.10/site-packages/pythonjsonlogger/jsonlogger.py:11
+  /home/esteban/Sync/Projects/AI/CodexBridge/.venv/lib/python3.10/site-packages/pythonjsonlogger/jsonlogger.py:11: DeprecationWarning: pythonjsonlogger.jsonlogger has been moved to pythonjsonlogger.json
+    warnings.warn(
+
+gateway/app/main.py:354
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:354: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+.venv/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/Sync/Projects/AI/CodexBridge/.venv/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+85 passed, 4 warnings in 5.06s
+
+[exit=0] Focused ChatGPT/MCP execution tests
+
+
+===== Full test suite =====
+$ .venv/bin/pytest -q
+........................................................................ [  4%]
+........................................................................ [  9%]
+........................................................................ [ 14%]
+................................................................F....... [ 19%]
+........................................................................ [ 23%]
+....................sssssssss........................................... [ 28%]
+........................................................................ [ 33%]
+........................................................................ [ 38%]
+........................................................................ [ 43%]
+........................................................................ [ 47%]
+........................................................................ [ 52%]
+........................................................................ [ 57%]
+........................................................................ [ 62%]
+........................................................................ [ 67%]
+........................................................................ [ 71%]
+........................................................................ [ 76%]
+........................................................................ [ 81%]
+........................................................................ [ 86%]
+........................................................................ [ 91%]
+........................................................................ [ 95%]
+...............................................................          [100%]
+=================================== FAILURES ===================================
+________ test_the_default_artifacts_root_follows_the_working_directory _________
+
+    def test_the_default_artifacts_root_follows_the_working_directory() -> None:
+        """The default is a development convenience, not a stable location.
+    
+        `str(Path("data/artifacts").resolve())` resolves against the cwd at import,
+        so the unconfigured default moves with the directory the service started
+        from. The comment in `gateway/app/core/config.py` used to claim the
+        opposite ("rather than a relative string whose meaning depends on the
+        working directory"), which is the kind of claim a reader retires a risk on.
+        Pinned here so the comment and the behaviour cannot drift apart again: a
+        deployment sets `CODEX_BRIDGE_ARTIFACTS_ROOT`, and `.env.example` says so.
+        """
+        import importlib.util
+        import os
+        import tempfile
+        from pathlib import Path
+    
+        from gateway.app.core import config as installed
+    
+        source = Path(installed.__file__).resolve()
+        previous = os.getcwd()
+        with tempfile.TemporaryDirectory() as elsewhere:
+            try:
+                os.chdir(elsewhere)
+                # A private, unregistered copy of the module: the default is
+                # captured once when the class body runs, so only a fresh import
+                # can show what it captures. Not `importlib.reload`, which would
+                # swap the `settings` singleton every other module already holds.
+                spec = importlib.util.spec_from_file_location("_artifacts_root_probe", source)
+                probe = importlib.util.module_from_spec(spec)
+>               spec.loader.exec_module(probe)
+
+tests/integration/test_artifacts.py:736: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+<frozen importlib._bootstrap_external>:883: in exec_module
+    ???
+<frozen importlib._bootstrap>:241: in _call_with_frames_removed
+    ???
+gateway/app/core/config.py:314: in <module>
+    settings = Settings()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+__pydantic_self__ = Settings(), _case_sensitive = None
+_nested_model_default_partial_update = None, _env_prefix = None
+_env_prefix_target = None, _env_file = PosixPath('.'), _env_file_encoding = None
+_env_ignore_empty = None, _env_nested_delimiter = None
+_env_nested_max_split = None, _env_parse_none_str = None
+_env_parse_enums = None, _cli_prog_name = None, _cli_parse_args = None
+_cli_settings_source = None, _cli_parse_none_str = None
+_cli_hide_none_type = None, _cli_avoid_json = None, _cli_enforce_required = None
+_cli_use_class_docs_for_groups = None, _cli_show_env_vars = None
+_cli_exit_on_error = None, _cli_prefix = None, _cli_flag_prefix_char = None
+_cli_implicit_flags = None, _cli_ignore_unknown_args = None
+_cli_kebab_case = None, _cli_shortcuts = None, _secrets_dir = None
+_build_sources = None, values = {}
+
+    def __init__(
+        __pydantic_self__,
+        _case_sensitive: bool | None = None,
+        _nested_model_default_partial_update: bool | None = None,
+        _env_prefix: str | None = None,
+        _env_prefix_target: EnvPrefixTarget | None = None,
+        _env_file: DotenvType | None = ENV_FILE_SENTINEL,
+        _env_file_encoding: str | None = None,
+        _env_ignore_empty: bool | None = None,
+        _env_nested_delimiter: str | None = None,
+        _env_nested_max_split: int | None = None,
+        _env_parse_none_str: str | None = None,
+        _env_parse_enums: bool | None = None,
+        _cli_prog_name: str | None = None,
+        _cli_parse_args: bool | list[str] | tuple[str, ...] | None = None,
+        _cli_settings_source: CliSettingsSource[Any] | None = None,
+        _cli_parse_none_str: str | None = None,
+        _cli_hide_none_type: bool | None = None,
+        _cli_avoid_json: bool | None = None,
+        _cli_enforce_required: bool | None = None,
+        _cli_use_class_docs_for_groups: bool | None = None,
+        _cli_show_env_vars: bool | None = None,
+        _cli_exit_on_error: bool | None = None,
+        _cli_prefix: str | None = None,
+        _cli_flag_prefix_char: str | None = None,
+        _cli_implicit_flags: bool | Literal['dual', 'toggle'] | None = None,
+        _cli_ignore_unknown_args: bool | None = None,
+        _cli_kebab_case: bool | Literal['all', 'no_enums'] | None = None,
+        _cli_shortcuts: Mapping[str, str | list[str]] | None = None,
+        _secrets_dir: PathType | None = None,
+        _build_sources: tuple[tuple[PydanticBaseSettingsSource, ...], dict[str, Any]] | None = None,
+        **values: Any,
+    ) -> None:
+        sources, init_kwargs = (
+            _build_sources
+            if _build_sources is not None
+            else __pydantic_self__.__class__._settings_init_sources(
+                _case_sensitive=_case_sensitive,
+                _nested_model_default_partial_update=_nested_model_default_partial_update,
+                _env_prefix=_env_prefix,
+                _env_prefix_target=_env_prefix_target,
+                _env_file=_env_file,
+                _env_file_encoding=_env_file_encoding,
+                _env_ignore_empty=_env_ignore_empty,
+                _env_nested_delimiter=_env_nested_delimiter,
+                _env_nested_max_split=_env_nested_max_split,
+                _env_parse_none_str=_env_parse_none_str,
+                _env_parse_enums=_env_parse_enums,
+                _cli_prog_name=_cli_prog_name,
+                _cli_parse_args=_cli_parse_args,
+                _cli_settings_source=_cli_settings_source,
+                _cli_parse_none_str=_cli_parse_none_str,
+                _cli_hide_none_type=_cli_hide_none_type,
+                _cli_avoid_json=_cli_avoid_json,
+                _cli_enforce_required=_cli_enforce_required,
+                _cli_use_class_docs_for_groups=_cli_use_class_docs_for_groups,
+                _cli_show_env_vars=_cli_show_env_vars,
+                _cli_exit_on_error=_cli_exit_on_error,
+                _cli_prefix=_cli_prefix,
+                _cli_flag_prefix_char=_cli_flag_prefix_char,
+                _cli_implicit_flags=_cli_implicit_flags,
+                _cli_ignore_unknown_args=_cli_ignore_unknown_args,
+                _cli_kebab_case=_cli_kebab_case,
+                _cli_shortcuts=_cli_shortcuts,
+                _secrets_dir=_secrets_dir,
+                _init_kwargs=values,
+            )
+        )
+    
+>       super().__init__(**__pydantic_self__.__class__._settings_build_values(sources, init_kwargs))
+E       pydantic.errors.PydanticUserError: `Settings` is not fully defined; you should define `AgentEngine`, then call `Settings.model_rebuild()`.
+E       
+E       For further information visit https://errors.pydantic.dev/2.13/u/class-not-fully-defined
+
+.venv/lib/python3.10/site-packages/pydantic_settings/main.py:262: PydanticUserError
+=============================== warnings summary ===============================
+.venv/lib/python3.10/site-packages/fastapi/testclient.py:1
+  /home/esteban/Sync/Projects/AI/CodexBridge/.venv/lib/python3.10/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+.venv/lib/python3.10/site-packages/pythonjsonlogger/jsonlogger.py:11
+  /home/esteban/Sync/Projects/AI/CodexBridge/.venv/lib/python3.10/site-packages/pythonjsonlogger/jsonlogger.py:11: DeprecationWarning: pythonjsonlogger.jsonlogger has been moved to pythonjsonlogger.json
+    warnings.warn(
+
+gateway/app/main.py:354
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:354: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+.venv/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/Sync/Projects/AI/CodexBridge/.venv/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+tests/integration/test_artifacts.py::test_the_default_artifacts_root_follows_the_working_directory
+  /home/esteban/Sync/Projects/AI/CodexBridge/.venv/lib/python3.10/site-packages/pydantic_settings/sources/utils.py:47: IncompleteFieldDefinitionWarning: Field 'default_engine' has an incomplete definition: its annotation contains an unresolved forward reference, so settings sources may fail to correctly resolve its value. Call `model_rebuild()` on the model where the field is defined, once all the referenced types are defined.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/integration/test_artifacts.py::test_the_default_artifacts_root_follows_the_working_directory
+1 failed, 1493 passed, 9 skipped, 5 warnings in 104.39s (0:01:44)
+
+[exit=1] Full test suite
+
+
+===== Repository state after tests =====
+## feature/control-ui-and-mobo-orch
+ M docs/codemap.md
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/
+HEAD: 153676d1d6a3f43febcd462768ebd6301a26b3ae
+
+
+===== Result file =====
+temp-tools/results/20260914-174415-devel3-refresh-codemap-and-test.txt
+
+NEXT ACTION: add docs/codemap.md (if changed) and temp-tools/results/20260914-174415-devel3-refresh-codemap-and-test.txt to git, push them, then tell ChatGPT the commit/branch.

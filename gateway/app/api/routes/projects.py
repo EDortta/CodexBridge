@@ -8,20 +8,13 @@ ship") and never appears in any response this module produces.
 ## What this issue does NOT deliver, and why
 
 The acceptance criteria ask for counts of "pending decisions, missions, issues,
-sessions and recent artifacts". Only three of those five have a backing entity
-today:
+sessions and recent artifacts". The counts deliberately read the backing
+entities that exist today:
 
-- **sessions** and, under the vocabulary issue #6/#7 will eventually give their
-  own endpoints, **decisions** and **missions** are all the same `TaskModel`
-  row issue #9's `/api/v1/sessions` already serves. `pendingDecisions` and
-  `activeMissions` below read that one table — they are not new entities.
-- **issues** (issue #8) and **artifacts** (issue #11) have no backing model in
-  this codebase at all — no `IssueModel`, no `ArtifactModel`. Reporting a count
-  for either would mean inventing data or always answering zero, and an
-  always-zero field is one a mobile client can build a UI around and never see
-  populated — the same failure `probes.CAPABILITIES`'s doc comment already
-  warns against. Both are omitted here; a future issue that adds the entity
-  adds the field alongside it.
+- **pendingDecisions** reads approval-requiring Task/Forge decision rows.
+- **activeMissions** reads durable `MissionModel` rows.
+- **sessions** read `TaskModel` rows.
+- **issues** and **artifacts** read their own models where present.
 
 "Branch and latest-activity metadata when available" is served as
 `lastActivityAt` (the most recent task's `createdAt` for the project) —

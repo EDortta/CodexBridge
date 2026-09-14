@@ -67,6 +67,10 @@ REQUIRED_TABLES: dict[str, str] = {
     "node_invites": "0013_node_enrollment.sql",
     # Issue #80/#79's human approval gate for a forge write.
     "forge_operations": "0015_forge_operations.sql",
+    # Issue #43's durable operator-level Mission aggregate.
+    "missions": "0017_durable_missions.sql",
+    "mission_attempts": "0017_durable_missions.sql",
+    "mission_events": "0017_durable_missions.sql",
 }
 
 # READ THIS BEFORE TRUSTING THE TABLE ABOVE.
@@ -102,6 +106,7 @@ REQUIRED_COLUMNS: dict[str, dict[str, str]] = {
         "issue_ref": "0008_engine_and_delivery.sql",
         "delivery_json": "0008_engine_and_delivery.sql",
         "delivery_result_json": "0008_engine_and_delivery.sql",
+        "mission_id": "0017_durable_missions.sql",
     },
     # Without these two, every request authenticates against a table that
     # cannot express revocation — so a token the operator revoked keeps working

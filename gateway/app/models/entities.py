@@ -245,6 +245,7 @@ class TaskModel(Base):
     __tablename__ = "tasks"
 
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    mission_id: Mapped[str | None] = mapped_column(String(128), ForeignKey("missions.id"), nullable=True)
     executor_id: Mapped[str] = mapped_column(String(128), ForeignKey("executors.id"))
     project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
     instruction: Mapped[str] = mapped_column(Text)
@@ -301,6 +302,70 @@ class TaskModel(Base):
     # that keeps a stale `delivery_result_json` would report the *previous*
     # run's commit as if it were this one's).
     delivery_result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class MissionModel(Base):
+    """Durable operator intent, distinct from execution attempts.
+
+    A Mission is what the operator asked CodexBridge to achieve. `TaskModel`
+    remains the executor-facing attempt/session machinery; a Mission can own
+    more than one task over retry/replan without changing its operator-visible
+    identity.
+    """
+
+    __tablename__ = "missions"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    objective: Mapped[str] = mapped_column(Text)
+    source_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    requested_mode: Mapped[str] = mapped_column(String(64))
+    requested_policy: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    selected_node_id: Mapped[str | None] = mapped_column(String(128), ForeignKey("nodes.id"), nullable=True)
+    selected_executor_id: Mapped[str | None] = mapped_column(String(128), ForeignKey("executors.id"), nullable=True)
+    selected_engine: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    state: Mapped[str] = mapped_column(String(64))
+    priority: Mapped[str] = mapped_column(String(32))
+    run_when_available: Mapped[bool] = mapped_column(Boolean, default=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    delivery_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    final_outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    active_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    requested_by_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    requested_by_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+
+
+class MissionAttemptModel(Base):
+    __tablename__ = "mission_attempts"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(String(128), ForeignKey("missions.id"))
+    task_id: Mapped[str] = mapped_column(String(128), ForeignKey("tasks.id"))
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class MissionEventModel(Base):
+    __tablename__ = "mission_events"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(String(128), ForeignKey("missions.id"))
+    event_type: Mapped[str] = mapped_column(String(128))
+    state: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    actor_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class EpicModel(Base):

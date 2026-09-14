@@ -129,31 +129,24 @@ What operations a Node may perform against a Project it is bound to
 `deliver`). Prefer naming the capability (`read`, `modify`, `deliver`) over
 saying "access."
 
-### Mission / Task / Session / Decision — four vocabularies, one entity
-This is the pair the issue asks about ("Mission / Task / Run / Execution") and
-the audit found something more precise than either side of that pair
-proposed: **there is no separate Mission entity, no separate Session entity,
-and no separate Decision entity.** All three are the same `TaskModel` row,
-exposed under three different names for three different audiences
-(`docs/api/README.md`, sections "Sessions," "Decisions," "Missions";
-`gateway/app/api/routes/conversations.py`: *"session" and "decision" and
-"mission" are the same TaskModel"*):
+### Mission / Task / Session / Decision
+Issue #43 changes the old simplification: **Mission is now a durable entity
+distinct from Task/Session.** A Mission is the operator's intent and stable
+operator-visible identity. A Task/Session is one execution attempt owned by a
+Mission. A Decision remains the approval view over an approval-requiring task
+or forge operation.
 
 | Surface | Audience | What it emphasizes |
 |---|---|---|
+| **Mission** (`/api/v1/missions`, `MissionModel`) | mission-control view | durable operator intent, current mission state, attempts, timeline |
 | **Session** (`/api/v1/sessions`) | mobile client, general use | one `codex exec` run: logs, pause/resume/restart |
-| **Decision** (`/api/v1/decisions`) | approval flow | the same run, at the moment `awaiting_approval` — request, risk, approve/reject |
-| **Mission** (`/api/v1/missions`) | mission-control view | the same run, reframed with `objective`, `stage`, `blocked`/`blockedReason` |
-| **Task** (`TaskModel`, MCP tools `submit_codex_task`/`get_task_status`/…) | internal identifier and the original MCP vocabulary | the row itself |
+| **Decision** (`/api/v1/decisions`) | approval flow | a task/operation at the moment it needs approval — request, risk, approve/reject |
+| **Task** (`TaskModel`, MCP tools `submit_codex_task`/`get_task_status`/…) | executor protocol and compatibility | one execution attempt under a Mission |
 
 Operator-facing prose should say **Mission** or **Session** depending on which
-surface is being described, and should not silently mix them for the same
-concrete thing in one paragraph. **Task** remains correct when talking about
-the MCP tool surface (`submit_codex_task`) or the internal model — that
-vocabulary predates missions/sessions and is not being retired by this issue
-(a rename would be a protocol/contract change, explicitly out of scope; see
-`docs/api/README.md`'s own "internal one differs on purpose" reasoning for
-Session vs Task).
+surface is being described, and should not silently mix Mission identity with
+attempt/session identity. **Task** remains correct when talking about the MCP
+compatibility surface (`submit_codex_task`) or executor protocol machinery.
 
 ### SCM provider / repository host
 GitHub, GitLab, and future source-control hosting integrations, as a category.

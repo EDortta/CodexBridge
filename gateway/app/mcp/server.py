@@ -410,7 +410,7 @@ async def handle_mcp_call(
         eta = await store.estimate_task_duration_seconds(
             session, project_id=task.project_id, mode=task.mode, engine=task.engine, executor_id=task.executor_id
         )
-        payload = {"task_id": task.id, "state": task.state, "expires_at": task.expires_at.isoformat(), **eta}
+        payload = {"task_id": task.id, "mission_id": task.mission_id, "state": task.state, "expires_at": task.expires_at.isoformat(), **eta}
         result = _text_result(f"Task {task.id} created with state {task.state}.", payload)
     elif tool_name == "get_task_status":
         require_scope("codexbridge.read")
@@ -423,6 +423,7 @@ async def handle_mcp_call(
         )
         payload = {
             "task_id": task.id,
+            "mission_id": task.mission_id,
             "state": task.state,
             "executor_id": task.executor_id,
             "project_id": task.project_id,
@@ -813,6 +814,7 @@ async def handle_mcp_call(
         )
         payload = {
             "task_id": task.id,
+            "mission_id": task.mission_id,
             "state": task.state,
             "engine": task.engine,
             "project_id": task.project_id,
@@ -825,7 +827,8 @@ async def handle_mcp_call(
             **eta,
         }
         result = _text_result(
-            f"Task {task.id} created with state {task.state}, running on engine {task.engine}.", payload
+            f"Mission {task.mission_id} created with attempt {task.id} in state {task.state}, running on engine {task.engine}.",
+            payload,
         )
     elif tool_name == "bind_project_forge":
         # WK-20260902-forge-binding, issue #79/#80 (PR B4). Registers the

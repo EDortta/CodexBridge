@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.18.0
+  version: 1.19.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -1754,11 +1754,11 @@ paths:
       tags: [missions]
       summary: Missions the caller may see, newest first
       description: |
-        A **mission** is the same run `GET /api/v1/sessions` returns, reframed
-        in mission-control vocabulary: `objective` for the instruction,
-        `assignedAgent` for the executor, `stage`/`risk`/`blocked` derived from
-        recorded state. There is no separate mission entity — see
-        `docs/api/README.md` "Missions (issue #7)".
+        A **mission** is durable operator intent, distinct from the execution
+        attempt/session `GET /api/v1/sessions` returns. It carries
+        `objective`, selected executor/engine, requested mode/policy,
+        current mission state and a timeline; attempts remain inspectable
+        through their Task/Session ids.
 
         `stage` is a coarser grouping over `state` (`pending`/`active`/`done`)
         and is a separate filter from it; both may be given together, and an
@@ -1834,13 +1834,10 @@ paths:
       tags: [missions]
       summary: Create a mission
       description: |
-        Issue #68: the first HTTP exposure of `codexbridge.task.submit`
-        (`missions.create` in `GET /api/v1/auth/me`'s `permissions`). Creates
-        the same `TaskModel` row `submit_codex_task`/`start_development_task`
-        (MCP) already create — no new id space, no new `TaskState`, and the
-        response is the same `Mission` shape `GET /api/v1/missions/{missionId}`
-        already returns, so a client can read the created mission straight
-        back with no second call shape to learn.
+        Creates a durable Mission and its first execution attempt. The
+        Mission id is the operator-visible identity; retries/replans attach
+        further Task/Session attempts to the same Mission rather than
+        replacing it.
 
         `executorId` is optional. Omitted, it resolves the same way
         `start_development_task` (MCP) resolves it: the project's onboarded
@@ -1901,9 +1898,8 @@ paths:
       tags: [missions]
       summary: One mission
       description: |
-        Returns an `ETag` derived from the mission's revision — the same
-        validator `GET /api/v1/sessions/{sessionId}` returns, since they are
-        the same underlying row. Send it back as `If-Match` on `cancel`.
+        Returns an `ETag` derived from the Mission's own revision. Send it
+        back as `If-Match` on `cancel`.
 
         A mission in a project the caller cannot see returns `404`, never
         `403`: confirming that an identifier exists is what probing is for.
@@ -1939,8 +1935,8 @@ paths:
       tags: [missions]
       summary: The mission's recorded events, oldest first
       description: |
-        Backed by the same `audit_events` rows every mutator in
-        `gateway/app/services/store.py` already writes — not a new log.
+        Backed by `mission_events`, the append-only timeline for the durable
+        Mission aggregate — not a raw log.
         Cursor-paginated like any other collection (unlike session logs,
         which are an append-only stream addressed by offset): a timeline is
         read forward from creation, so unlike other collections in this
@@ -5359,9 +5355,11 @@ components:
       description: |
         Coarse grouping over a mission's exact `state`, for a mission-control
         list that groups rather than enumerates every state. `pending` covers
-        `queued` and `waiting_executor`; `active` covers `running` and
-        `awaiting_approval`; `done` covers every terminal state. `state` is
-        still returned unchanged and remains its own, finer-grained filter.
+        `draft`, `planning`, `queued`, `scheduled` and `waiting_executor`;
+        `active` covers `running`, `testing`, `reviewing`, `waiting_human`,
+        `blocked` and `paused`; `done` covers `completed`, `failed` and
+        `cancelled`. `state` is still returned unchanged and remains its own,
+        finer-grained filter.
 
     RiskLevel:
       type: string
@@ -5395,12 +5393,9 @@ components:
     Mission:
       type: object
       description: |
-        The mission-control view of one `codex exec` run — the same row
-        `Session` describes, reframed. There is no separate mission entity in
-        this build: see `docs/api/README.md` "Missions (issue #7)" for what
-        that means for `dependencies` and `relatedEntities`, named in issue
-        #7's scope but not present here because nothing in this codebase's
-        domain model links one mission to another or to any other entity yet.
+        Durable operator intent, distinct from the execution attempt/session
+        `Session` describes. A Mission can own multiple attempts without
+        changing this `id`; the executor still runs Task/Session attempts.
 
         Omits the project's filesystem path, the command line and the raw
         result blob, for the same reason `Session` does.
@@ -5430,6 +5425,12 @@ components:
           type: string
         state:
           type: string
+          description: |
+            Mission lifecycle state. Current canonical values are `draft`,
+            `planning`, `queued`, `scheduled`, `waiting_executor`, `running`,
+            `testing`, `reviewing`, `waiting_human`, `blocked`, `paused`,
+            `completed`, `failed` and `cancelled`. The schema leaves this as
+            an unconstrained string for v1 compatibility with older clients.
         stage:
           $ref: '#/components/schemas/MissionStage'
         risk:
@@ -5517,14 +5518,14 @@ components:
     MissionTimelineEvent:
       type: object
       description: |
-        One recorded event from the mission's audit trail
-        (`gateway/app/services/audit.py:record_event`), not a new log —
-        the same rows Sessions' actor-audit writes already produce.
+        One append-only event from the mission timeline. Material mission
+        transitions and execution-attempt creation/completion are recorded
+        here; raw task logs remain under the session/log surfaces.
       required: [type, at, summary]
       properties:
         type:
           type: string
-          description: Stable event identifier, e.g. `task.created`, `task.state_changed`.
+          description: Stable event identifier, e.g. `mission.created`, `mission.state_changed`, `mission.attempt_created`.
         at:
           $ref: '#/components/schemas/Timestamp'
         state:
@@ -5546,8 +5547,8 @@ components:
         `POST /api/v1/missions` (issue #68). Deliberately close to
         `start_development_task` (MCP)'s own shape — `objective`, `mode`,
         `priority`, `engine`, `issueRef`, `delivery` are the same fields that
-        tool already validates, resolved through the same `store.create_task`
-        every other task creator in this codebase goes through.
+        tool already validates. The request creates a durable Mission and its
+        first execution attempt.
       required: [projectId, objective]
       properties:
         projectId:
@@ -5937,9 +5938,8 @@ components:
       type: string
       enum: [project, session, decision, mission, issue]
       description: |
-        `session`, `decision` and `mission` all name the same `TaskModel` row
-        under three vocabularies — see `docs/api/README.md`'s "Decisions" and
-        "Missions" sections. `artifact` is absent. Issue #11 has since shipped
+        `session` and `decision` name task/approval rows; `mission` names the
+        durable Mission aggregate. `artifact` is absent. Issue #11 has since shipped
         the entity a reference of that type could be checked against, so what
         keeps it out now is the enum rule, not the missing model: adding a
         member to a *response* enum is a breaking change

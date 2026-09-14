@@ -8,18 +8,11 @@ executor protocol.
 ## Why `artifact` is not a context type
 
 Issue #10's objective names conversations "linked to projects, decisions,
-missions, issues, sessions and artifacts". Five of those six already have a
-backing model this build can validate a reference against: `project` is
-`ProjectModel`; `session`, `decision` and `mission` are the same `TaskModel`
-under three vocabularies (`docs/api/README.md`'s "Decisions"/"Missions"
-sections); `issue` is `IssueModel` (issue #8). `artifact` has no backing model
-— issue #11 has not shipped `ArtifactModel` — so a context reference of that
-type could not be checked for existence or for project visibility, which is
-exactly the acceptance criterion this issue's context references exist to
-satisfy ("Unauthorized entity references are rejected without disclosing
-hidden resources"). Rather than accept an unverifiable reference, `artifact`
-is omitted from `CONTEXT_TYPES` until issue #11 gives it something to check
-against, the same discipline issue #8 applied to "missions, conversations and
+missions, issues, sessions and artifacts". These now validate against their
+own backing models where they have one: `project` is `ProjectModel`;
+`session`/`decision` are `TaskModel`; `mission` is `MissionModel`; `issue` is
+`IssueModel`. `artifact` is omitted until the conversation surface wires an
+artifact visibility check, the same discipline issue #8 applied to "missions, conversations and
 decisions" as issue links and issue #7 applied to `dependencies`/
 `relatedEntities`: no backing entity, no field.
 
