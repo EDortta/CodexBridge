@@ -1933,3 +1933,9 @@ perguntar ao remoto" viraram motivos distintos (`push_verification_failed` e
 `push_verification_unreachable`). Colapsar os dois diria "não empurrou" quando a
 resposta honesta é "não confirmei" — e é essa diferença que manda alguém olhar o
 forge em vez de reempurrar por cima.
+
+## 2026-09-14 — um plano não vira entrada canônica só porque foi commitado
+
+O plano incremental (`docs/chatgpt-incremental-execution-plan.md`) agora diz com precisão como avançar o CodexBridge por ChatGPT: Node explícito, Project lógico autorizado, sem path/credential spill, e depois issues locais, forge executor-owned, Mission etc. Mas a pergunta "o objetivo está bem estabelecido na documentação?" mostrou uma lacuna diferente: o plano está certo, porém não é ainda o primeiro documento que um agente frio encontra.
+
+`README.md` ainda descreve o produto como o MVP antigo — ChatGPT ligado a executores que rodam `codex exec`. Isso é histórico verdadeiro, mas já não é o norte. O objetivo atual vive espalhado entre o plano incremental, `docs/control-plane.md`, o épico #63 e as issues #40–#58. A próxima sessão deve criar ou linkar um documento canônico de objetivo do produto antes de acumular mais features, senão cada agente começa por uma versão diferente do CodexBridge.
