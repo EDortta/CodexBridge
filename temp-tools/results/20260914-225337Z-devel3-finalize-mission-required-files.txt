@@ -1,0 +1,63 @@
+=== CodexBridge #43 required-file finalization ===
+timestamp: 2026-09-14T19:53:37-03:00
+host: devel3
+branch: development
+head-before: 55e8acde50c4038ffc565d31c75553a7b55ba7f2
+
+PRESENT gateway/app/services/mission_types.py
+PRESENT tests/unit/test_mission_types.py
+PRESENT contract/1.19.0
+
+--- stage only required #43 files ---
+
+A  contract/1.19.0/codex-bridge.openapi.yaml
+A  contract/1.19.0/manifest.json
+A  gateway/app/services/mission_types.py
+A  tests/unit/test_mission_types.py
+
+--- focused verification ---
+............................                                             [100%]
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+28 passed, 2 warnings in 2.48s
+
+--- commit ---
+[development d69c399] feat(missions): track durable Mission state machine and contract 1.19
+ 4 files changed, 7027 insertions(+)
+ create mode 100644 contract/1.19.0/codex-bridge.openapi.yaml
+ create mode 100644 contract/1.19.0/manifest.json
+ create mode 100644 gateway/app/services/mission_types.py
+ create mode 100644 tests/unit/test_mission_types.py
+
+--- push development ---
+To https://github.com/EDortta/CodexBridge.git
+   55e8acd..d69c399  development -> development
+
+--- final state ---
+head-after: d69c399312909a4d85d694647a876aaaca675ac0
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/results/20260914-225337Z-devel3-finalize-mission-required-files.txt
+
+RESULT_FILE=temp-tools/results/20260914-225337Z-devel3-finalize-mission-required-files.txt
