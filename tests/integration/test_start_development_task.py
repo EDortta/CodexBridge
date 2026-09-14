@@ -10,11 +10,18 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.db.base import Base
 from gateway.app.mcp.server import handle_mcp_call
+from gateway.app.mcp.tools import tool_definitions
+from gateway.app.models.entities import (
+    NodeModel,
+    ProjectAuthorizationModel,
+    WorkspaceBindingModel,
+)
 from gateway.app.services import store
 from shared.protocol import ExecutorRegistration, ProjectRegistration
 
@@ -62,7 +69,7 @@ async def db_session():
             session,
             executors=[
                 ExecutorRegistration(
-                    executor_id="T610", display_name="T610", machine_token="t",
+                    executor_id="T610", display_name="T610 worker", machine_token="t",
                     allowed_projects=["p1"], max_concurrent_tasks=5,
                 )
             ],
@@ -74,6 +81,35 @@ async def db_session():
                 ProjectRegistration(project_id="unclaimed", name="Unclaimed Project", path="/srv/unclaimed", max_timeout_seconds=3600),
             ],
         )
+        # The operator names the machine (Bridge Node), not the protocol
+        # connection (executor). They are 1:1 in this fixture but deliberately
+        # carry different human names so the test cannot pass by resolving the
+        # executor display name accidentally.
+        node = await session.get(NodeModel, "T610")
+        node.display_name = "devel3"
+        now = datetime.now(timezone.utc)
+        session.add(
+            WorkspaceBindingModel(
+                id="binding-T610-p1",
+                node_id="T610",
+                project_id="p1",
+                local_path="/srv/p1",
+                state="active",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            ProjectAuthorizationModel(
+                id="authorization-T610-p1",
+                node_id="T610",
+                project_id="p1",
+                capabilities_json='["read", "test", "modify"]',
+                granted_by="operator:admin",
+                granted_at=now,
+            )
+        )
+        await session.commit()
         yield session
     await engine.dispose()
 
@@ -83,6 +119,20 @@ async def _call(session, hub, principal, arguments: dict) -> dict:
         {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "start_development_task", "arguments": arguments}},
         session, hub, principal,
     )
+
+
+def test_tool_schema_exposes_the_operator_facing_node_selector() -> None:
+    tool = next(item for item in tool_definitions() if item["name"] == "start_development_task")
+
+    node = tool["inputSchema"]["properties"]["node"]
+    assert node["type"] == "string"
+    assert "devel3" in node["description"]
+    assert "node" in tool["description"].lower()
+    assert "mode='analyze'" in tool["description"]
+
+    list_issues = next(item for item in tool_definitions() if item["name"] == "list_issues")
+    assert "banco deste gateway" in list_issues["description"]
+    assert "Nao inspeciona arquivos" in list_issues["description"]
 
 
 @pytest.mark.asyncio
@@ -101,6 +151,258 @@ async def test_happy_path_resolves_project_and_returns_eta_fields(db_session: As
     assert payload["eta_sample_size"] == 0
     task = await store.get_task(db_session, payload["task_id"])
     assert task.state == "queued"
+
+
+@pytest.mark.asyncio
+async def test_operator_can_target_a_bridge_node_by_its_human_name(db_session: AsyncSession):
+    hub = DummyHub()
+    hub.connected.add("T610")
+
+    response = await _call(
+        db_session,
+        hub,
+        ADMIN,
+        {
+            "project": "p1",
+            "node": "DEVEL3",
+            "request": "Liste as issues locais que ainda nao resolvemos.",
+            "mode": "analyze",
+        },
+    )
+    payload = response["result"]["structuredContent"]
+
+    assert payload["node_id"] == "T610"
+    assert payload["executor_id"] == "T610"
+    task = await store.get_task(db_session, payload["task_id"])
+    assert task.mode == "analyze"
+    assert task.instruction == "Liste as issues locais que ainda nao resolvemos."
+
+
+@pytest.mark.asyncio
+async def test_named_node_requires_an_active_workspace_binding(db_session: AsyncSession):
+    await db_session.execute(
+        delete(WorkspaceBindingModel).where(
+            WorkspaceBindingModel.node_id == "T610",
+            WorkspaceBindingModel.project_id == "p1",
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(ValueError, match="workspace_binding_required:p1:T610"):
+        await _call(
+            db_session,
+            DummyHub(),
+            ADMIN,
+            {"project": "p1", "node": "devel3", "request": "read", "mode": "analyze"},
+        )
+    assert await store.list_recent_tasks(db_session, 10) == []
+
+
+@pytest.mark.asyncio
+async def test_named_node_rejects_an_inactive_workspace_binding(db_session: AsyncSession):
+    binding = await db_session.get(WorkspaceBindingModel, "binding-T610-p1")
+    binding.state = "stale"
+    await db_session.commit()
+
+    with pytest.raises(ValueError, match="workspace_binding_inactive:p1:T610:stale"):
+        await _call(
+            db_session,
+            DummyHub(),
+            ADMIN,
+            {"project": "p1", "node": "devel3", "request": "read", "mode": "analyze"},
+        )
+    assert await store.list_recent_tasks(db_session, 10) == []
+
+
+@pytest.mark.asyncio
+async def test_named_node_requires_an_active_project_authorization(db_session: AsyncSession):
+    await db_session.execute(
+        delete(ProjectAuthorizationModel).where(
+            ProjectAuthorizationModel.node_id == "T610",
+            ProjectAuthorizationModel.project_id == "p1",
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(ValueError, match="project_authorization_required:p1:T610"):
+        await _call(
+            db_session,
+            DummyHub(),
+            ADMIN,
+            {"project": "p1", "node": "devel3", "request": "read", "mode": "analyze"},
+        )
+    assert await store.list_recent_tasks(db_session, 10) == []
+
+
+@pytest.mark.asyncio
+async def test_named_node_rejects_a_revoked_project_authorization(db_session: AsyncSession):
+    authorization = await db_session.get(ProjectAuthorizationModel, "authorization-T610-p1")
+    authorization.revoked_at = datetime.now(timezone.utc)
+    await db_session.commit()
+
+    with pytest.raises(ValueError, match="project_authorization_revoked:p1:T610"):
+        await _call(
+            db_session,
+            DummyHub(),
+            ADMIN,
+            {"project": "p1", "node": "devel3", "request": "read", "mode": "analyze"},
+        )
+    assert await store.list_recent_tasks(db_session, 10) == []
+
+
+@pytest.mark.asyncio
+async def test_named_node_requires_the_capability_for_the_requested_mode(db_session: AsyncSession):
+    authorization = await db_session.get(ProjectAuthorizationModel, "authorization-T610-p1")
+    authorization.capabilities_json = '["read"]'
+    await db_session.commit()
+
+    with pytest.raises(ValueError, match="capability_not_authorized_for_mode:p1:T610:implement"):
+        await _call(
+            db_session,
+            DummyHub(),
+            ADMIN,
+            {"project": "p1", "node": "devel3", "request": "write", "mode": "implement"},
+        )
+    assert await store.list_recent_tasks(db_session, 10) == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_submission_without_node_keeps_pre_binding_behavior(db_session: AsyncSession):
+    await db_session.execute(
+        delete(ProjectAuthorizationModel).where(
+            ProjectAuthorizationModel.node_id == "T610",
+            ProjectAuthorizationModel.project_id == "p1",
+        )
+    )
+    await db_session.execute(
+        delete(WorkspaceBindingModel).where(
+            WorkspaceBindingModel.node_id == "T610",
+            WorkspaceBindingModel.project_id == "p1",
+        )
+    )
+    await db_session.commit()
+
+    response = await _call(
+        db_session,
+        DummyHub(),
+        ADMIN,
+        {"project": "p1", "request": "legacy write", "mode": "implement"},
+    )
+    assert response["result"]["structuredContent"]["state"] == "waiting_executor"
+
+
+@pytest.mark.asyncio
+async def test_named_node_never_spills_to_another_online_node(db_session: AsyncSession):
+    await store.upsert_registry(
+        db_session,
+        executors=[
+            ExecutorRegistration(
+                executor_id="E2",
+                display_name="devel4 worker",
+                machine_token="t2",
+                allowed_projects=["p1"],
+                max_concurrent_tasks=5,
+            )
+        ],
+        projects=[],
+    )
+    other_node = await db_session.get(NodeModel, "E2")
+    other_node.display_name = "devel4"
+    await db_session.commit()
+    hub = DummyHub()
+    hub.connected.add("E2")
+
+    response = await _call(
+        db_session,
+        hub,
+        ADMIN,
+        {"project": "p1", "node": "devel3", "request": "read only", "mode": "analyze"},
+    )
+    payload = response["result"]["structuredContent"]
+
+    assert payload["node_id"] == "T610"
+    assert payload["executor_id"] == "T610"
+    assert payload["state"] == "waiting_executor"
+
+
+@pytest.mark.asyncio
+async def test_node_and_legacy_executor_selectors_cannot_be_combined(db_session: AsyncSession):
+    hub = DummyHub()
+
+    with pytest.raises(Exception) as raised:
+        await _call(
+            db_session,
+            hub,
+            ADMIN,
+            {"project": "p1", "node": "devel3", "executor_id": "T610", "request": "x"},
+        )
+
+    assert "executor_selector_conflict" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_unknown_node_reference_is_404(db_session: AsyncSession):
+    hub = DummyHub()
+
+    with pytest.raises(Exception) as raised:
+        await _call(
+            db_session,
+            hub,
+            ADMIN,
+            {"project": "p1", "node": "no-such-node", "request": "x"},
+        )
+
+    assert "unknown_node" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_named_node_must_have_an_executor_onboarded_for_the_project(db_session: AsyncSession):
+    hub = DummyHub()
+
+    with pytest.raises(Exception) as raised:
+        await _call(
+            db_session,
+            hub,
+            ADMIN,
+            {"project": "p2", "node": "devel3", "request": "x"},
+        )
+
+    assert "project_not_onboarded_on_node:p2:T610" in str(raised.value)
+    assert await store.list_recent_tasks(db_session, 10) == []
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_node_prefix_is_409_and_names_candidates(db_session: AsyncSession):
+    await store.upsert_registry(
+        db_session,
+        executors=[
+            ExecutorRegistration(
+                executor_id="E2",
+                display_name="second worker",
+                machine_token="t2",
+                allowed_projects=["p1"],
+                max_concurrent_tasks=5,
+            )
+        ],
+        projects=[],
+    )
+    second_node = await db_session.get(NodeModel, "E2")
+    second_node.display_name = "devel30"
+    await db_session.commit()
+    hub = DummyHub()
+
+    with pytest.raises(Exception) as raised:
+        await _call(
+            db_session,
+            hub,
+            ADMIN,
+            {"project": "p1", "node": "devel", "request": "x"},
+        )
+
+    message = str(raised.value)
+    assert "ambiguous_node" in message
+    assert "T610 (devel3)" in message
+    assert "E2 (devel30)" in message
 
 
 @pytest.mark.asyncio

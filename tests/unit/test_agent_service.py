@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -217,6 +219,56 @@ class _FakeConnect:
 
     async def __aexit__(self, *_: object) -> bool:
         return False
+
+
+@pytest.mark.asyncio
+async def test_run_forever_logs_sanitized_connection_failure_and_retries(
+    monkeypatch,
+    caplog,
+) -> None:
+    from agent.codex_bridge_agent import service as service_module
+
+    service = AgentService(
+        AgentSettings(reconnect_min_seconds=2, reconnect_max_seconds=8)
+    )
+    attempts = 0
+    waits: list[float] = []
+
+    async def fail_connection() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError(
+            "wss://operator:password@gateway.internal/agent/ws?token=topsecret "
+            "/home/operator/private"
+        )
+
+    async def stop_after_first_wait(seconds: float) -> None:
+        waits.append(seconds)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(service, "_run_once", fail_connection)
+    monkeypatch.setattr(service_module.random, "uniform", lambda _a, _b: 0.0)
+    monkeypatch.setattr(service_module.asyncio, "sleep", stop_after_first_wait)
+
+    with caplog.at_level(logging.WARNING, logger=service_module.__name__):
+        with pytest.raises(asyncio.CancelledError):
+            await service.run_forever()
+
+    assert attempts == 1
+    assert waits == [2.0]
+    text = caplog.text
+    assert "connection_failed" in text
+    assert "RuntimeError" in text
+    assert "retry_in_seconds=2.000" in text
+    for forbidden in (
+        "operator",
+        "password",
+        "gateway.internal",
+        "topsecret",
+        "/home/operator",
+        "Traceback",
+    ):
+        assert forbidden not in text
 
 
 @pytest.mark.asyncio

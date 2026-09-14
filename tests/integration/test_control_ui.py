@@ -36,14 +36,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.app.api.routes import control_ui as control_ui_routes
+from gateway.app.api.routes import discovery as discovery_routes
 from gateway.app.api.setup import install_api_conventions
+from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.db.base import Base
 from gateway.app.db.session import get_session
+from gateway.app.mcp.server import handle_mcp_call
 from gateway.app.models.entities import (
     AuditEventModel,
     DiscoveredResourceModel,
     ProjectAuthorizationModel,
     ProjectModel,
+    WorkspaceBindingModel,
 )
 from gateway.app.services import store
 from shared.protocol import DiscoveredState, ExecutorRegistration
@@ -51,6 +55,30 @@ from shared.protocol import DiscoveredState, ExecutorRegistration
 
 PASSWORD = "correct-horse-battery-staple"
 OTHER_PASSWORD = "not-the-password"
+
+
+class DummyHub:
+    def __init__(self) -> None:
+        self.connected: set[str] = set()
+        self.sent: list[tuple[str, object]] = []
+
+    def is_connected(self, executor_id: str) -> bool:
+        return executor_id in self.connected
+
+    async def dispatch_next(self, executor_id: str):
+        return None
+
+    async def send(self, executor_id: str, envelope) -> None:
+        self.sent.append((executor_id, envelope))
+
+
+MCP_ADMIN = AuthenticatedPrincipal(
+    user_id="admin",
+    email="admin@example.com",
+    roles=["admin"],
+    allowed_projects=["adopted-project"],
+    scopes=["codexbridge.read", "codexbridge.task.submit", "codexbridge.admin"],
+)
 
 
 def _hash(password: str, iterations: int = 1000) -> str:
@@ -124,6 +152,7 @@ async def api(users_file, monkeypatch):
     app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
     install_api_conventions(app)
     app.include_router(control_ui_routes.router)
+    app.include_router(discovery_routes.router)
 
     async def override():
         async with factory() as s:
@@ -382,6 +411,83 @@ async def test_control_node_detail_embeds_a_real_bearer_token_for_its_own_fetch_
     assert row.user_id == "admin"
 
 
+async def test_project_adopted_from_control_can_be_targeted_by_mcp_node_and_project(api) -> None:
+    """The Control-panel adoption state is exactly what MCP later consumes.
+
+    This is the operator-facing contract: after adopting a discovered project
+    on a Bridge Node, ChatGPT/MCP should target it by logical project id plus
+    node name only. The MCP request never receives the candidate's local path.
+    """
+    await set_node_display_name(api.factory, "E1", "devel3")
+    await seed_resource(
+        api.factory,
+        resource_id="candidate-1",
+        resource_path="/srv/private/adopted-project",
+        suggested_name="Adopted Project",
+    )
+    page = api.get("/control/nodes/E1", headers=basic("admin"))
+    assert page.status_code == 200
+    token = page.text.split("const CB_TOKEN = ", 1)[1].split(";", 1)[0].strip('"')
+
+    adopt = api.post(
+        "/api/v1/discovered-resources/candidate-1/adopt",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "newProject": {"projectId": "adopted-project", "name": "Adopted Project"},
+            "grantCapabilities": ["read"],
+        },
+    )
+    assert adopt.status_code == 200
+    assert adopt.json()["state"] == "authorized"
+
+    async with api.factory() as session:
+        binding = (
+            (
+                await session.execute(
+                    select(WorkspaceBindingModel).where(
+                        WorkspaceBindingModel.node_id == "E1",
+                        WorkspaceBindingModel.project_id == "adopted-project",
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        assert binding is not None
+        assert binding.state == "active"
+
+        hub = DummyHub()
+        hub.connected.add("E1")
+        mcp_response = await handle_mcp_call(
+            {
+                "jsonrpc": "2.0",
+                "id": "adopted-mcp",
+                "method": "tools/call",
+                "params": {
+                    "name": "start_development_task",
+                    "arguments": {
+                        "node": "devel3",
+                        "project": "adopted-project",
+                        "request": "Analise o projeto adotado sem alterar arquivos.",
+                        "mode": "analyze",
+                    },
+                },
+            },
+            session,
+            hub,
+            MCP_ADMIN,
+        )
+        payload = mcp_response["result"]["structuredContent"]
+        assert payload["node_id"] == "E1"
+        assert payload["executor_id"] == "E1"
+        assert payload["project_id"] == "adopted-project"
+        assert payload["state"] == "queued"
+        assert "/srv/private" not in str(payload)
+        task = await store.get_task(session, payload["task_id"])
+        assert task.mode == "analyze"
+        assert task.executor_id == "E1"
+
+
 # ---------------------------------------------------------------------------
 # GET /control/invite — see control_ui.py's own docstring
 # ---------------------------------------------------------------------------
@@ -397,21 +503,31 @@ async def test_control_invite_without_the_admin_scope_is_forbidden(api) -> None:
     assert response.status_code == 403
 
 
-async def test_control_invite_explains_the_gap_honestly(api) -> None:
-    """Positive control for the previous two, and the point of this screen today:
+async def test_control_invite_renders_warning_when_principal_lacks_invite_permission(api, monkeypatch) -> None:
+    from gateway.app.api import permissions
 
-    it must say plainly that it cannot do what its name promises on THIS
-    build, and never present a form that posts to an endpoint this process
-    does not serve. It must also not claim the capability is unbuilt: the
-    endpoint and the script exist on the branch carrying issue #76's minimal
-    cut, and this page says so, because "missing from this build" and
-    "missing from this codebase" are different statements and only the first
-    one is true.
-    """
+    orig_is_allowed = permissions.is_allowed
+    monkeypatch.setattr(
+        permissions,
+        "is_allowed",
+        lambda principal, action, **kw: False if action == permissions.NODES_INVITE else orig_is_allowed(principal, action, **kw),
+    )
     response = api.get("/control/invite", headers=basic("admin"))
     assert response.status_code == 200
-    assert "Not available yet on this build" in response.text
-    assert "/api/v1/nodes/invite" in response.text
-    assert "enroll_node.py" in response.text
-    assert "#76" in response.text
+    assert "lacks permission to issue node invites" in response.text
     assert "<form" not in response.text
+
+
+async def test_control_invite_renders_active_form_for_admin(api) -> None:
+    """Verifies 200 for admin, form, input, token minting, and script instructions."""
+    response = api.get("/control/invite", headers=basic("admin"))
+    assert response.status_code == 200
+    assert "<form" in response.text
+    assert "displayNameHint" in response.text
+    assert "CB_TOKEN" in response.text
+    assert "scripts/enroll_node.py" in response.text
+    token = response.text.split("const CB_TOKEN = ", 1)[1].split(";", 1)[0].strip('"')
+    async with api.factory() as session:
+        row = await store.get_oauth_access_token(session, token)
+    assert row is not None
+    assert row.user_id == "admin"

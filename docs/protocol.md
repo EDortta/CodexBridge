@@ -65,7 +65,11 @@ ou acima — WK-20260903-gh67-70-read-gaps, issue #67) baseada no histórico rea
 de tarefas. Aceita `issue` (`docs:NNN`/`NNN` resolvido
 **no executor**, `local:<id>` resolvido no gateway, `gh:<n>` recusado —
 ingestão de issue do GitHub não tem dono neste sistema) e `engine`
-(`codex`/`claude`/`cursor-agent`/`gemini`/`opencode`/`aider`, default `claude`).
+(`codex`/`claude`/`cursor-agent`/`gemini`/`opencode`/`aider`). Quando omitido,
+usa `CODEX_BRIDGE_DEFAULT_ENGINE` no gateway (default histórico `claude`); o
+mesmo valor aparece como `default` em `tools/list`, portanto o schema anunciado
+e a execução não divergem. Uma instalação cujo Claude Code não esteja
+autenticado pode definir `codex` sem alterar o contrato global.
 `allow_push=true` exige `branch` casando `PUSHABLE_BRANCH_PATTERN` e escopo
 `codexbridge.task.approve` — nunca cria a tarefa sem os dois. As quatro
 ferramentas com nome `codex` continuam respondendo exatamente como antes

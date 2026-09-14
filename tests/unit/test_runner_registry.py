@@ -9,11 +9,24 @@ import pytest
 
 from agent.codex_bridge_agent.config import AgentSettings
 from agent.codex_bridge_agent.forge.gh_tool import GH_ENV_ALLOWLIST
-from agent.codex_bridge_agent.runners.base import EngineNotImplementedError, Runner
+from agent.codex_bridge_agent.runners.base import (
+    EngineNotImplementedError,
+    Runner,
+)
 from agent.codex_bridge_agent.runners.codex import CodexRunner
 from agent.codex_bridge_agent.runners.pool import RunnerPool
-from agent.codex_bridge_agent.runners.registry import KNOWN_ENGINES
+from agent.codex_bridge_agent.runners.registry import (
+    EngineRegistration,
+    KNOWN_ENGINES,
+    CANDIDATE_ENGINES,
+    CUSTOM_ENGINES,
+    get_all_engines,
+    register_custom_engine,
+    discover_available_engines,
+)
 from shared.protocol import AgentEngine
+from agent.codex_bridge_agent.config import AgentSettings
+from agent.codex_bridge_agent.runners.claude import ClaudeRunner
 
 
 def test_codex_satisfies_the_runner_protocol():
@@ -91,10 +104,72 @@ def test_unimplemented_engines_are_declared_not_absent():
     typed error naming the engine, never an `AttributeError` from a missing
     dict key.
     """
+    all_engines = get_all_engines()
     for engine in AgentEngine:
-        assert engine.value in KNOWN_ENGINES, engine.value
-    implemented = {name for name, reg in KNOWN_ENGINES.items() if reg.implemented}
+        assert engine.value in all_engines, engine.value
+    # Verify that all core engines are present and implemented
+    implemented = {name for name, reg in all_engines.items() if reg.implemented}
+    # Both Codex and Claude should be implemented in the extensible registry
     assert implemented == {AgentEngine.CODEX.value, AgentEngine.CLAUDE.value}
+
+
+def test_custom_engine_registration():
+    """Test that custom engines can be registered and discovered."""
+    # Start with baseline count
+    initial_count = len(get_all_engines())
+
+    # Register a custom engine with an adapter
+    class MockAdapter:
+        def get_engine_name(self) -> str:
+            return "custom-test-engine"
+
+        def get_engine_display_name(self) -> str:
+            return "Custom Test Engine"
+
+        def is_binary_installed(self) -> bool:
+            return True
+
+        async def probe_availability(self):
+            from agent.codex_bridge_agent.runners.base import EngineProbe
+            return EngineProbe(available=True, detail="Test")
+
+        async def instantiate(self, settings: AgentSettings):
+            # Return a simple mock runner
+            class MockRunner(Runner):
+                def __init__(self):
+                    pass
+                async def run_task(self, **kwargs):
+                    return {"status": "mock"}
+            return MockRunner()
+
+    adapter = MockAdapter()
+    register_custom_engine(
+        engine_name="custom-test-engine",
+        adapter=adapter,
+        factory=None,
+        implemented=True,
+        installed=True,
+        probe_available=True,
+        authenticated=True,
+    )
+
+    # Verify the custom engine was registered
+    all_engines = get_all_engines()
+    assert "custom-test-engine" in all_engines
+    assert all_engines["custom-test-engine"].implemented is True
+    assert all_engines["custom-test-engine"].adapter is not None
+    assert all_engines["custom-test-engine"].installed is True
+
+    # Verify it can be discovered as available
+    available = discover_available_engines()
+    assert "custom-test-engine" in available
+    assert available["custom-test-engine"].implemented is True
+
+    # Clean up - remove the custom engine to avoid polluting other tests
+    # In a real scenario, you'd want better cleanup mechanisms
+    from agent.codex_bridge_agent.runners.registry import CUSTOM_ENGINES
+    CUSTOM_ENGINES.pop("custom-test-engine", None)
+    # Note: This is a simple cleanup - in production you'd want more robust mechanisms
 
 
 def test_pool_defaults_to_codex_and_rejects_unknown_engines():

@@ -22,18 +22,29 @@ import asyncio
 
 from agent.codex_bridge_agent.config import AgentSettings
 from agent.codex_bridge_agent.runners.base import EngineNotImplementedError, Runner
-from agent.codex_bridge_agent.runners.registry import KNOWN_ENGINES
+from agent.codex_bridge_agent.runners.registry import KNOWN_ENGINES, get_all_engines
 from shared.protocol import EngineAvailability
 
 
 class RunnerPool:
     def __init__(self, settings: AgentSettings):
         self._settings = settings
-        self._runners: dict[str, Runner] = {
-            name: registration.factory(settings)
-            for name, registration in KNOWN_ENGINES.items()
-            if registration.implemented and registration.factory is not None
-        }
+
+        # Use the new extensible registry system
+        all_engines = get_all_engines()
+
+        self._runners: dict[str, Runner] = {}
+        for name, registration in all_engines.items():
+            # Include engines that have implementations
+            if registration.implemented and registration.factory is not None:
+                self._runners[name] = registration.factory(settings)
+            # Also include engines that have adapters but no implementation yet
+            # These can be instantiated by their adapters when needed
+            elif registration.adapter is not None and registration.adapter.is_binary_installed():
+                # For engines with adapters but no factory, we can still create them
+                # by calling the adapter's instantiate method if available
+                if hasattr(registration.adapter, 'instantiate') and callable(registration.adapter.instantiate):
+                    self._runners[name] = registration.adapter.instantiate(settings)
         self._task_engine: dict[str, str] = {}
         # Issue #66 ARO finding F34. A durable flag, independent of any
         # runner's own `running` dict: `CodexRunner.cancel` (and its
