@@ -42,8 +42,43 @@ def legacy_db(tmp_path: Path) -> Path:
     db = tmp_path / "legacy.db"
     connection = sqlite3.connect(db)
     connection.executescript(
-        "create table tasks (id varchar(128) primary key, state varchar(64) not null);"
-        "insert into tasks (id, state) values ('t-old', 'running');"
+        "create table tasks ("
+        "  id varchar(128) primary key,"
+        "  executor_id varchar(128) not null,"
+        "  project_id varchar(128) not null,"
+        "  instruction text not null,"
+        "  mode varchar(64) not null,"
+        "  state varchar(64) not null,"
+        "  priority varchar(32) not null,"
+        "  run_when_available boolean not null default 0,"
+        "  expires_at timestamp with time zone not null,"
+        "  timeout_seconds integer not null,"
+        "  created_at timestamp with time zone not null,"
+        "  requested_by_user_id varchar(255),"
+        "  requested_by_email varchar(255),"
+        "  started_at timestamp with time zone,"
+        "  completed_at timestamp with time zone,"
+        "  correlation_id varchar(128) not null,"
+        "  last_error text,"
+        "  command_json text,"
+        "  session_id varchar(255),"
+        "  result_json text,"
+        "  approval_state varchar(64),"
+        "  approval_reason text"
+        ");"
+        "insert into tasks ("
+        "  id, executor_id, project_id, instruction, mode, state, priority,"
+        "  run_when_available, expires_at, timeout_seconds, created_at,"
+        "  requested_by_user_id, requested_by_email, started_at, completed_at,"
+        "  correlation_id, last_error, command_json, session_id, result_json,"
+        "  approval_state, approval_reason"
+        ") values ("
+        "  't-old', 'devel3', 'codexbridge', 'Inspect the durable mission',"
+        "  'analyze', 'running', 'normal', 1, '2099-01-01 00:00:00', 60,"
+        "  '2026-01-01 00:00:00', 'esteban', 'e@example.com',"
+        "  '2026-01-01 00:01:00', null, 'corr-old', null, null, null,"
+        "  null, null, null"
+        ");"
         "create table oauth_access_tokens ("
         "  token_hash varchar(128) primary key,"
         "  client_id varchar(255) not null,"
@@ -377,6 +412,64 @@ def test_control_plane_grants_nothing_by_existing_alone(legacy_db: Path) -> None
     assert connection.execute("select count(*) from project_authorizations").fetchone() == (0,)
     assert connection.execute("select count(*) from discovered_resources").fetchone() == (0,)
     assert connection.execute("select count(*) from workspace_bindings").fetchone() == (0,)
+
+
+def test_durable_mission_migration_backfills_existing_tasks(legacy_db: Path) -> None:
+    """0017 turns pre-Mission tasks into durable Mission aggregates.
+
+    This is the release-blocking path issue #43 needs: an existing database
+    cannot rely on `Base.metadata.create_all`, because that would create the
+    new tables without backfilling the old task rows or recording the migration.
+    """
+    run(legacy_db, "--mark-applied", "0001_init.sql")
+    applied = run(legacy_db)
+    assert applied.returncode == 0, applied.stderr
+
+    assert {"missions", "mission_attempts", "mission_events"} <= tables(legacy_db)
+    assert "mission_id" in columns(legacy_db, "tasks")
+
+    connection = sqlite3.connect(legacy_db)
+    mission = connection.execute(
+        "select id, project_id, objective, requested_mode, state, active_task_id, "
+        "selected_executor_id, selected_engine, revision from missions"
+    ).fetchone()
+    assert mission == (
+        "t-old",
+        "codexbridge",
+        "Inspect the durable mission",
+        "analyze",
+        "running",
+        "t-old",
+        "devel3",
+        "codex",
+        1,
+    )
+    assert connection.execute("select mission_id from tasks where id = 't-old'").fetchone() == ("t-old",)
+    assert connection.execute(
+        "select mission_id, task_id, attempt_number, reason from mission_attempts"
+    ).fetchall() == [("t-old", "t-old", 1, "backfill")]
+    assert connection.execute(
+        "select event_type, state, task_id from mission_events order by created_at, id"
+    ).fetchall() == [
+        ("mission.created", "running", "t-old"),
+        ("mission.attempt_created", "running", "t-old"),
+    ]
+
+
+def test_durable_mission_migration_keeps_timeline_append_only_order(legacy_db: Path) -> None:
+    """0017 writes material events once; a no-op rerun must not duplicate them."""
+    run(legacy_db, "--mark-applied", "0001_init.sql")
+    first = run(legacy_db)
+    assert first.returncode == 0, first.stderr
+    second = run(legacy_db)
+    assert second.returncode == 0, second.stderr
+
+    connection = sqlite3.connect(legacy_db)
+    assert connection.execute("select count(*) from mission_events").fetchone() == (2,)
+    rows = connection.execute(
+        "select event_type from mission_events where mission_id = 't-old' order by created_at, id"
+    ).fetchall()
+    assert rows == [("mission.created",), ("mission.attempt_created",)]
 
 
 def test_control_plane_refuses_a_database_without_executors_before_touching_it(tmp_path: Path) -> None:

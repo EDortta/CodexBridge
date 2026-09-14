@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 189 file(s) · 2187 symbol(s) indexed
-- Languages: config (2), python (183), shell (4)
+- 190 file(s) · 2190 symbol(s) indexed
+- Languages: config (2), python (183), shell (5)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `temp-tools`, `tests`
 
 ## Governance
@@ -151,6 +151,7 @@ shared/
 temp-tools/
   01-devel3-refresh-codemap-and-test.sh
   02-devel3-implement-mission-aggregate.sh
+  03-devel3-fix-and-finish-mission-aggregate.sh
 tests/
   conftest.py
   contract/
@@ -2738,6 +2739,8 @@ tests/
 - `test_engine_and_delivery_columns_default_existing_rows_to_codex(legacy_db)` — "0008: an existing row must read back as what it always was -- a plain"
 - `test_control_plane_seeds_one_node_per_existing_executor(legacy_db)` — "0009: an existing deployment must come up with its fleet already"
 - `test_control_plane_grants_nothing_by_existing_alone(legacy_db)` — "0009 must create the authorization plane EMPTY."
+- `test_durable_mission_migration_backfills_existing_tasks(legacy_db)` — "0017 turns pre-Mission tasks into durable Mission aggregates."
+- `test_durable_mission_migration_keeps_timeline_append_only_order(legacy_db)` — "0017 writes material events once; a no-op rerun must not duplicate them."
 - `test_control_plane_refuses_a_database_without_executors_before_touching_it(tmp_path)` — "A wrong database must be left untouched, not half-migrated."
 
 ### `tests/unit/test_capability_vocabulary.py`
@@ -3179,6 +3182,7 @@ tests/
 - `test_a_database_that_cannot_express_revocation_refuses_to_serve(tmp_path)` — "`revoked_at` is what makes a revoked token stop working."
 - `test_create_all_does_not_repair_an_existing_table(tmp_path)` — "The premise of the guard, asserted rather than assumed."
 - `test_engine_and_delivery_columns_are_required(tmp_path)` — "Migration 0008: engine/issue_ref/delivery_json/delivery_result_json."
+- `test_mission_id_column_is_required(tmp_path)` — "Migration 0017: existing task tables must get the Mission FK column."
 - `test_required_tables_cannot_fire_at_boot_today()` — "`REQUIRED_TABLES` is documentation, not a boot gate — pinned, not fixed."
 
 ### `tests/unit/test_security.py`

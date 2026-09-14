@@ -1,0 +1,35 @@
+You are RESUMING and FINISHING CodexBridge issue #43, the durable Mission aggregate, on the current development checkout.
+
+This is a repair/completion pass. Do not restart planning. Inspect the current working tree and the implementation already present from the previous run, then finish it correctly.
+
+Critical finding from the operator review:
+- The previous run added Mission ORM/store/API/contract changes, but the committed diff contains NO new SQL migration after existing 0016_forge_binding.sql. That is a release blocker. The prompt explicitly required a migration. The next migration must therefore be 0017 unless the current checkout already contains a newer migration when you inspect it.
+
+Required completion work:
+1. Inspect `git status`, current migrations, ORM models, schema guard, mission store/service code, routes, MCP integration, docs and tests.
+2. Add the missing durable Mission schema migration using the NEXT CURRENT migration number. It must create/backfill the real tables/columns needed by the implementation, including durable missions, mission attempts and append-only mission events, with correct indexes/FKs/constraints for every supported DB target.
+3. Ensure the migration path works from an existing pre-Mission database. Do not rely on `Base.metadata.create_all()` as a substitute for a migration.
+4. Ensure schema_guard requires the new schema and migration tests exercise it.
+5. Verify Mission is truly distinct from Task/Session and survives process/session restart semantics.
+6. Verify one Mission can retain multiple attempts/tasks and previous attempts are not overwritten.
+7. Ensure the centralized Mission state machine exists and illegal transitions fail closed.
+8. Verify timeline events are append-only and ordered.
+9. Verify REST `/api/v1/missions` and MCP `start_development_task` converge on the same durable Mission model where appropriate.
+10. Preserve Node/Project authorization, approval gates, redaction, no local-path leakage, no generic shell.
+11. Review the public contract change to 1.19.0. Keep it only if implementation and compatibility tests support it; otherwise correct it deliberately. Republish/check the pinned contract artifact using the repository's established scripts/tests.
+12. Update docs/codemap.md after all code/test changes.
+13. Add/repair tests specifically proving the SQL migration, durable restart behavior, multi-attempt behavior, illegal transition refusal, timeline ordering/append-only behavior, and no sensitive-path leakage.
+14. Run the strongest applicable migration tests (SQLite plus PostgreSQL if the repository's existing test harness supports the local environment), focused Mission tests, contract suite, then the full test suite.
+15. Do not commit, push, reset, checkout another branch, or alter credentials.
+16. Do not weaken/delete tests to make them pass.
+
+At the end print a concise machine-readable-ish summary with these exact headings:
+MIGRATION:
+CONTRACT:
+FOCUSED_TESTS:
+CONTRACT_TESTS:
+FULL_SUITE:
+BLOCKERS:
+FILES_CHANGED:
+
+If the full suite is not green, keep fixing until green unless there is a genuine external/environment blocker; if so, name the exact blocker and leave the code in the safest coherent state.

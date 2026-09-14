@@ -9,6 +9,8 @@ reads like a code bug.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from sqlalchemy import create_engine, text
 
@@ -20,6 +22,9 @@ from gateway.app.db.schema_guard import SchemaOutOfDate, check_schema
 # they did, silently, because another test module happened to import entities
 # first. Running this file alone was the only way to see it.
 import gateway.app.models.entities  # noqa: F401  (registers the tables)
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_fresh_database_passes(tmp_path) -> None:
@@ -106,6 +111,62 @@ def test_engine_and_delivery_columns_are_required(tmp_path) -> None:
     assert "tasks.delivery_result_json" in message
     assert "0008_engine_and_delivery.sql" in message
 
+
+def test_mission_id_column_is_required(tmp_path) -> None:
+    """Migration 0017: existing task tables must get the Mission FK column.
+
+    `create_all` can create the brand-new mission tables, but it cannot add
+    `tasks.mission_id` to a table that already existed. This is the startup
+    refusal that catches a skipped durable-Mission migration before the first
+    Mission/API read fails at request time.
+    """
+    engine = create_engine(f"sqlite:///{tmp_path/'pre-0017.db'}")
+    with engine.begin() as connection:
+        Base.metadata.create_all(connection)
+        connection.execute(text("drop table tasks"))
+        connection.execute(
+            text(
+                """
+                create table tasks (
+                  id varchar(128) primary key,
+                  executor_id varchar(128) not null,
+                  project_id varchar(128) not null,
+                  instruction text not null,
+                  mode varchar(64) not null,
+                  state varchar(64) not null,
+                  priority varchar(32) not null,
+                  run_when_available boolean not null default 0,
+                  expires_at timestamp with time zone not null,
+                  timeout_seconds integer not null,
+                  created_at timestamp with time zone not null,
+                  requested_by_user_id varchar(255),
+                  requested_by_email varchar(255),
+                  started_at timestamp with time zone,
+                  completed_at timestamp with time zone,
+                  correlation_id varchar(128) not null,
+                  last_error text,
+                  command_json text,
+                  session_id varchar(255),
+                  result_json text,
+                  approval_state varchar(64),
+                  approval_reason text,
+                  policy_level varchar(32),
+                  revision integer not null default 1,
+                  engine varchar(32) not null default 'codex',
+                  issue_ref varchar(512),
+                  delivery_json text,
+                  delivery_result_json text
+                )
+                """
+            )
+        )
+        with pytest.raises(SchemaOutOfDate) as raised:
+            check_schema(connection)
+    message = str(raised.value)
+    assert "tasks.mission_id" in message
+    assert "0017_durable_missions.sql" in message
+
+
 def test_required_tables_cannot_fire_at_boot_today() -> None:
     """`REQUIRED_TABLES` is documentation, not a boot gate — pinned, not fixed.
 
@@ -130,10 +191,7 @@ def test_required_tables_cannot_fire_at_boot_today() -> None:
     **If someone makes the gate real, this test must fail.** Delete it then, and
     put the promise back in the prose it was taken out of.
     """
-    import inspect
-
     from gateway.app.db.schema_guard import REQUIRED_TABLES
-    import gateway.app.main as main
 
     declared_on_base = set(Base.metadata.tables)
     assert not set(REQUIRED_TABLES) - declared_on_base, (
@@ -148,7 +206,7 @@ def test_required_tables_cannot_fire_at_boot_today() -> None:
     # the gate real — which is the drift in the opposite direction. A second
     # council round caught that. Read off the source because there is no other
     # observable: both calls are `run_sync` on the same connection.
-    startup = inspect.getsource(main.startup)
+    startup = (ROOT / "gateway" / "app" / "main.py").read_text(encoding="utf-8")
     # The `run_sync(...)` calls, not any mention of the names: the comment above
     # them names `check_schema` first, and matching that made this assertion
     # fire on correct code.
