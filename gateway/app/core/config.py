@@ -311,4 +311,5 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CODEX_BRIDGE_", env_file=".env", extra="ignore")
 
 
+Settings.model_rebuild()
 settings = Settings()

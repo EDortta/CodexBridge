@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 193 file(s) · 2190 symbol(s) indexed
-- Languages: config (2), python (183), shell (8)
+- 195 file(s) · 2195 symbol(s) indexed
+- Languages: config (2), python (184), shell (9)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `temp-tools`, `tests`
 
 ## Governance
@@ -155,6 +155,7 @@ temp-tools/
   04-devel3-validate-durable-missions.sh
   05-devel3-validate-durable-missions-python3.sh
   06-devel3-reconcile-mission-files-and-validate.sh
+  07-devel3-fix-mission-regressions-and-validate.sh
 tests/
   conftest.py
   contract/
@@ -233,6 +234,7 @@ tests/
     test_issue_materialize.py  — "`materialize_epic` and the shared numbering scanner -- issue #78, Commit 2c."
     test_issue_render.py  — "`render_epic_markdown` -- issue #78, Commit 2a."
     test_main_import.py
+    test_mission_types.py
     test_node_enrollment.py  — "`store.create_node_invite` / `store.enroll_node` / `store.revoke_node` —"
     test_node_store.py  — "`store.ensure_node_for_executor` / `upsert_registry` / `record_node_announcement`"
     test_notify.py  — "`gateway.app.services.notify` -- the task-finished completion email."
@@ -1064,6 +1066,7 @@ tests/
 - `get_mission_active_task(session, mission)` *(async function)*
 - `list_mission_attempts(session, mission_id)` *(async function)*
 - `list_mission_events_page(session, mission_id)` *(async function)*
+- `mission_has_attempt_completion(session, mission_id)` *(async function)*
 - `get_recent_logs(session, task_id)` *(async function)* — "The most recent log lines, oldest-first within the slice."
 - `list_tasks_requiring_cancel_replay(session, executor_id)` *(async function)* — "Cancelled tasks whose executor has not yet acknowledged the cancellation."
 - `list_tasks_requiring_control_replay(session, executor_id)` *(async function)* — "Tasks stuck in a pending pause/resume/restart, waiting for a `task.ack`"
@@ -3067,6 +3070,13 @@ tests/
 ### `tests/unit/test_main_import.py`
 
 - `test_main_app_imports()`
+
+### `tests/unit/test_mission_types.py`
+
+- `test_legacy_terminal_task_states_keep_their_public_mission_state()`
+- `test_legacy_session_control_paths_can_project_into_mission_state(current, target)`
+- `test_unrelated_terminal_missions_still_reject_cancelled_restarts()`
+- `test_finished_missions_do_not_skip_the_queue_on_restart()`
 
 ### `tests/unit/test_node_enrollment.py`
 

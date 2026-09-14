@@ -102,8 +102,8 @@ select
     when 'completed' then 'completed'
     when 'failed' then 'failed'
     when 'cancelled' then 'cancelled'
-    when 'expired' then 'failed'
-    when 'lost' then 'failed'
+    when 'expired' then 'expired'
+    when 'lost' then 'lost'
     else 'blocked'
   end,
   t.priority,
@@ -113,7 +113,7 @@ select
   t.delivery_json,
   case
     when t.state = 'completed' then 'completed'
-    when t.state in ('failed', 'expired', 'lost') then 'failed'
+    when t.state in ('failed', 'expired', 'lost') then t.state
     when t.state = 'cancelled' then 'cancelled'
     else null
   end,
@@ -144,7 +144,7 @@ select
   t.completed_at,
   case
     when t.state = 'completed' then 'completed'
-    when t.state in ('failed', 'expired', 'lost') then 'failed'
+    when t.state in ('failed', 'expired', 'lost') then t.state
     when t.state = 'cancelled' then 'cancelled'
     else null
   end
@@ -172,8 +172,8 @@ select
     when 'completed' then 'completed'
     when 'failed' then 'failed'
     when 'cancelled' then 'cancelled'
-    when 'expired' then 'failed'
-    when 'lost' then 'failed'
+    when 'expired' then 'expired'
+    when 'lost' then 'lost'
     else 'blocked'
   end,
   t.id,
@@ -201,8 +201,8 @@ select
     when 'completed' then 'completed'
     when 'failed' then 'failed'
     when 'cancelled' then 'cancelled'
-    when 'expired' then 'failed'
-    when 'lost' then 'failed'
+    when 'expired' then 'expired'
+    when 'lost' then 'lost'
     else 'blocked'
   end,
   t.id,

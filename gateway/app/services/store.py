@@ -77,6 +77,7 @@ from gateway.app.services.issue_types import (
 from gateway.app.services.mission_types import (
     MissionState,
     MissionTransitionError,
+    TERMINAL_MISSION_STATES,
     assert_legal_transition,
     mission_state_from_task_state,
 )
@@ -615,7 +616,7 @@ async def transition_mission_state(
     mission.revision += 1
     if target_state == MissionState.RUNNING.value and mission.started_at is None:
         mission.started_at = now
-    if target_state in {MissionState.COMPLETED.value, MissionState.FAILED.value, MissionState.CANCELLED.value}:
+    if target_state in TERMINAL_MISSION_STATES:
         mission.completed_at = now
         mission.final_outcome = target_state
     await _record_mission_event(
@@ -2606,6 +2607,17 @@ async def restart_finished_task(
             "continued_session_id": task.session_id,
         },
     )
+    if task.mission_id:
+        mission = await session.get(MissionModel, task.mission_id)
+        if mission is not None and mission.active_task_id == task.id:
+            await transition_mission_state(
+                session,
+                mission,
+                mission_state_from_task_state(task.state),
+                task_id=task.id,
+                event_type="mission.replanned",
+                payload={"attempt_reason": "restart", "task_state": task.state},
+            )
     await session.commit()
     await session.refresh(task)
     return task
@@ -3160,8 +3172,11 @@ async def list_mission_events_page(
     *,
     after: tuple[str, str] | None = None,
     limit: int = 50,
+    include_attempt_events: bool = False,
 ) -> list[MissionEventModel]:
     statement = select(MissionEventModel).where(MissionEventModel.mission_id == mission_id)
+    if not include_attempt_events:
+        statement = statement.where(MissionEventModel.event_type != "mission.attempt_created")
     if after is not None:
         created_at, event_id = after
         if isinstance(created_at, str):
@@ -3175,6 +3190,16 @@ async def list_mission_events_page(
     statement = statement.order_by(MissionEventModel.created_at.asc(), MissionEventModel.id.asc()).limit(limit + 1)
     result = await session.execute(statement)
     return list(result.scalars())
+
+
+async def mission_has_attempt_completion(session: AsyncSession, mission_id: str) -> bool:
+    result = await session.execute(
+        select(MissionEventModel.id)
+        .where(MissionEventModel.mission_id == mission_id)
+        .where(MissionEventModel.event_type == "mission.attempt_completed")
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
 
 
 async def get_recent_logs(

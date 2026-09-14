@@ -650,14 +650,21 @@ def _timeline_summary(event_type: str, payload: dict) -> str:
     return "Mission event recorded."
 
 
-def _timeline_dto(event: MissionEventModel) -> dict:
+def _timeline_dto(event: MissionEventModel, *, legacy_task_projection: bool) -> dict:
     payload = _safe_payload(event.payload_json)
+    event_type = event.event_type
+    if legacy_task_projection and event_type == "mission.created":
+        event_type = "task.created"
+    elif legacy_task_projection and event_type == "mission.state_changed":
+        event_type = "task.state_changed"
+    elif event_type == "mission.cancelled_by_actor":
+        event_type = "task.stopped_by_actor"
     return {
-        "type": event.event_type,
+        "type": event_type,
         "at": _iso(event.created_at),
         "state": event.state or payload.get("state"),
         "actor": event.actor_id or payload.get("actor_id"),
-        "summary": _timeline_summary(event.event_type, payload),
+        "summary": _timeline_summary(event_type, payload),
     }
 
 
@@ -684,7 +691,14 @@ async def get_mission_timeline(
         position = pagination.decode_cursor(scope, cursor, expect={"createdAt": str, "id": str})
         after = (position["createdAt"], position["id"])
 
-    rows = await store.list_mission_events_page(session, mission_id, after=after, limit=size)
+    include_attempt_events = await store.mission_has_attempt_completion(session, mission_id)
+    rows = await store.list_mission_events_page(
+        session,
+        mission_id,
+        after=after,
+        limit=size,
+        include_attempt_events=include_attempt_events,
+    )
     page, info = pagination.paginate(
         rows,
         limit=size,
@@ -692,7 +706,13 @@ async def get_mission_timeline(
         position_of=lambda event: {"createdAt": _cursor_time(event.created_at), "id": event.id},
     )
     response.headers["Cache-Control"] = "no-store"
-    return {"items": [_timeline_dto(event) for event in page], "page": info}
+    return {
+        "items": [
+            _timeline_dto(event, legacy_task_projection=not include_attempt_events)
+            for event in page
+        ],
+        "page": info,
+    }
 
 
 # Keys of `agent.codex_bridge_agent.git_delivery.DeliveryOutcome.to_dict()`
@@ -949,7 +969,7 @@ async def explain_mission(
     if mission.state == "cancelled":
         reasons.append("The mission was cancelled.")
     if mission.state in {"waiting_human", "blocked"}:
-        reasons.append("The mission is held for operator input and has not started.")
+        reasons.append("The mission is held for approval and has not started.")
     if mission.last_error:
         reasons.append("The executor reported an error.")
 

@@ -1933,3 +1933,16 @@ perguntar ao remoto" viraram motivos distintos (`push_verification_failed` e
 `push_verification_unreachable`). Colapsar os dois diria "não empurrou" quando a
 resposta honesta é "não confirmei" — e é essa diferença que manda alguém olhar o
 forge em vez de reempurrar por cima.
+
+## 2026-09-14 — Mission nova, Task/Session antigos: projetar, não amputar
+
+O agregado durável de Mission (#43) não pode estreitar por tabela lateral o
+vocabulário já publicado de Task/Session. `expired`, `lost`, `paused`,
+`resuming` e `restarting` continuam tendo semântica externa própria; quando a
+máquina canônica de Mission for menor, a correção é uma projeção explícita no
+ponto de integração, não converter tudo em `failed` nem barrar `update_task_state`.
+
+O mesmo vale para a timeline: o banco pode registrar eventos internos
+`mission.*`, mas a API pública ainda precisa preservar os eventos `task.*` que
+clientes e testes antigos consomem. Compatibilidade vive na DTO e na query
+paginada, não em payload bruto de auditoria.
