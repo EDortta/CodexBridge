@@ -1,0 +1,1888 @@
+=== CodexBridge Mission reconciliation + validation ===
+timestamp: 2026-09-14T19:14:26-03:00
+host: devel3
+branch: development
+head: f071f99505ef0eb5e918d7b643876d9f3ccaa9b0
+
+--- status before ---
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? contract/1.19.0/
+?? coordination-status-20260911.txt
+?? gateway/app/services/mission_types.py
+?? migrations/0017_durable_missions.old.sql
+?? ruvector.db
+?? temp-tools/results/20260914-221426Z-devel3-reconcile-mission-files-and-validate.txt
+
+--- remove accidental duplicate migration candidate ---
+removed migrations/0017_durable_missions.old.sql
+
+--- required Mission implementation files ---
+PRESENT gateway/app/services/mission_types.py
+PRESENT migrations/0017_durable_missions.sql
+PRESENT contract/1.19.0
+
+--- ensure declared runtime dependency is available ---
+aiosmtplib missing; installing project dependencies from pyproject.toml
+Obtaining file:///home/esteban/Sync/Projects/AI/CodexBridge
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Getting requirements to build editable: started
+  Getting requirements to build editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Collecting aiomysql>=0.2.0 (from codex-bridge==0.1.0)
+  Using cached aiomysql-0.3.2-py3-none-any.whl.metadata (5.1 kB)
+Collecting aiosmtplib>=3.0.0 (from codex-bridge==0.1.0)
+  Downloading aiosmtplib-5.1.3-py3-none-any.whl.metadata (3.6 kB)
+Requirement already satisfied: aiosqlite>=0.20.0 in /home/esteban/.local/lib/python3.10/site-packages (from codex-bridge==0.1.0) (0.22.1)
+Collecting fastapi>=0.141.1 (from codex-bridge==0.1.0)
+  Using cached fastapi-0.141.1-py3-none-any.whl.metadata (27 kB)
+Requirement already satisfied: greenlet>=3.1.1 in /home/esteban/.local/lib/python3.10/site-packages (from codex-bridge==0.1.0) (3.1.1)
+Requirement already satisfied: httpx>=0.28.0 in /home/esteban/.local/lib/python3.10/site-packages (from codex-bridge==0.1.0) (0.28.1)
+Collecting prometheus-client>=0.22.0 (from codex-bridge==0.1.0)
+  Using cached prometheus_client-0.26.0-py3-none-any.whl.metadata (2.1 kB)
+Requirement already satisfied: pydantic>=2.9.0 in /home/esteban/.local/lib/python3.10/site-packages (from codex-bridge==0.1.0) (2.12.5)
+Requirement already satisfied: pydantic-settings>=2.6.0 in /home/esteban/.local/lib/python3.10/site-packages (from codex-bridge==0.1.0) (2.14.2)
+Requirement already satisfied: python-dateutil>=2.9.0 in /home/esteban/.local/lib/python3.10/site-packages (from codex-bridge==0.1.0) (2.9.0.post0)
+Requirement already satisfied: python-json-logger>=2.0.7 in /home/esteban/.local/lib/python3.10/site-packages (from codex-bridge==0.1.0) (2.0.7)
+Requirement already satisfied: python-multipart>=0.0.20 in /home/esteban/.local/lib/python3.10/site-packages (from codex-bridge==0.1.0) (0.0.21)
+Requirement already satisfied: sqlalchemy>=2.0.36 in /home/esteban/.local/lib/python3.10/site-packages (from codex-bridge==0.1.0) (2.0.40)
+Requirement already satisfied: uvicorn>=0.32.0 in /home/esteban/.local/lib/python3.10/site-packages (from codex-bridge==0.1.0) (0.40.0)
+Collecting websockets>=15.0 (from codex-bridge==0.1.0)
+  Using cached websockets-16.1.1-cp310-cp310-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (6.8 kB)
+Collecting PyMySQL>=1.0 (from aiomysql>=0.2.0->codex-bridge==0.1.0)
+  Using cached pymysql-1.2.0-py3-none-any.whl.metadata (4.3 kB)
+Requirement already satisfied: starlette>=0.46.0 in /home/esteban/.local/lib/python3.10/site-packages (from fastapi>=0.141.1->codex-bridge==0.1.0) (0.52.1)
+Requirement already satisfied: typing-extensions>=4.8.0 in /home/esteban/.local/lib/python3.10/site-packages (from fastapi>=0.141.1->codex-bridge==0.1.0) (4.15.0)
+Requirement already satisfied: typing-inspection>=0.4.2 in /home/esteban/.local/lib/python3.10/site-packages (from fastapi>=0.141.1->codex-bridge==0.1.0) (0.4.2)
+Requirement already satisfied: annotated-doc>=0.0.2 in /home/esteban/.local/lib/python3.10/site-packages (from fastapi>=0.141.1->codex-bridge==0.1.0) (0.0.4)
+Requirement already satisfied: anyio in /home/esteban/.local/lib/python3.10/site-packages (from httpx>=0.28.0->codex-bridge==0.1.0) (4.12.1)
+Requirement already satisfied: certifi in /home/esteban/.local/lib/python3.10/site-packages (from httpx>=0.28.0->codex-bridge==0.1.0) (2026.1.4)
+Requirement already satisfied: httpcore==1.* in /home/esteban/.local/lib/python3.10/site-packages (from httpx>=0.28.0->codex-bridge==0.1.0) (1.0.9)
+Requirement already satisfied: idna in /home/esteban/.local/lib/python3.10/site-packages (from httpx>=0.28.0->codex-bridge==0.1.0) (3.11)
+Requirement already satisfied: h11>=0.16 in /home/esteban/.local/lib/python3.10/site-packages (from httpcore==1.*->httpx>=0.28.0->codex-bridge==0.1.0) (0.16.0)
+Requirement already satisfied: annotated-types>=0.6.0 in /home/esteban/.local/lib/python3.10/site-packages (from pydantic>=2.9.0->codex-bridge==0.1.0) (0.7.0)
+Requirement already satisfied: pydantic-core==2.41.5 in /home/esteban/.local/lib/python3.10/site-packages (from pydantic>=2.9.0->codex-bridge==0.1.0) (2.41.5)
+Requirement already satisfied: python-dotenv>=0.21.0 in /home/esteban/.local/lib/python3.10/site-packages (from pydantic-settings>=2.6.0->codex-bridge==0.1.0) (1.2.1)
+Requirement already satisfied: six>=1.5 in /home/esteban/.local/lib/python3.10/site-packages (from python-dateutil>=2.9.0->codex-bridge==0.1.0) (1.17.0)
+Requirement already satisfied: exceptiongroup>=1.0.2 in /home/esteban/.local/lib/python3.10/site-packages (from anyio->httpx>=0.28.0->codex-bridge==0.1.0) (1.2.1)
+Requirement already satisfied: click>=7.0 in /home/esteban/.local/lib/python3.10/site-packages (from uvicorn>=0.32.0->codex-bridge==0.1.0) (8.1.8)
+Using cached aiomysql-0.3.2-py3-none-any.whl (71 kB)
+Downloading aiosmtplib-5.1.3-py3-none-any.whl (30 kB)
+Using cached fastapi-0.141.1-py3-none-any.whl (131 kB)
+Using cached prometheus_client-0.26.0-py3-none-any.whl (64 kB)
+Using cached pymysql-1.2.0-py3-none-any.whl (45 kB)
+Using cached websockets-16.1.1-cp310-cp310-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (186 kB)
+Building wheels for collected packages: codex-bridge
+  Building editable for codex-bridge (pyproject.toml): started
+  Building editable for codex-bridge (pyproject.toml): finished with status 'done'
+  Created wheel for codex-bridge: filename=codex_bridge-0.1.0-0.editable-py3-none-any.whl size=3159 sha256=43a3f28e673414b2ad311437481cd4241288273fc3d34e2940d76eea7990c138
+  Stored in directory: /tmp/pip-ephem-wheel-cache-x5l39zsg/wheels/4f/4e/38/8631b5cb8c056f9d9ed19ce2e1b9c39e883d0e2439a3030774
+Successfully built codex-bridge
+Installing collected packages: websockets, PyMySQL, prometheus-client, aiosmtplib, aiomysql, fastapi, codex-bridge
+  Attempting uninstall: websockets
+    Found existing installation: websockets 13.1
+    Uninstalling websockets-13.1:
+      Successfully uninstalled websockets-13.1
+  Attempting uninstall: prometheus-client
+    Found existing installation: prometheus_client 0.20.0
+    Uninstalling prometheus_client-0.20.0:
+      Successfully uninstalled prometheus_client-0.20.0
+  Attempting uninstall: fastapi
+    Found existing installation: fastapi 0.128.8
+    Uninstalling fastapi-0.128.8:
+      Successfully uninstalled fastapi-0.128.8
+
+ERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts.
+aider-chat 0.86.2 requires click==8.3.1, but you have click 8.1.8 which is incompatible.
+aider-chat 0.86.2 requires fastapi==0.128.8, but you have fastapi 0.141.1 which is incompatible.
+frida-tools 14.10.4 requires websockets<14.0.0,>=13.0.0, but you have websockets 16.1.1 which is incompatible.
+Successfully installed PyMySQL-1.2.0 aiomysql-0.3.2 aiosmtplib-5.1.3 codex-bridge-0.1.0 fastapi-0.141.1 prometheus-client-0.26.0 websockets-16.1.1
+
+[notice] A new release of pip is available: 25.3 -> 26.2.1
+[notice] To update, run: python3 -m pip install --upgrade pip
+pip install exit=0
+
+=== migration-tests ===
+......................                                                   [100%]
+22 passed in 18.02s
+[migration-tests exit=0]
+
+=== mission-focused ===
+.............FF...............FF..............F...F..................... [ 63%]
+..........................................                               [100%]
+=================================== FAILURES ===================================
+___________ test_stage_groups_state_into_three_phases[expired-done] ____________
+
+api = <starlette.testclient.TestClient object at 0x7f82750baa40>
+state = 'expired', stage = 'done'
+
+    @pytest.mark.parametrize(
+        ("state", "stage"),
+        [
+            ("queued", "pending"),
+            ("waiting_executor", "pending"),
+            ("running", "active"),
+            ("awaiting_approval", "active"),
+            ("completed", "done"),
+            ("failed", "done"),
+            ("cancelled", "done"),
+            ("expired", "done"),
+            ("lost", "done"),
+        ],
+    )
+    async def test_stage_groups_state_into_three_phases(api, state: str, stage: str) -> None:
+        task = await make_task(api.factory, "p1", state=state)
+        body = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN)).json()
+        expected_state = "waiting_human" if state == "awaiting_approval" else state
+>       assert body["state"] == expected_state
+E       AssertionError: assert 'failed' == 'expired'
+E         
+E         - expired
+E         + failed
+
+tests/integration/test_missions.py:330: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:14:57,260", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/e51fc613-8b5b-4e04-aeec-c4dc30a81df8 \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/e51fc613-8b5b-4e04-aeec-c4dc30a81df8 "HTTP/1.1 200 OK"
+_____________ test_stage_groups_state_into_three_phases[lost-done] _____________
+
+api = <starlette.testclient.TestClient object at 0x7f8274def0a0>, state = 'lost'
+stage = 'done'
+
+    @pytest.mark.parametrize(
+        ("state", "stage"),
+        [
+            ("queued", "pending"),
+            ("waiting_executor", "pending"),
+            ("running", "active"),
+            ("awaiting_approval", "active"),
+            ("completed", "done"),
+            ("failed", "done"),
+            ("cancelled", "done"),
+            ("expired", "done"),
+            ("lost", "done"),
+        ],
+    )
+    async def test_stage_groups_state_into_three_phases(api, state: str, stage: str) -> None:
+        task = await make_task(api.factory, "p1", state=state)
+        body = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN)).json()
+        expected_state = "waiting_human" if state == "awaiting_approval" else state
+>       assert body["state"] == expected_state
+E       AssertionError: assert 'failed' == 'lost'
+E         
+E         - lost
+E         + failed
+
+tests/integration/test_missions.py:330: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:14:57,475", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/aecb92dc-c943-417a-9100-06444419fd6b \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/aecb92dc-c943-417a-9100-06444419fd6b "HTTP/1.1 200 OK"
+________ test_timeline_reports_creation_and_state_changes_oldest_first _________
+
+api = <starlette.testclient.TestClient object at 0x7f8274abd630>
+
+    async def test_timeline_reports_creation_and_state_changes_oldest_first(api) -> None:
+        task = await make_task(api.factory, "p1", state="running")
+        async with api.factory() as s:
+            await store.update_task_state(s, task.id, TaskState.COMPLETED)
+    
+        body = api.get(f"/api/v1/missions/{task.id}/timeline", headers=auth(ALICE_TOKEN)).json()
+        types = [item["type"] for item in body["items"]]
+>       assert types == ["task.created", "task.state_changed", "task.state_changed"]
+E       AssertionError: assert ['mission.cre...tate_changed'] == ['task.create...tate_changed']
+E         
+E         At index 0 diff: 'mission.created' != 'task.created'
+E         Left contains one more item: 'mission.state_changed'
+E         Use -v to get more diff
+
+tests/integration/test_missions.py:483: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:14:58,858", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/af91b69f-818c-4772-988c-474e7a2f934d/timeline \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/af91b69f-818c-4772-988c-474e7a2f934d/timeline "HTTP/1.1 200 OK"
+________________________ test_timeline_pages_by_cursor _________________________
+
+api = <starlette.testclient.TestClient object at 0x7f82748b3070>
+
+    async def test_timeline_pages_by_cursor(api) -> None:
+        task = await make_task(api.factory, "p1")
+        async with api.factory() as s:
+            for _ in range(4):
+                await store.update_task_state(s, task.id, TaskState.RUNNING)
+    
+        seen: list[str] = []
+        cursor = None
+        for _ in range(10):
+            params = {"limit": 2}
+            if cursor:
+                params["cursor"] = cursor
+            body = api.get(
+                f"/api/v1/missions/{task.id}/timeline", headers=auth(ALICE_TOKEN), params=params
+            ).json()
+            seen.extend(f"{item['type']}:{item['at']}" for item in body["items"])
+            cursor = body["page"]["nextCursor"]
+            if not body["page"]["hasMore"]:
+                break
+    
+        # If pagination repeated or dropped a row, this count would not land on
+        # exactly created + 4 state_changed.
+>       assert len(seen) == 5
+E       AssertionError: assert 6 == 5
+E        +  where 6 = len(['mission.created:2026-09-14T22:14:58.920037Z', 'mission.attempt_created:2026-09-14T22:14:58.924885Z', 'mission.state_...:58.937481Z', 'mission.state_changed:2026-09-14T22:14:58.941166Z', 'mission.state_changed:2026-09-14T22:14:58.944574Z'])
+
+tests/integration/test_missions.py:511: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:14:58,962", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/685a100d-a885-420e-8754-5a63dccc34ad/timeline?limit=2 \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+{"asctime": "2026-09-14 19:14:58,969", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/685a100d-a885-420e-8754-5a63dccc34ad/timeline?limit=2&cursor=eyJwIjp7ImNyZWF0ZWRBdCI6IjIwMjYtMDktMTRUMjI6MTQ6NTguOTI0ODg1KzAwOjAwIiwiaWQiOiJjNDk3MmQ0Mi0wNmY1LTQ5ODItOTI1My1lYzQzOWNiZGQ2M2QifSwicyI6ImE1MzliYjY2ZTgzNDk0MzgifQ.cUw6MD91Ailli0Owi1NLEw \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+{"asctime": "2026-09-14 19:14:58,974", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/685a100d-a885-420e-8754-5a63dccc34ad/timeline?limit=2&cursor=eyJwIjp7ImNyZWF0ZWRBdCI6IjIwMjYtMDktMTRUMjI6MTQ6NTguOTM3NDgxKzAwOjAwIiwiaWQiOiJiYjQ3ZjM1Zi02NTgxLTRiZDEtYmViNy0zYTc4YzhjMzBlOWQifSwicyI6ImE1MzliYjY2ZTgzNDk0MzgifQ.CPoIHER8DKeD-Qn2KdR6Uw \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/685a100d-a885-420e-8754-5a63dccc34ad/timeline?limit=2 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/685a100d-a885-420e-8754-5a63dccc34ad/timeline?limit=2&cursor=eyJwIjp7ImNyZWF0ZWRBdCI6IjIwMjYtMDktMTRUMjI6MTQ6NTguOTI0ODg1KzAwOjAwIiwiaWQiOiJjNDk3MmQ0Mi0wNmY1LTQ5ODItOTI1My1lYzQzOWNiZGQ2M2QifSwicyI6ImE1MzliYjY2ZTgzNDk0MzgifQ.cUw6MD91Ailli0Owi1NLEw "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/685a100d-a885-420e-8754-5a63dccc34ad/timeline?limit=2&cursor=eyJwIjp7ImNyZWF0ZWRBdCI6IjIwMjYtMDktMTRUMjI6MTQ6NTguOTM3NDgxKzAwOjAwIiwiaWQiOiJiYjQ3ZjM1Zi02NTgxLTRiZDEtYmViNy0zYTc4YzhjMzBlOWQifSwicyI6ImE1MzliYjY2ZTgzNDk0MzgifQ.CPoIHER8DKeD-Qn2KdR6Uw "HTTP/1.1 200 OK"
+________________ test_the_cancel_reason_appears_on_the_timeline ________________
+
+api = <starlette.testclient.TestClient object at 0x7f8274296260>
+
+    async def test_the_cancel_reason_appears_on_the_timeline(api) -> None:
+        task = await make_task(api.factory, "p1", state="running")
+        detail = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN))
+        api.post(
+            f"/api/v1/missions/{task.id}/cancel",
+            headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+            json={"reason": "Operator changed their mind."},
+        )
+    
+        timeline = api.get(f"/api/v1/missions/{task.id}/timeline", headers=auth(ALICE_TOKEN)).json()
+>       entry = next(item for item in timeline["items"] if item["type"] == "task.stopped_by_actor")
+E       StopIteration
+
+tests/integration/test_missions.py:741: StopIteration
+
+The above exception was the direct cause of the following exception:
+
+self = <Coroutine test_the_cancel_reason_appears_on_the_timeline>
+
+    def runtest(self) -> None:
+        runner_fixture_id = f"_{self._loop_scope}_scoped_runner"
+        runner = self._request.getfixturevalue(runner_fixture_id)
+        context = contextvars.copy_context()
+        synchronized_obj = _synchronize_coroutine(
+            getattr(*self._synchronization_target_attr), runner, context
+        )
+        with MonkeyPatch.context() as c:
+            c.setattr(*self._synchronization_target_attr, synchronized_obj)
+>           super().runtest()
+
+../../../../.local/lib/python3.10/site-packages/pytest_asyncio/plugin.py:469: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../../../../.local/lib/python3.10/site-packages/pytest_asyncio/plugin.py:716: in inner
+    runner.run(coro, context=context)
+../../../../.local/lib/python3.10/site-packages/backports/asyncio/runner/runner.py:175: in run
+    return self._loop.run_until_complete(task)  # type: ignore[union-attr, no-any-return]
+/usr/lib/python3.10/asyncio/base_events.py:649: in run_until_complete
+    return future.result()
+/usr/lib/python3.10/asyncio/futures.py:201: in result
+    raise self._exception.with_traceback(self._exception_tb)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = None
+
+    def __step(self, exc=None):
+        if self.done():
+            raise exceptions.InvalidStateError(
+                f'_step(): already done: {self!r}, {exc!r}')
+        if self._must_cancel:
+            if not isinstance(exc, exceptions.CancelledError):
+                exc = self._make_cancelled_error()
+            self._must_cancel = False
+        coro = self._coro
+        self._fut_waiter = None
+    
+        _enter_task(self._loop, self)
+        # Call either coro.throw(exc) or coro.send(None).
+        try:
+            if exc is None:
+                # We use the `send` method directly, because coroutines
+                # don't have `__iter__` and `__next__` methods.
+>               result = coro.send(None)
+E               RuntimeError: coroutine raised StopIteration
+
+/usr/lib/python3.10/asyncio/tasks.py:232: RuntimeError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:15:00,321", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/89217313-23ee-48a9-a65b-795ecdef78e8 \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+{"asctime": "2026-09-14 19:15:00,332", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: POST http://testserver/api/v1/missions/89217313-23ee-48a9-a65b-795ecdef78e8/cancel \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+{"asctime": "2026-09-14 19:15:00,338", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/89217313-23ee-48a9-a65b-795ecdef78e8/timeline \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/89217313-23ee-48a9-a65b-795ecdef78e8 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/api/v1/missions/89217313-23ee-48a9-a65b-795ecdef78e8/cancel "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/89217313-23ee-48a9-a65b-795ecdef78e8/timeline "HTTP/1.1 200 OK"
+_________________ test_explain_on_a_blocked_mission_reports_it _________________
+
+api = <starlette.testclient.TestClient object at 0x7f8274172c20>
+
+    async def test_explain_on_a_blocked_mission_reports_it(api) -> None:
+        task = await make_task(api.factory, "p1", instruction="run kubectl apply now", mode=TaskMode.IMPLEMENT)
+        body = api.post(f"/api/v1/missions/{task.id}/explain", headers=auth(ALICE_TOKEN)).json()
+        assert body["blocked"] is True
+        assert body["blockedReason"]["code"] == "awaiting_approval"
+>       assert "The mission is held for approval" in " ".join(body["reasons"])
+E       AssertionError: assert 'The mission is held for approval' in 'The mission is held for operator input and has not started.'
+E        +  where 'The mission is held for operator input and has not started.' = <built-in method join of str object at 0x7f82816d7bf0>(['The mission is held for operator input and has not started.'])
+E        +    where <built-in method join of str object at 0x7f82816d7bf0> = ' '.join
+
+tests/integration/test_missions.py:799: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:15:00,841", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: POST http://testserver/api/v1/missions/f2ac2623-f4a6-4846-83bf-dbe0e64394e5/explain \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/api/v1/missions/f2ac2623-f4a6-4846-83bf-dbe0e64394e5/explain "HTTP/1.1 200 OK"
+=============================== warnings summary ===============================
+tests/integration/test_missions.py::test_missions_require_a_token
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+tests/integration/test_missions.py::test_missions_require_a_token
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/integration/test_missions.py::test_stage_groups_state_into_three_phases[expired-done]
+FAILED tests/integration/test_missions.py::test_stage_groups_state_into_three_phases[lost-done]
+FAILED tests/integration/test_missions.py::test_timeline_reports_creation_and_state_changes_oldest_first
+FAILED tests/integration/test_missions.py::test_timeline_pages_by_cursor - As...
+FAILED tests/integration/test_missions.py::test_the_cancel_reason_appears_on_the_timeline
+FAILED tests/integration/test_missions.py::test_explain_on_a_blocked_mission_reports_it
+6 failed, 108 passed, 2 warnings in 10.21s
+[mission-focused exit=1]
+
+=== contract-tests ===
+........................................................................ [ 47%]
+..............................................................F......... [ 94%]
+.........                                                                [100%]
+=================================== FAILURES ===================================
+_____________ test_reported_contract_version_matches_the_document ______________
+
+spec = {'components': {'headers': {'AcceptRanges': {'description': '`bytes` on every artifact download, including the `416`. ...'#/components/responses/PermissionDenied'}, '404': {'$ref': '#/components/responses/NotFound'}, ...}, ...}}, ...}, ...}
+
+    def test_reported_contract_version_matches_the_document(spec: dict) -> None:
+        """`GET /api/version` must not claim a contract version the file disagrees with.
+    
+        A client that pins a contract version has no other way to learn what the
+        server actually speaks. If these two drift, the pin is decoration: the client
+        believes it validated compatibility and did not.
+        """
+        from gateway.app.api.routes.probes import API_CONTRACT_VERSION
+    
+>       assert API_CONTRACT_VERSION == spec["info"]["version"], (
+            "probes.API_CONTRACT_VERSION and info.version disagree; a change to the "
+            "document must move both"
+        )
+E       AssertionError: probes.API_CONTRACT_VERSION and info.version disagree; a change to the document must move both
+E       assert '1.18.0' == '1.19.0'
+E         
+E         - 1.19.0
+E         ?    ^
+E         + 1.18.0
+E         ?    ^
+
+tests/contract/test_openapi_document.py:423: AssertionError
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/contract/test_openapi_document.py::test_reported_contract_version_matches_the_document
+1 failed, 152 passed, 2 warnings in 19.56s
+[contract-tests exit=1]
+
+=== full-suite ===
+........................................................................ [  4%]
+..............................................................F......... [  9%]
+.........................................................F.............. [ 14%]
+................................................................F....... [ 19%]
+........................................................................ [ 23%]
+....................sssssssss........................................... [ 28%]
+........................................................................ [ 33%]
+........................................................................ [ 38%]
+........................................................................ [ 42%]
+................................................................FF...... [ 47%]
+.........FF..............F...F.......................................... [ 52%]
+................................FF..............F....................... [ 57%]
+........................................................................ [ 61%]
+.............FFF........................................................ [ 66%]
+..............F......F.................................................. [ 71%]
+........................................................................ [ 76%]
+........................................................................ [ 80%]
+........................................................................ [ 85%]
+........................................................................ [ 90%]
+........................................................................ [ 95%]
+........................................................................ [100%]
+=================================== FAILURES ===================================
+_____________ test_reported_contract_version_matches_the_document ______________
+
+spec = {'components': {'headers': {'AcceptRanges': {'description': '`bytes` on every artifact download, including the `416`. ...'#/components/responses/PermissionDenied'}, '404': {'$ref': '#/components/responses/NotFound'}, ...}, ...}}, ...}, ...}
+
+    def test_reported_contract_version_matches_the_document(spec: dict) -> None:
+        """`GET /api/version` must not claim a contract version the file disagrees with.
+    
+        A client that pins a contract version has no other way to learn what the
+        server actually speaks. If these two drift, the pin is decoration: the client
+        believes it validated compatibility and did not.
+        """
+        from gateway.app.api.routes.probes import API_CONTRACT_VERSION
+    
+>       assert API_CONTRACT_VERSION == spec["info"]["version"], (
+            "probes.API_CONTRACT_VERSION and info.version disagree; a change to the "
+            "document must move both"
+        )
+E       AssertionError: probes.API_CONTRACT_VERSION and info.version disagree; a change to the document must move both
+E       assert '1.18.0' == '1.19.0'
+E         
+E         - 1.19.0
+E         ?    ^
+E         + 1.18.0
+E         ?    ^
+
+tests/contract/test_openapi_document.py:423: AssertionError
+______________ test_real_gateway_leaves_mcp_error_shape_untouched ______________
+
+    def test_real_gateway_leaves_mcp_error_shape_untouched() -> None:
+        from gateway.app.main import app as gateway_app
+    
+>       with TestClient(gateway_app, raise_server_exceptions=False) as gateway_client:
+
+tests/integration/test_api_conventions.py:203: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:688: in __enter__
+    portal.call(self.wait_startup)
+../../../../.local/lib/python3.10/site-packages/anyio/from_thread.py:334: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+/usr/lib/python3.10/concurrent/futures/_base.py:458: in result
+    return self.__get_result()
+/usr/lib/python3.10/concurrent/futures/_base.py:403: in __get_result
+    raise self._exception
+../../../../.local/lib/python3.10/site-packages/anyio/from_thread.py:259: in _call_func
+    retval = await retval_or_awaitable
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:723: in wait_startup
+    await receive()
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:714: in receive
+    self.task.result()
+/usr/lib/python3.10/concurrent/futures/_base.py:451: in result
+    return self.__get_result()
+/usr/lib/python3.10/concurrent/futures/_base.py:403: in __get_result
+    raise self._exception
+../../../../.local/lib/python3.10/site-packages/anyio/from_thread.py:259: in _call_func
+    retval = await retval_or_awaitable
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:704: in lifespan
+    await self.app(scope, self.stream_receive.receive, self.stream_send.send)
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/applications.py:107: in __call__
+    await self.middleware_stack(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/middleware/errors.py:151: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/middleware/base.py:103: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/middleware/exceptions.py:49: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/routing.py:716: in __call__
+    await self.middleware_stack(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:2726: in app
+    await self.lifespan(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/routing.py:694: in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:265: in __aenter__
+    await self._router._startup()
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:6375: in _startup
+    await handler()
+gateway/app/main.py:362: in startup
+    await connection.run_sync(check_schema)
+../../../../.local/lib/python3.10/site-packages/sqlalchemy/ext/asyncio/engine.py:887: in run_sync
+    return await greenlet_spawn(
+../../../../.local/lib/python3.10/site-packages/sqlalchemy/util/_concurrency_py3k.py:203: in greenlet_spawn
+    result = context.switch(value)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+connection = <sqlalchemy.engine.base.Connection object at 0x7fb0e3a6cf40>
+
+    def check_schema(connection: Connection) -> None:
+        inspector = inspect(connection)
+        existing_tables = set(inspector.get_table_names())
+        missing: list[str] = []
+    
+        for table, migration in REQUIRED_TABLES.items():
+            if table not in existing_tables:
+                missing.append(f"table {table!r} (added by {migration})")
+    
+        for table, columns in REQUIRED_COLUMNS.items():
+            if table not in existing_tables:
+                # The table itself is absent, which `create_all` will have handled on
+                # a fresh database. Reporting its columns too would be noise.
+                continue
+            present = {column["name"] for column in inspector.get_columns(table)}
+            for column, migration in columns.items():
+                if column not in present:
+                    missing.append(f"column {table}.{column} (added by {migration})")
+    
+        for table, columns in FORBIDDEN_COLUMNS.items():
+            if table not in existing_tables:
+                continue
+            present = {column["name"] for column in inspector.get_columns(table)}
+            for column, migration in columns.items():
+                if column in present:
+                    missing.append(f"column {table}.{column} still present (dropped by {migration})")
+    
+        if missing:
+>           raise SchemaOutOfDate(
+                "The database does not match what this build requires: "
+                + "; ".join(missing)
+                + f". Run `{APPLY_COMMAND}` against this database, then start again. "
+                + ADOPT_HINT
+                + " Startup does not migrate on its own: applying schema changes to a "
+                "live database is an operator decision, not a side effect of a deploy."
+            )
+E           gateway.app.db.schema_guard.SchemaOutOfDate: The database does not match what this build requires: column tasks.mission_id (added by 0017_durable_missions.sql). Run `python3 scripts/apply_migrations.py` against this database, then start again. If this database was created by the application rather than by that script, adopt it first: `python3 scripts/apply_migrations.py --mark-applied 0001_init.sql`. Startup does not migrate on its own: applying schema changes to a live database is an operator decision, not a side effect of a deploy.
+
+gateway/app/db/schema_guard.py:217: SchemaOutOfDate
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:15:50,087", "levelname": "ERROR", "name": "gateway.app.main", "message": "user registry unusable: the user registry '/etc/codex-bridge/users.json' does not exist. No account can sign in: POST /api/v1/auth/sign-in, POST /api/v1/auth/refresh and POST /oauth/authorize refuse every credential, and tokens already issued are refused by POST /mcp. Point CODEX_BRIDGE_USER_REGISTRY_FILE at this deployment's accounts file (docs/installation.md).", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+ERROR    gateway.app.main:main.py:346 user registry unusable: the user registry '/etc/codex-bridge/users.json' does not exist. No account can sign in: POST /api/v1/auth/sign-in, POST /api/v1/auth/refresh and POST /oauth/authorize refuse every credential, and tokens already issued are refused by POST /mcp. Point CODEX_BRIDGE_USER_REGISTRY_FILE at this deployment's accounts file (docs/installation.md).
+________ test_the_default_artifacts_root_follows_the_working_directory _________
+
+    def test_the_default_artifacts_root_follows_the_working_directory() -> None:
+        """The default is a development convenience, not a stable location.
+    
+        `str(Path("data/artifacts").resolve())` resolves against the cwd at import,
+        so the unconfigured default moves with the directory the service started
+        from. The comment in `gateway/app/core/config.py` used to claim the
+        opposite ("rather than a relative string whose meaning depends on the
+        working directory"), which is the kind of claim a reader retires a risk on.
+        Pinned here so the comment and the behaviour cannot drift apart again: a
+        deployment sets `CODEX_BRIDGE_ARTIFACTS_ROOT`, and `.env.example` says so.
+        """
+        import importlib.util
+        import os
+        import tempfile
+        from pathlib import Path
+    
+        from gateway.app.core import config as installed
+    
+        source = Path(installed.__file__).resolve()
+        previous = os.getcwd()
+        with tempfile.TemporaryDirectory() as elsewhere:
+            try:
+                os.chdir(elsewhere)
+                # A private, unregistered copy of the module: the default is
+                # captured once when the class body runs, so only a fresh import
+                # can show what it captures. Not `importlib.reload`, which would
+                # swap the `settings` singleton every other module already holds.
+                spec = importlib.util.spec_from_file_location("_artifacts_root_probe", source)
+                probe = importlib.util.module_from_spec(spec)
+>               spec.loader.exec_module(probe)
+
+tests/integration/test_artifacts.py:736: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+<frozen importlib._bootstrap_external>:883: in exec_module
+    ???
+<frozen importlib._bootstrap>:241: in _call_with_frames_removed
+    ???
+gateway/app/core/config.py:314: in <module>
+    settings = Settings()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+__pydantic_self__ = Settings(), _case_sensitive = None
+_nested_model_default_partial_update = None, _env_prefix = None
+_env_prefix_target = None, _env_file = PosixPath('.'), _env_file_encoding = None
+_env_ignore_empty = None, _env_nested_delimiter = None
+_env_nested_max_split = None, _env_parse_none_str = None
+_env_parse_enums = None, _cli_prog_name = None, _cli_parse_args = None
+_cli_settings_source = None, _cli_parse_none_str = None
+_cli_hide_none_type = None, _cli_avoid_json = None, _cli_enforce_required = None
+_cli_use_class_docs_for_groups = None, _cli_exit_on_error = None
+_cli_prefix = None, _cli_flag_prefix_char = None, _cli_implicit_flags = None
+_cli_ignore_unknown_args = None, _cli_kebab_case = None, _cli_shortcuts = None
+_secrets_dir = None, _build_sources = None, values = {}
+sources = (InitSettingsSource(init_kwargs={}), EnvSettingsSource(env_nested_delimiter=None, env_prefix_len=13), DotEnvSettingsSo...fix_len=13), SecretsSettingsSource(secrets_dir=None), DefaultSettingsSource(nested_model_default_partial_update=False))
+init_kwargs = {}
+
+    def __init__(
+        __pydantic_self__,
+        _case_sensitive: bool | None = None,
+        _nested_model_default_partial_update: bool | None = None,
+        _env_prefix: str | None = None,
+        _env_prefix_target: EnvPrefixTarget | None = None,
+        _env_file: DotenvType | None = ENV_FILE_SENTINEL,
+        _env_file_encoding: str | None = None,
+        _env_ignore_empty: bool | None = None,
+        _env_nested_delimiter: str | None = None,
+        _env_nested_max_split: int | None = None,
+        _env_parse_none_str: str | None = None,
+        _env_parse_enums: bool | None = None,
+        _cli_prog_name: str | None = None,
+        _cli_parse_args: bool | list[str] | tuple[str, ...] | None = None,
+        _cli_settings_source: CliSettingsSource[Any] | None = None,
+        _cli_parse_none_str: str | None = None,
+        _cli_hide_none_type: bool | None = None,
+        _cli_avoid_json: bool | None = None,
+        _cli_enforce_required: bool | None = None,
+        _cli_use_class_docs_for_groups: bool | None = None,
+        _cli_exit_on_error: bool | None = None,
+        _cli_prefix: str | None = None,
+        _cli_flag_prefix_char: str | None = None,
+        _cli_implicit_flags: bool | Literal['dual', 'toggle'] | None = None,
+        _cli_ignore_unknown_args: bool | None = None,
+        _cli_kebab_case: bool | Literal['all', 'no_enums'] | None = None,
+        _cli_shortcuts: Mapping[str, str | list[str]] | None = None,
+        _secrets_dir: PathType | None = None,
+        _build_sources: tuple[tuple[PydanticBaseSettingsSource, ...], dict[str, Any]] | None = None,
+        **values: Any,
+    ) -> None:
+        sources, init_kwargs = (
+            _build_sources
+            if _build_sources is not None
+            else __pydantic_self__.__class__._settings_init_sources(
+                _case_sensitive=_case_sensitive,
+                _nested_model_default_partial_update=_nested_model_default_partial_update,
+                _env_prefix=_env_prefix,
+                _env_prefix_target=_env_prefix_target,
+                _env_file=_env_file,
+                _env_file_encoding=_env_file_encoding,
+                _env_ignore_empty=_env_ignore_empty,
+                _env_nested_delimiter=_env_nested_delimiter,
+                _env_nested_max_split=_env_nested_max_split,
+                _env_parse_none_str=_env_parse_none_str,
+                _env_parse_enums=_env_parse_enums,
+                _cli_prog_name=_cli_prog_name,
+                _cli_parse_args=_cli_parse_args,
+                _cli_settings_source=_cli_settings_source,
+                _cli_parse_none_str=_cli_parse_none_str,
+                _cli_hide_none_type=_cli_hide_none_type,
+                _cli_avoid_json=_cli_avoid_json,
+                _cli_enforce_required=_cli_enforce_required,
+                _cli_use_class_docs_for_groups=_cli_use_class_docs_for_groups,
+                _cli_exit_on_error=_cli_exit_on_error,
+                _cli_prefix=_cli_prefix,
+                _cli_flag_prefix_char=_cli_flag_prefix_char,
+                _cli_implicit_flags=_cli_implicit_flags,
+                _cli_ignore_unknown_args=_cli_ignore_unknown_args,
+                _cli_kebab_case=_cli_kebab_case,
+                _cli_shortcuts=_cli_shortcuts,
+                _secrets_dir=_secrets_dir,
+                _init_kwargs=values,
+            )
+        )
+    
+>       super().__init__(**__pydantic_self__.__class__._settings_build_values(sources, init_kwargs))
+E       pydantic.errors.PydanticUserError: `Settings` is not fully defined; you should define `AgentEngine`, then call `Settings.model_rebuild()`.
+E       
+E       For further information visit https://errors.pydantic.dev/2.12/u/class-not-fully-defined
+
+../../../../.local/lib/python3.10/site-packages/pydantic_settings/main.py:247: PydanticUserError
+___________ test_stage_groups_state_into_three_phases[expired-done] ____________
+
+api = <starlette.testclient.TestClient object at 0x7fb0d195cb80>
+state = 'expired', stage = 'done'
+
+    @pytest.mark.parametrize(
+        ("state", "stage"),
+        [
+            ("queued", "pending"),
+            ("waiting_executor", "pending"),
+            ("running", "active"),
+            ("awaiting_approval", "active"),
+            ("completed", "done"),
+            ("failed", "done"),
+            ("cancelled", "done"),
+            ("expired", "done"),
+            ("lost", "done"),
+        ],
+    )
+    async def test_stage_groups_state_into_three_phases(api, state: str, stage: str) -> None:
+        task = await make_task(api.factory, "p1", state=state)
+        body = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN)).json()
+        expected_state = "waiting_human" if state == "awaiting_approval" else state
+>       assert body["state"] == expected_state
+E       AssertionError: assert 'failed' == 'expired'
+E         
+E         - expired
+E         + failed
+
+tests/integration/test_missions.py:330: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:16:24,822", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/e03f7075-34ec-4879-9bed-f814042af4a6 \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/e03f7075-34ec-4879-9bed-f814042af4a6 "HTTP/1.1 200 OK"
+_____________ test_stage_groups_state_into_three_phases[lost-done] _____________
+
+api = <starlette.testclient.TestClient object at 0x7fb0cffb7c10>, state = 'lost'
+stage = 'done'
+
+    @pytest.mark.parametrize(
+        ("state", "stage"),
+        [
+            ("queued", "pending"),
+            ("waiting_executor", "pending"),
+            ("running", "active"),
+            ("awaiting_approval", "active"),
+            ("completed", "done"),
+            ("failed", "done"),
+            ("cancelled", "done"),
+            ("expired", "done"),
+            ("lost", "done"),
+        ],
+    )
+    async def test_stage_groups_state_into_three_phases(api, state: str, stage: str) -> None:
+        task = await make_task(api.factory, "p1", state=state)
+        body = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN)).json()
+        expected_state = "waiting_human" if state == "awaiting_approval" else state
+>       assert body["state"] == expected_state
+E       AssertionError: assert 'failed' == 'lost'
+E         
+E         - lost
+E         + failed
+
+tests/integration/test_missions.py:330: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:16:24,916", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/a057714b-e80b-4803-a6a3-e1d5da03ef9a \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/a057714b-e80b-4803-a6a3-e1d5da03ef9a "HTTP/1.1 200 OK"
+________ test_timeline_reports_creation_and_state_changes_oldest_first _________
+
+api = <starlette.testclient.TestClient object at 0x7fb0cfabab30>
+
+    async def test_timeline_reports_creation_and_state_changes_oldest_first(api) -> None:
+        task = await make_task(api.factory, "p1", state="running")
+        async with api.factory() as s:
+            await store.update_task_state(s, task.id, TaskState.COMPLETED)
+    
+        body = api.get(f"/api/v1/missions/{task.id}/timeline", headers=auth(ALICE_TOKEN)).json()
+        types = [item["type"] for item in body["items"]]
+>       assert types == ["task.created", "task.state_changed", "task.state_changed"]
+E       AssertionError: assert ['mission.cre...tate_changed'] == ['task.create...tate_changed']
+E         
+E         At index 0 diff: 'mission.created' != 'task.created'
+E         Left contains one more item: 'mission.state_changed'
+E         Use -v to get more diff
+
+tests/integration/test_missions.py:483: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:16:26,216", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/fb534b60-4172-4160-b2dd-9914d92c8741/timeline \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/fb534b60-4172-4160-b2dd-9914d92c8741/timeline "HTTP/1.1 200 OK"
+________________________ test_timeline_pages_by_cursor _________________________
+
+api = <starlette.testclient.TestClient object at 0x7fb0cf997760>
+
+    async def test_timeline_pages_by_cursor(api) -> None:
+        task = await make_task(api.factory, "p1")
+        async with api.factory() as s:
+            for _ in range(4):
+                await store.update_task_state(s, task.id, TaskState.RUNNING)
+    
+        seen: list[str] = []
+        cursor = None
+        for _ in range(10):
+            params = {"limit": 2}
+            if cursor:
+                params["cursor"] = cursor
+            body = api.get(
+                f"/api/v1/missions/{task.id}/timeline", headers=auth(ALICE_TOKEN), params=params
+            ).json()
+            seen.extend(f"{item['type']}:{item['at']}" for item in body["items"])
+            cursor = body["page"]["nextCursor"]
+            if not body["page"]["hasMore"]:
+                break
+    
+        # If pagination repeated or dropped a row, this count would not land on
+        # exactly created + 4 state_changed.
+>       assert len(seen) == 5
+E       AssertionError: assert 6 == 5
+E        +  where 6 = len(['mission.created:2026-09-14T22:16:26.279869Z', 'mission.attempt_created:2026-09-14T22:16:26.285069Z', 'mission.state_...:26.298392Z', 'mission.state_changed:2026-09-14T22:16:26.302476Z', 'mission.state_changed:2026-09-14T22:16:26.305882Z'])
+
+tests/integration/test_missions.py:511: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:16:26,324", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/3ed35cae-e997-494f-9d20-84576665d81c/timeline?limit=2 \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+{"asctime": "2026-09-14 19:16:26,331", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/3ed35cae-e997-494f-9d20-84576665d81c/timeline?limit=2&cursor=eyJwIjp7ImNyZWF0ZWRBdCI6IjIwMjYtMDktMTRUMjI6MTY6MjYuMjg1MDY5KzAwOjAwIiwiaWQiOiI5NWRjZWY1NC1hM2UxLTRmYzUtODE2MC0yNjJiYWYxZGRlNTMifSwicyI6Ijk4YjNmNjM5YzYxMDFjMjcifQ.0Lfd7ReOirwQ-kKTs1JFow \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+{"asctime": "2026-09-14 19:16:26,337", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/3ed35cae-e997-494f-9d20-84576665d81c/timeline?limit=2&cursor=eyJwIjp7ImNyZWF0ZWRBdCI6IjIwMjYtMDktMTRUMjI6MTY6MjYuMjk4MzkyKzAwOjAwIiwiaWQiOiI2MWE1NWI2MS1kNGZmLTQwMmItYTY2NS0yN2RmMjYwNjE5NWQifSwicyI6Ijk4YjNmNjM5YzYxMDFjMjcifQ.ABbgYjKOqxK2ThTYUqZqBg \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/3ed35cae-e997-494f-9d20-84576665d81c/timeline?limit=2 "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/3ed35cae-e997-494f-9d20-84576665d81c/timeline?limit=2&cursor=eyJwIjp7ImNyZWF0ZWRBdCI6IjIwMjYtMDktMTRUMjI6MTY6MjYuMjg1MDY5KzAwOjAwIiwiaWQiOiI5NWRjZWY1NC1hM2UxLTRmYzUtODE2MC0yNjJiYWYxZGRlNTMifSwicyI6Ijk4YjNmNjM5YzYxMDFjMjcifQ.0Lfd7ReOirwQ-kKTs1JFow "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/3ed35cae-e997-494f-9d20-84576665d81c/timeline?limit=2&cursor=eyJwIjp7ImNyZWF0ZWRBdCI6IjIwMjYtMDktMTRUMjI6MTY6MjYuMjk4MzkyKzAwOjAwIiwiaWQiOiI2MWE1NWI2MS1kNGZmLTQwMmItYTY2NS0yN2RmMjYwNjE5NWQifSwicyI6Ijk4YjNmNjM5YzYxMDFjMjcifQ.ABbgYjKOqxK2ThTYUqZqBg "HTTP/1.1 200 OK"
+________________ test_the_cancel_reason_appears_on_the_timeline ________________
+
+api = <starlette.testclient.TestClient object at 0x7fb0cf200d00>
+
+    async def test_the_cancel_reason_appears_on_the_timeline(api) -> None:
+        task = await make_task(api.factory, "p1", state="running")
+        detail = api.get(f"/api/v1/missions/{task.id}", headers=auth(ALICE_TOKEN))
+        api.post(
+            f"/api/v1/missions/{task.id}/cancel",
+            headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+            json={"reason": "Operator changed their mind."},
+        )
+    
+        timeline = api.get(f"/api/v1/missions/{task.id}/timeline", headers=auth(ALICE_TOKEN)).json()
+>       entry = next(item for item in timeline["items"] if item["type"] == "task.stopped_by_actor")
+E       StopIteration
+
+tests/integration/test_missions.py:741: StopIteration
+
+The above exception was the direct cause of the following exception:
+
+self = <Coroutine test_the_cancel_reason_appears_on_the_timeline>
+
+    def runtest(self) -> None:
+        runner_fixture_id = f"_{self._loop_scope}_scoped_runner"
+        runner = self._request.getfixturevalue(runner_fixture_id)
+        context = contextvars.copy_context()
+        synchronized_obj = _synchronize_coroutine(
+            getattr(*self._synchronization_target_attr), runner, context
+        )
+        with MonkeyPatch.context() as c:
+            c.setattr(*self._synchronization_target_attr, synchronized_obj)
+>           super().runtest()
+
+../../../../.local/lib/python3.10/site-packages/pytest_asyncio/plugin.py:469: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../../../../.local/lib/python3.10/site-packages/pytest_asyncio/plugin.py:716: in inner
+    runner.run(coro, context=context)
+../../../../.local/lib/python3.10/site-packages/backports/asyncio/runner/runner.py:175: in run
+    return self._loop.run_until_complete(task)  # type: ignore[union-attr, no-any-return]
+/usr/lib/python3.10/asyncio/base_events.py:649: in run_until_complete
+    return future.result()
+/usr/lib/python3.10/asyncio/futures.py:201: in result
+    raise self._exception.with_traceback(self._exception_tb)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = None
+
+    def __step(self, exc=None):
+        if self.done():
+            raise exceptions.InvalidStateError(
+                f'_step(): already done: {self!r}, {exc!r}')
+        if self._must_cancel:
+            if not isinstance(exc, exceptions.CancelledError):
+                exc = self._make_cancelled_error()
+            self._must_cancel = False
+        coro = self._coro
+        self._fut_waiter = None
+    
+        _enter_task(self._loop, self)
+        # Call either coro.throw(exc) or coro.send(None).
+        try:
+            if exc is None:
+                # We use the `send` method directly, because coroutines
+                # don't have `__iter__` and `__next__` methods.
+>               result = coro.send(None)
+E               RuntimeError: coroutine raised StopIteration
+
+/usr/lib/python3.10/asyncio/tasks.py:232: RuntimeError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:16:27,640", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/95fda931-8b5a-45e4-80c1-673a74ef0ddd \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+{"asctime": "2026-09-14 19:16:27,652", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: POST http://testserver/api/v1/missions/95fda931-8b5a-45e4-80c1-673a74ef0ddd/cancel \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+{"asctime": "2026-09-14 19:16:27,659", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/95fda931-8b5a-45e4-80c1-673a74ef0ddd/timeline \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/95fda931-8b5a-45e4-80c1-673a74ef0ddd "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/api/v1/missions/95fda931-8b5a-45e4-80c1-673a74ef0ddd/cancel "HTTP/1.1 200 OK"
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/95fda931-8b5a-45e4-80c1-673a74ef0ddd/timeline "HTTP/1.1 200 OK"
+_________________ test_explain_on_a_blocked_mission_reports_it _________________
+
+api = <starlette.testclient.TestClient object at 0x7fb0e037c400>
+
+    async def test_explain_on_a_blocked_mission_reports_it(api) -> None:
+        task = await make_task(api.factory, "p1", instruction="run kubectl apply now", mode=TaskMode.IMPLEMENT)
+        body = api.post(f"/api/v1/missions/{task.id}/explain", headers=auth(ALICE_TOKEN)).json()
+        assert body["blocked"] is True
+        assert body["blockedReason"]["code"] == "awaiting_approval"
+>       assert "The mission is held for approval" in " ".join(body["reasons"])
+E       AssertionError: assert 'The mission is held for approval' in 'The mission is held for operator input and has not started.'
+E        +  where 'The mission is held for operator input and has not started.' = <built-in method join of str object at 0x7fb0f0bb3bf0>(['The mission is held for operator input and has not started.'])
+E        +    where <built-in method join of str object at 0x7fb0f0bb3bf0> = ' '.join
+
+tests/integration/test_missions.py:799: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:16:28,430", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: POST http://testserver/api/v1/missions/684662ee-e456-48bf-b287-47725eeb38a0/explain \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/api/v1/missions/684662ee-e456-48bf-b287-47725eeb38a0/explain "HTTP/1.1 200 OK"
+___________ test_api_version_is_rate_limited_with_the_contract_shape ___________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fb0e3a7d7b0>
+
+    def test_api_version_is_rate_limited_with_the_contract_shape(monkeypatch) -> None:
+        """The contract documents 429 + Retry-After; before this it documented only."""
+        from gateway.app.main import app, rate_limiter
+    
+        monkeypatch.setattr(rate_limiter, "limit", 2)
+        rate_limiter._events.clear()
+    
+>       with TestClient(app, raise_server_exceptions=False) as limited:
+
+tests/integration/test_probes.py:366: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:688: in __enter__
+    portal.call(self.wait_startup)
+../../../../.local/lib/python3.10/site-packages/anyio/from_thread.py:334: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+/usr/lib/python3.10/concurrent/futures/_base.py:458: in result
+    return self.__get_result()
+/usr/lib/python3.10/concurrent/futures/_base.py:403: in __get_result
+    raise self._exception
+../../../../.local/lib/python3.10/site-packages/anyio/from_thread.py:259: in _call_func
+    retval = await retval_or_awaitable
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:723: in wait_startup
+    await receive()
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:714: in receive
+    self.task.result()
+/usr/lib/python3.10/concurrent/futures/_base.py:451: in result
+    return self.__get_result()
+/usr/lib/python3.10/concurrent/futures/_base.py:403: in __get_result
+    raise self._exception
+../../../../.local/lib/python3.10/site-packages/anyio/from_thread.py:259: in _call_func
+    retval = await retval_or_awaitable
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:704: in lifespan
+    await self.app(scope, self.stream_receive.receive, self.stream_send.send)
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/applications.py:107: in __call__
+    await self.middleware_stack(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/middleware/errors.py:151: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/middleware/base.py:103: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/middleware/exceptions.py:49: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/routing.py:716: in __call__
+    await self.middleware_stack(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:2726: in app
+    await self.lifespan(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/routing.py:694: in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:265: in __aenter__
+    await self._router._startup()
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:6375: in _startup
+    await handler()
+gateway/app/main.py:362: in startup
+    await connection.run_sync(check_schema)
+../../../../.local/lib/python3.10/site-packages/sqlalchemy/ext/asyncio/engine.py:887: in run_sync
+    return await greenlet_spawn(
+../../../../.local/lib/python3.10/site-packages/sqlalchemy/util/_concurrency_py3k.py:203: in greenlet_spawn
+    result = context.switch(value)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+connection = <sqlalchemy.engine.base.Connection object at 0x7fb0ce657ac0>
+
+    def check_schema(connection: Connection) -> None:
+        inspector = inspect(connection)
+        existing_tables = set(inspector.get_table_names())
+        missing: list[str] = []
+    
+        for table, migration in REQUIRED_TABLES.items():
+            if table not in existing_tables:
+                missing.append(f"table {table!r} (added by {migration})")
+    
+        for table, columns in REQUIRED_COLUMNS.items():
+            if table not in existing_tables:
+                # The table itself is absent, which `create_all` will have handled on
+                # a fresh database. Reporting its columns too would be noise.
+                continue
+            present = {column["name"] for column in inspector.get_columns(table)}
+            for column, migration in columns.items():
+                if column not in present:
+                    missing.append(f"column {table}.{column} (added by {migration})")
+    
+        for table, columns in FORBIDDEN_COLUMNS.items():
+            if table not in existing_tables:
+                continue
+            present = {column["name"] for column in inspector.get_columns(table)}
+            for column, migration in columns.items():
+                if column in present:
+                    missing.append(f"column {table}.{column} still present (dropped by {migration})")
+    
+        if missing:
+>           raise SchemaOutOfDate(
+                "The database does not match what this build requires: "
+                + "; ".join(missing)
+                + f". Run `{APPLY_COMMAND}` against this database, then start again. "
+                + ADOPT_HINT
+                + " Startup does not migrate on its own: applying schema changes to a "
+                "live database is an operator decision, not a side effect of a deploy."
+            )
+E           gateway.app.db.schema_guard.SchemaOutOfDate: The database does not match what this build requires: column tasks.mission_id (added by 0017_durable_missions.sql). Run `python3 scripts/apply_migrations.py` against this database, then start again. If this database was created by the application rather than by that script, adopt it first: `python3 scripts/apply_migrations.py --mark-applied 0001_init.sql`. Startup does not migrate on its own: applying schema changes to a live database is an operator decision, not a side effect of a deploy.
+
+gateway/app/db/schema_guard.py:217: SchemaOutOfDate
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:16:33,574", "levelname": "ERROR", "name": "gateway.app.main", "message": "user registry unusable: the user registry '/etc/codex-bridge/users.json' does not exist. No account can sign in: POST /api/v1/auth/sign-in, POST /api/v1/auth/refresh and POST /oauth/authorize refuse every credential, and tokens already issued are refused by POST /mcp. Point CODEX_BRIDGE_USER_REGISTRY_FILE at this deployment's accounts file (docs/installation.md).", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+ERROR    gateway.app.main:main.py:346 user registry unusable: the user registry '/etc/codex-bridge/users.json' does not exist. No account can sign in: POST /api/v1/auth/sign-in, POST /api/v1/auth/refresh and POST /oauth/authorize refuse every credential, and tokens already issued are refused by POST /mcp. Point CODEX_BRIDGE_USER_REGISTRY_FILE at this deployment's accounts file (docs/installation.md).
+_________________ test_health_and_ready_are_never_rate_limited _________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fb0cea21420>
+
+    def test_health_and_ready_are_never_rate_limited(monkeypatch) -> None:
+        """Monitoring polls these on a timer.
+    
+        Limiting them makes the first symptom of heavy client traffic a red health
+        check, which points the operator at the wrong thing.
+        """
+        from gateway.app.main import app, rate_limiter
+    
+        monkeypatch.setattr(rate_limiter, "limit", 1)
+        rate_limiter._events.clear()
+    
+>       with TestClient(app, raise_server_exceptions=False) as probe_client:
+
+tests/integration/test_probes.py:391: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:688: in __enter__
+    portal.call(self.wait_startup)
+../../../../.local/lib/python3.10/site-packages/anyio/from_thread.py:334: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+/usr/lib/python3.10/concurrent/futures/_base.py:458: in result
+    return self.__get_result()
+/usr/lib/python3.10/concurrent/futures/_base.py:403: in __get_result
+    raise self._exception
+../../../../.local/lib/python3.10/site-packages/anyio/from_thread.py:259: in _call_func
+    retval = await retval_or_awaitable
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:723: in wait_startup
+    await receive()
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:714: in receive
+    self.task.result()
+/usr/lib/python3.10/concurrent/futures/_base.py:451: in result
+    return self.__get_result()
+/usr/lib/python3.10/concurrent/futures/_base.py:403: in __get_result
+    raise self._exception
+../../../../.local/lib/python3.10/site-packages/anyio/from_thread.py:259: in _call_func
+    retval = await retval_or_awaitable
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:704: in lifespan
+    await self.app(scope, self.stream_receive.receive, self.stream_send.send)
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/applications.py:107: in __call__
+    await self.middleware_stack(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/middleware/errors.py:151: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/middleware/base.py:103: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/middleware/exceptions.py:49: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/routing.py:716: in __call__
+    await self.middleware_stack(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:2726: in app
+    await self.lifespan(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/routing.py:694: in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:265: in __aenter__
+    await self._router._startup()
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:6375: in _startup
+    await handler()
+gateway/app/main.py:362: in startup
+    await connection.run_sync(check_schema)
+../../../../.local/lib/python3.10/site-packages/sqlalchemy/ext/asyncio/engine.py:887: in run_sync
+    return await greenlet_spawn(
+../../../../.local/lib/python3.10/site-packages/sqlalchemy/util/_concurrency_py3k.py:203: in greenlet_spawn
+    result = context.switch(value)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+connection = <sqlalchemy.engine.base.Connection object at 0x7fb0e3a7de40>
+
+    def check_schema(connection: Connection) -> None:
+        inspector = inspect(connection)
+        existing_tables = set(inspector.get_table_names())
+        missing: list[str] = []
+    
+        for table, migration in REQUIRED_TABLES.items():
+            if table not in existing_tables:
+                missing.append(f"table {table!r} (added by {migration})")
+    
+        for table, columns in REQUIRED_COLUMNS.items():
+            if table not in existing_tables:
+                # The table itself is absent, which `create_all` will have handled on
+                # a fresh database. Reporting its columns too would be noise.
+                continue
+            present = {column["name"] for column in inspector.get_columns(table)}
+            for column, migration in columns.items():
+                if column not in present:
+                    missing.append(f"column {table}.{column} (added by {migration})")
+    
+        for table, columns in FORBIDDEN_COLUMNS.items():
+            if table not in existing_tables:
+                continue
+            present = {column["name"] for column in inspector.get_columns(table)}
+            for column, migration in columns.items():
+                if column in present:
+                    missing.append(f"column {table}.{column} still present (dropped by {migration})")
+    
+        if missing:
+>           raise SchemaOutOfDate(
+                "The database does not match what this build requires: "
+                + "; ".join(missing)
+                + f". Run `{APPLY_COMMAND}` against this database, then start again. "
+                + ADOPT_HINT
+                + " Startup does not migrate on its own: applying schema changes to a "
+                "live database is an operator decision, not a side effect of a deploy."
+            )
+E           gateway.app.db.schema_guard.SchemaOutOfDate: The database does not match what this build requires: column tasks.mission_id (added by 0017_durable_missions.sql). Run `python3 scripts/apply_migrations.py` against this database, then start again. If this database was created by the application rather than by that script, adopt it first: `python3 scripts/apply_migrations.py --mark-applied 0001_init.sql`. Startup does not migrate on its own: applying schema changes to a live database is an operator decision, not a side effect of a deploy.
+
+gateway/app/db/schema_guard.py:217: SchemaOutOfDate
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:16:34,668", "levelname": "ERROR", "name": "gateway.app.main", "message": "user registry unusable: the user registry '/etc/codex-bridge/users.json' does not exist. No account can sign in: POST /api/v1/auth/sign-in, POST /api/v1/auth/refresh and POST /oauth/authorize refuse every credential, and tokens already issued are refused by POST /mcp. Point CODEX_BRIDGE_USER_REGISTRY_FILE at this deployment's accounts file (docs/installation.md).", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+ERROR    gateway.app.main:main.py:346 user registry unusable: the user registry '/etc/codex-bridge/users.json' does not exist. No account can sign in: POST /api/v1/auth/sign-in, POST /api/v1/auth/refresh and POST /oauth/authorize refuse every credential, and tokens already issued are refused by POST /mcp. Point CODEX_BRIDGE_USER_REGISTRY_FILE at this deployment's accounts file (docs/installation.md).
+_______ test_ready_is_cached_so_a_flood_cannot_drain_the_connection_pool _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fb0e03ee6b0>
+
+    def test_ready_is_cached_so_a_flood_cannot_drain_the_connection_pool(monkeypatch) -> None:
+        """`/ready` is unauthenticated and unlimited, and shares the API's pool.
+    
+        Uncached, enough concurrent callers exhausted it, real requests blocked for
+        the pool timeout, and the resulting error was reported as
+        `database: unavailable` — so a flood made the gateway ask the load balancer
+        to pull it out of rotation, blaming the database.
+        """
+        from gateway.app.core.config import settings
+        from gateway.app.main import app
+    
+        probes.reset_database_cache()
+        monkeypatch.setattr(settings, "ready_cache_seconds", 60.0)
+    
+        probed = {"count": 0}
+    
+        async def counting_probe() -> bool:
+            probed["count"] += 1
+            return True
+    
+        monkeypatch.setattr(probes, "_probe_database", counting_probe)
+    
+>       with TestClient(app, raise_server_exceptions=False) as flood:
+
+tests/integration/test_probes.py:553: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:688: in __enter__
+    portal.call(self.wait_startup)
+../../../../.local/lib/python3.10/site-packages/anyio/from_thread.py:334: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+/usr/lib/python3.10/concurrent/futures/_base.py:458: in result
+    return self.__get_result()
+/usr/lib/python3.10/concurrent/futures/_base.py:403: in __get_result
+    raise self._exception
+../../../../.local/lib/python3.10/site-packages/anyio/from_thread.py:259: in _call_func
+    retval = await retval_or_awaitable
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:723: in wait_startup
+    await receive()
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:714: in receive
+    self.task.result()
+/usr/lib/python3.10/concurrent/futures/_base.py:451: in result
+    return self.__get_result()
+/usr/lib/python3.10/concurrent/futures/_base.py:403: in __get_result
+    raise self._exception
+../../../../.local/lib/python3.10/site-packages/anyio/from_thread.py:259: in _call_func
+    retval = await retval_or_awaitable
+../../../../.local/lib/python3.10/site-packages/starlette/testclient.py:704: in lifespan
+    await self.app(scope, self.stream_receive.receive, self.stream_send.send)
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/applications.py:107: in __call__
+    await self.middleware_stack(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/middleware/errors.py:151: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/middleware/base.py:103: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/middleware/exceptions.py:49: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/routing.py:716: in __call__
+    await self.middleware_stack(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:2726: in app
+    await self.lifespan(scope, receive, send)
+../../../../.local/lib/python3.10/site-packages/starlette/routing.py:694: in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+/usr/lib/python3.10/contextlib.py:199: in __aenter__
+    return await anext(self.gen)
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:240: in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:265: in __aenter__
+    await self._router._startup()
+../../../../.local/lib/python3.10/site-packages/fastapi/routing.py:6375: in _startup
+    await handler()
+gateway/app/main.py:362: in startup
+    await connection.run_sync(check_schema)
+../../../../.local/lib/python3.10/site-packages/sqlalchemy/ext/asyncio/engine.py:887: in run_sync
+    return await greenlet_spawn(
+../../../../.local/lib/python3.10/site-packages/sqlalchemy/util/_concurrency_py3k.py:203: in greenlet_spawn
+    result = context.switch(value)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+connection = <sqlalchemy.engine.base.Connection object at 0x7fb0ec7aa4d0>
+
+    def check_schema(connection: Connection) -> None:
+        inspector = inspect(connection)
+        existing_tables = set(inspector.get_table_names())
+        missing: list[str] = []
+    
+        for table, migration in REQUIRED_TABLES.items():
+            if table not in existing_tables:
+                missing.append(f"table {table!r} (added by {migration})")
+    
+        for table, columns in REQUIRED_COLUMNS.items():
+            if table not in existing_tables:
+                # The table itself is absent, which `create_all` will have handled on
+                # a fresh database. Reporting its columns too would be noise.
+                continue
+            present = {column["name"] for column in inspector.get_columns(table)}
+            for column, migration in columns.items():
+                if column not in present:
+                    missing.append(f"column {table}.{column} (added by {migration})")
+    
+        for table, columns in FORBIDDEN_COLUMNS.items():
+            if table not in existing_tables:
+                continue
+            present = {column["name"] for column in inspector.get_columns(table)}
+            for column, migration in columns.items():
+                if column in present:
+                    missing.append(f"column {table}.{column} still present (dropped by {migration})")
+    
+        if missing:
+>           raise SchemaOutOfDate(
+                "The database does not match what this build requires: "
+                + "; ".join(missing)
+                + f". Run `{APPLY_COMMAND}` against this database, then start again. "
+                + ADOPT_HINT
+                + " Startup does not migrate on its own: applying schema changes to a "
+                "live database is an operator decision, not a side effect of a deploy."
+            )
+E           gateway.app.db.schema_guard.SchemaOutOfDate: The database does not match what this build requires: column tasks.mission_id (added by 0017_durable_missions.sql). Run `python3 scripts/apply_migrations.py` against this database, then start again. If this database was created by the application rather than by that script, adopt it first: `python3 scripts/apply_migrations.py --mark-applied 0001_init.sql`. Startup does not migrate on its own: applying schema changes to a live database is an operator decision, not a side effect of a deploy.
+
+gateway/app/db/schema_guard.py:217: SchemaOutOfDate
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:16:35,348", "levelname": "ERROR", "name": "gateway.app.main", "message": "user registry unusable: the user registry '/etc/codex-bridge/users.json' does not exist. No account can sign in: POST /api/v1/auth/sign-in, POST /api/v1/auth/refresh and POST /oauth/authorize refuse every credential, and tokens already issued are refused by POST /mcp. Point CODEX_BRIDGE_USER_REGISTRY_FILE at this deployment's accounts file (docs/installation.md).", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+ERROR    gateway.app.main:main.py:346 user registry unusable: the user registry '/etc/codex-bridge/users.json' does not exist. No account can sign in: POST /api/v1/auth/sign-in, POST /api/v1/auth/refresh and POST /oauth/authorize refuse every credential, and tokens already issued are refused by POST /mcp. Point CODEX_BRIDGE_USER_REGISTRY_FILE at this deployment's accounts file (docs/installation.md).
+________ test_resume_marks_the_session_resuming_and_tells_the_executor _________
+
+api = <starlette.testclient.TestClient object at 0x7fb0cdab7c10>
+
+    async def test_resume_marks_the_session_resuming_and_tells_the_executor(api) -> None:
+>       task = await make_task(api.factory, "p1", state="paused")
+
+tests/integration/test_sessions.py:489: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/integration/test_sessions.py:207: in make_task
+    task = await store.update_task_state(s, task.id, TaskState(state))
+gateway/app/services/store.py:2093: in update_task_state
+    await transition_mission_state(
+gateway/app/services/store.py:611: in transition_mission_state
+    assert_legal_transition(mission.state, target_state)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+current = 'queued', target = 'paused'
+
+    def assert_legal_transition(current: str, target: str) -> None:
+        if current == target:
+            return
+        if target not in LEGAL_MISSION_TRANSITIONS.get(current, frozenset()):
+>           raise MissionTransitionError(f"illegal_mission_transition:{current}:{target}")
+E           gateway.app.services.mission_types.MissionTransitionError: illegal_mission_transition:queued:paused
+
+gateway/app/services/mission_types.py:124: MissionTransitionError
+_______ test_restart_marks_the_session_restarting_and_tells_the_executor _______
+
+api = <starlette.testclient.TestClient object at 0x7fb0cd937b80>
+
+    async def test_restart_marks_the_session_restarting_and_tells_the_executor(api) -> None:
+>       task = await make_task(api.factory, "p1", state="paused")
+
+tests/integration/test_sessions.py:503: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/integration/test_sessions.py:207: in make_task
+    task = await store.update_task_state(s, task.id, TaskState(state))
+gateway/app/services/store.py:2093: in update_task_state
+    await transition_mission_state(
+gateway/app/services/store.py:611: in transition_mission_state
+    assert_legal_transition(mission.state, target_state)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+current = 'queued', target = 'paused'
+
+    def assert_legal_transition(current: str, target: str) -> None:
+        if current == target:
+            return
+        if target not in LEGAL_MISSION_TRANSITIONS.get(current, frozenset()):
+>           raise MissionTransitionError(f"illegal_mission_transition:{current}:{target}")
+E           gateway.app.services.mission_types.MissionTransitionError: illegal_mission_transition:queued:paused
+
+gateway/app/services/mission_types.py:124: MissionTransitionError
+_______________ test_restart_of_a_finished_session_re_queues_it ________________
+
+api = <starlette.testclient.TestClient object at 0x7fb0cd793220>
+
+    async def test_restart_of_a_finished_session_re_queues_it(api) -> None:
+        """A completed session is in FINISHED_RESTARTABLE, so restart succeeds and
+        re-dispatches it — the opposite of a conflict. This test used to be named
+        `..._is_a_conflict` while asserting exactly this success path; the two 409
+        branches this endpoint actually has are covered separately below (council
+        2026-08-18, "the claim auditor")."""
+        task = await make_task(api.factory, "p1", state="completed")
+        detail = api.get(f"/api/v1/sessions/{task.id}", headers=auth(ALICE_TOKEN))
+    
+        response = api.post(
+            f"/api/v1/sessions/{task.id}/restart",
+            headers={**auth(ALICE_TOKEN), "If-Match": detail.headers["ETag"]},
+        )
+    
+>       assert response.status_code == 200
+E       assert 500 == 200
+E        +  where 500 = <Response [500 Internal Server Error]>.status_code
+
+tests/integration/test_sessions.py:530: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-14 19:16:44,644", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/sessions/9c69c7b7-1e76-4016-b045-ed69757ef898 \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+{"asctime": "2026-09-14 19:16:44,655", "levelname": "ERROR", "name": "gateway.app.api.errors", "message": "unhandled_exception", "correlation_id": "26a0590d-c594-41b4-95ee-aa7e73e7e54c", "task_id": null, "executor_id": null, "exc_info": "Traceback (most recent call last):\n  File \"/home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/api/request_context.py\", line 102, in dispatch\n    response = await call_next(request)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/starlette/middleware/base.py\", line 168, in call_next\n    raise app_exc from app_exc.__cause__ or app_exc.__context__\n  File \"/home/esteban/.local/lib/python3.10/site-packages/starlette/middleware/base.py\", line 144, in coro\n    await self.app(scope, receive_or_disconnect, send_no_error)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/starlette/middleware/exceptions.py\", line 63, in __call__\n    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/starlette/_exception_handler.py\", line 53, in wrapped_app\n    raise exc\n  File \"/home/esteban/.local/lib/python3.10/site-packages/starlette/_exception_handler.py\", line 42, in wrapped_app\n    await app(scope, receive, sender)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/fastapi/middleware/asyncexitstack.py\", line 18, in __call__\n    await self.app(scope, receive, send)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/starlette/routing.py\", line 716, in __call__\n    await self.middleware_stack(scope, receive, send)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py\", line 2734, in app\n    await route.handle(scope, receive, send)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py\", line 1780, in handle\n    await self.original_router.handle(scope, receive, send)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py\", line 2789, in handle\n    await included_router._handle_selected(scope, receive, send)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py\", line 1800, in _handle_selected\n    await original_route.handle(scope, receive, send)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py\", line 1279, in handle\n    await app(scope, receive, send)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py\", line 158, in app\n    await wrap_app_handling_exceptions(app, request)(scope, receive, send)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/starlette/_exception_handler.py\", line 53, in wrapped_app\n    raise exc\n  File \"/home/esteban/.local/lib/python3.10/site-packages/starlette/_exception_handler.py\", line 42, in wrapped_app\n    await app(scope, receive, sender)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py\", line 144, in app\n    response = await f(request)\n  File \"/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py\", line 706, in app\n    raw_response = await run_endpoint_function(\n  File \"/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py\", line 352, in run_endpoint_function\n    return await dependant.call(**values)\n  File \"/home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/api/routes/sessions.py\", line 404, in restart_session\n    return await _control_session(\n  File \"/home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/api/routes/sessions.py\", line 487, in _control_session\n    dispatch_payload = await hub.dispatch_next(task.executor_id)\n  File \"/home/esteban/Sync/Projects/AI/CodexBridge/tests/integration/test_sessions.py\", line 70, in dispatch_next\n    task = await store.update_task_state(session, task.id, TaskState.RUNNING)\n  File \"/home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/services/store.py\", line 2093, in update_task_state\n    await transition_mission_state(\n  File \"/home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/services/store.py\", line 611, in transition_mission_state\n    assert_legal_transition(mission.state, target_state)\n  File \"/home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/services/mission_types.py\", line 124, in assert_legal_transition\n    raise MissionTransitionError(f\"illegal_mission_transition:{current}:{target}\")\ngateway.app.services.mission_types.MissionTransitionError: illegal_mission_transition:completed:running"}
+{"asctime": "2026-09-14 19:16:44,657", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: POST http://testserver/api/v1/sessions/9c69c7b7-1e76-4016-b045-ed69757ef898/restart \"HTTP/1.1 500 Internal Server Error\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/sessions/9c69c7b7-1e76-4016-b045-ed69757ef898 "HTTP/1.1 200 OK"
+ERROR    gateway.app.api.errors:errors.py:174 unhandled_exception
+Traceback (most recent call last):
+  File "/home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/api/request_context.py", line 102, in dispatch
+    response = await call_next(request)
+  File "/home/esteban/.local/lib/python3.10/site-packages/starlette/middleware/base.py", line 168, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "/home/esteban/.local/lib/python3.10/site-packages/starlette/middleware/base.py", line 144, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "/home/esteban/.local/lib/python3.10/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/esteban/.local/lib/python3.10/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/home/esteban/.local/lib/python3.10/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/esteban/.local/lib/python3.10/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/home/esteban/.local/lib/python3.10/site-packages/starlette/routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py", line 2734, in app
+    await route.handle(scope, receive, send)
+  File "/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py", line 1780, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py", line 2789, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py", line 1800, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py", line 1279, in handle
+    await app(scope, receive, send)
+  File "/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py", line 158, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/home/esteban/.local/lib/python3.10/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/home/esteban/.local/lib/python3.10/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py", line 144, in app
+    response = await f(request)
+  File "/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py", line 706, in app
+    raw_response = await run_endpoint_function(
+  File "/home/esteban/.local/lib/python3.10/site-packages/fastapi/routing.py", line 352, in run_endpoint_function
+    return await dependant.call(**values)
+  File "/home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/api/routes/sessions.py", line 404, in restart_session
+    return await _control_session(
+  File "/home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/api/routes/sessions.py", line 487, in _control_session
+    dispatch_payload = await hub.dispatch_next(task.executor_id)
+  File "/home/esteban/Sync/Projects/AI/CodexBridge/tests/integration/test_sessions.py", line 70, in dispatch_next
+    task = await store.update_task_state(session, task.id, TaskState.RUNNING)
+  File "/home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/services/store.py", line 2093, in update_task_state
+    await transition_mission_state(
+  File "/home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/services/store.py", line 611, in transition_mission_state
+    assert_legal_transition(mission.state, target_state)
+  File "/home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/services/mission_types.py", line 124, in assert_legal_transition
+    raise MissionTransitionError(f"illegal_mission_transition:{current}:{target}")
+gateway.app.services.mission_types.MissionTransitionError: illegal_mission_transition:completed:running
+INFO     httpx:_client.py:1025 HTTP Request: POST http://testserver/api/v1/sessions/9c69c7b7-1e76-4016-b045-ed69757ef898/restart "HTTP/1.1 500 Internal Server Error"
+_____ test_mcp_cancel_of_a_pending_control_state_writes_cancelled[paused] ______
+
+db_session = <sqlalchemy.ext.asyncio.session.AsyncSession object at 0x7fb0d06bdb40>
+pending_state = <TaskState.PAUSED: 'paused'>
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "pending_state",
+        [TaskState.PAUSING, TaskState.PAUSED, TaskState.RESUMING, TaskState.RESTARTING],
+    )
+    async def test_mcp_cancel_of_a_pending_control_state_writes_cancelled(
+        db_session: AsyncSession, pending_state: TaskState
+    ):
+        """Review of #17's own delivery: `cancel_codex_task` matched only RUNNING,
+        so cancelling a PAUSED/PAUSING/RESUMING/RESTARTING session through MCP
+        returned 200 with the session's *unchanged* state, sent no `task.cancel`,
+        wrote nothing, and left nothing for
+        store.list_tasks_requiring_cancel_replay to ever find on reconnect —
+        exactly the failure #17 exists to close, reachable because #16 made these
+        four states possible. The HTTP `/stop` endpoint already covered them
+        (`STOPPABLE`, `gateway/app/api/routes/sessions.py`); the MCP tool now
+        shares the same `shared.protocol.STOPPABLE_TASK_STATES` set."""
+        task = await store.create_task(db_session, _submit(run_when_available=True), executor_online=True)
+>       task = await store.update_task_state(db_session, task.id, pending_state)
+
+tests/integration/test_store_and_mcp.py:323: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+gateway/app/services/store.py:2093: in update_task_state
+    await transition_mission_state(
+gateway/app/services/store.py:611: in transition_mission_state
+    assert_legal_transition(mission.state, target_state)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+current = 'queued', target = 'paused'
+
+    def assert_legal_transition(current: str, target: str) -> None:
+        if current == target:
+            return
+        if target not in LEGAL_MISSION_TRANSITIONS.get(current, frozenset()):
+>           raise MissionTransitionError(f"illegal_mission_transition:{current}:{target}")
+E           gateway.app.services.mission_types.MissionTransitionError: illegal_mission_transition:queued:paused
+
+gateway/app/services/mission_types.py:124: MissionTransitionError
+______ test_startup_recovery_marks_pending_control_states_as_lost[paused] ______
+
+db_session = <sqlalchemy.ext.asyncio.session.AsyncSession object at 0x7fb0ec66bd90>
+pending_state = <TaskState.PAUSED: 'paused'>
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "pending_state",
+        [TaskState.PAUSING, TaskState.PAUSED, TaskState.RESUMING, TaskState.RESTARTING],
+    )
+    async def test_startup_recovery_marks_pending_control_states_as_lost(
+        db_session: AsyncSession, pending_state: TaskState
+    ):
+        """council 2026-08-18, round 2, "the second caller": issue #16 added these
+        four states to the LOST-on-startup set alongside the pre-existing
+        RUNNING, but nothing exercised it — reverting the branch back to
+        `RUNNING`-only left the full 302-test suite green. `PAUSED` matters most
+        of the four: `AgentHub.register`'s control replay only fires for
+        PAUSING/RESUMING/RESTARTING (transitional states waiting on a `task.ack`),
+        never for the stable PAUSED state, so a gateway restart is the only path
+        that ever unsticks a task left PAUSED by a gateway that died."""
+        task = await store.create_task(db_session, _submit(run_when_available=True), executor_online=True)
+>       task = await store.update_task_state(db_session, task.id, pending_state)
+
+tests/integration/test_store_and_mcp.py:421: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+gateway/app/services/store.py:2093: in update_task_state
+    await transition_mission_state(
+gateway/app/services/store.py:611: in transition_mission_state
+    assert_legal_transition(mission.state, target_state)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+current = 'queued', target = 'paused'
+
+    def assert_legal_transition(current: str, target: str) -> None:
+        if current == target:
+            return
+        if target not in LEGAL_MISSION_TRANSITIONS.get(current, frozenset()):
+>           raise MissionTransitionError(f"illegal_mission_transition:{current}:{target}")
+E           gateway.app.services.mission_types.MissionTransitionError: illegal_mission_transition:queued:paused
+
+gateway/app/services/mission_types.py:124: MissionTransitionError
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/contract/test_openapi_document.py::test_reported_contract_version_matches_the_document
+FAILED tests/integration/test_api_conventions.py::test_real_gateway_leaves_mcp_error_shape_untouched
+FAILED tests/integration/test_artifacts.py::test_the_default_artifacts_root_follows_the_working_directory
+FAILED tests/integration/test_missions.py::test_stage_groups_state_into_three_phases[expired-done]
+FAILED tests/integration/test_missions.py::test_stage_groups_state_into_three_phases[lost-done]
+FAILED tests/integration/test_missions.py::test_timeline_reports_creation_and_state_changes_oldest_first
+FAILED tests/integration/test_missions.py::test_timeline_pages_by_cursor - As...
+FAILED tests/integration/test_missions.py::test_the_cancel_reason_appears_on_the_timeline
+FAILED tests/integration/test_missions.py::test_explain_on_a_blocked_mission_reports_it
+FAILED tests/integration/test_probes.py::test_api_version_is_rate_limited_with_the_contract_shape
+FAILED tests/integration/test_probes.py::test_health_and_ready_are_never_rate_limited
+FAILED tests/integration/test_probes.py::test_ready_is_cached_so_a_flood_cannot_drain_the_connection_pool
+FAILED tests/integration/test_sessions.py::test_resume_marks_the_session_resuming_and_tells_the_executor
+FAILED tests/integration/test_sessions.py::test_restart_marks_the_session_restarting_and_tells_the_executor
+FAILED tests/integration/test_sessions.py::test_restart_of_a_finished_session_re_queues_it
+FAILED tests/integration/test_store_and_mcp.py::test_mcp_cancel_of_a_pending_control_state_writes_cancelled[paused]
+FAILED tests/integration/test_store_and_mcp.py::test_startup_recovery_marks_pending_control_states_as_lost[paused]
+17 failed, 1486 passed, 9 skipped, 2 warnings in 118.07s (0:01:58)
+[full-suite exit=1]
+
+=== codemap-refresh ===
+Code map written to: /home/esteban/Sync/Projects/AI/CodexBridge/docs/codemap.md
+  193 file(s) · 2190 symbol(s) indexed
+[codemap-refresh exit=0]
+
+--- status after ---
+ M docs/codemap.md
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? contract/1.19.0/
+?? coordination-status-20260911.txt
+?? gateway/app/services/mission_types.py
+?? ruvector.db
+?? temp-tools/results/20260914-221426Z-devel3-reconcile-mission-files-and-validate.txt
+
+IMPORTANT_FILES_TO_COMMIT_IF_PRESENT:
+gateway/app/services/mission_types.py
+contract/1.19.0
+migrations/0017_durable_missions.sql
+docs/codemap.md
+temp-tools/results/20260914-221426Z-devel3-reconcile-mission-files-and-validate.txt
+
+RESULT_FILE=temp-tools/results/20260914-221426Z-devel3-reconcile-mission-files-and-validate.txt
