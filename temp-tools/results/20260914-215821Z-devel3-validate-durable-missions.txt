@@ -1,0 +1,61 @@
+=== CodexBridge durable Mission validation ===
+timestamp: 2026-09-14T18:58:21-03:00
+host: devel3
+branch: development
+head: 62f498ef47600e7ca964d8098de59bd5c3d27351
+
+--- status before ---
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? contract/1.19.0/
+?? coordination-status-20260911.txt
+?? gateway/app/services/mission_types.py
+?? migrations/0017_durable_missions.old.sql
+?? ruvector.db
+?? temp-tools/results/20260914-215821Z-devel3-validate-durable-missions.txt
+
+=== migration-tests ===
+temp-tools/04-devel3-validate-durable-missions.sh: line 24: python: command not found
+
+[migration-tests exit=127]
+
+=== mission-focused ===
+temp-tools/04-devel3-validate-durable-missions.sh: line 24: python: command not found
+
+[mission-focused exit=127]
+
+=== contract-tests ===
+temp-tools/04-devel3-validate-durable-missions.sh: line 24: python: command not found
+
+[contract-tests exit=127]
+
+=== full-suite ===
+temp-tools/04-devel3-validate-durable-missions.sh: line 24: python: command not found
+
+[full-suite exit=127]
+
+=== codemap-refresh ===
+Code map written to: /home/esteban/Sync/Projects/AI/CodexBridge/docs/codemap.md
+  191 file(s) · 2190 symbol(s) indexed
+
+[codemap-refresh exit=0]
+
+--- status after ---
+ M docs/codemap.md
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? contract/1.19.0/
+?? coordination-status-20260911.txt
+?? gateway/app/services/mission_types.py
+?? migrations/0017_durable_missions.old.sql
+?? ruvector.db
+?? temp-tools/results/20260914-215821Z-devel3-validate-durable-missions.txt
+
+MIGRATION_TESTS=127
+MISSION_FOCUSED=127
+CONTRACT_TESTS=127
+FULL_SUITE=127
+CODEMAP_REFRESH=0
+RESULT_FILE=temp-tools/results/20260914-215821Z-devel3-validate-durable-missions.txt
