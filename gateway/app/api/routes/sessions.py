@@ -14,17 +14,16 @@ acknowledges the control with `task.ack`.
 
 ## Redaction
 
-`shared/security.py:sanitize_log_line` covers three credential patterns and
-nothing else — not filesystem paths, not host:port pairs. Issue #15 is a live
-example: the executor's own machine token reached the gateway log through a URL.
-So the log endpoint redacts on the way out rather than trusting what was stored,
-and `docs/api/README.md` states that any endpoint returning log content owes its
-own redaction.
+`shared/security.py:redact_sensitive_text` is the shared response-boundary
+policy for credentials, filesystem paths, internal addresses and terminal
+control sequences. Issue #15 is a live example: the executor's own machine token
+reached the gateway log through a URL. The log endpoint therefore redacts on the
+way out rather than trusting what was stored, and `docs/api/README.md` states
+that any endpoint returning log content owes its own redaction.
 """
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, Query, Response
@@ -39,7 +38,7 @@ from gateway.app.services import store
 from gateway.app.services.audit import record_event
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
 from shared.protocol import AgentMessageType, ApprovalDecision, STOPPABLE_TASK_STATES, TaskState
-from shared.security import sanitize_log_line
+from shared.security import redact_sensitive_text
 
 
 router = APIRouter(prefix="/api/v1")
@@ -66,49 +65,6 @@ FINISHED_RESTARTABLE = {
     TaskState.LOST.value,
 }
 
-# Redaction applied to every log line leaving this API, on top of whatever was
-# applied on the way in. Each pattern is here because the value it matches has
-# actually appeared in this system's logs or is one line of code away from it.
-_REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
-    # Credentials in URL userinfo — `redis://:pw@host`, `postgres://u:pw@host`.
-    # Listed first: the host:port rule below would otherwise replace the host and
-    # leave the password standing next to the placeholder.
-    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@:]*(?::[^\s/@]*)?@"), r"\1[CREDENTIAL]@"),
-    # Credentials in query strings — issue #15, observed in production.
-    (re.compile(r"(?i)([?&](?:token|access_token|refresh_token|api_key|apikey|secret|password|passwd|pwd|sig|signature)=)[^\s&\"']+"), r"\1[REDACTED]"),
-    # The same names as a bare assignment or a JSON/YAML field, which the
-    # query-string form misses entirely.
-    (re.compile(r"(?i)([\"']?\b(?:token|access_token|refresh_token|api[_-]?key|secret|password|passwd|pwd)\b[\"']?\s*[:=]\s*)[\"']?[^\s,;}\"']{4,}[\"']?"), r"\1[REDACTED]"),
-    # Authorization headers of any scheme, not just Bearer.
-    (re.compile(r"(?i)\b(authorization\s*:\s*)\S+\s+\S+"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)\b(x-api-key\s*:\s*)\S+"), r"\1[REDACTED]"),
-    # Provider token shapes. `ghp_` is covered upstream; `github_pat_` is the
-    # current GitHub format and was not.
-    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), "[REDACTED]"),
-    (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "[REDACTED]"),
-    (re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"), "[REDACTED]"),
-    # JWTs: three base64url segments.
-    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), "[REDACTED]"),
-    # PEM blocks, from the header onward.
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"), "[REDACTED]"),
-    # Absolute filesystem paths, POSIX and Windows. The Windows form also
-    # discloses the OS account name.
-    (re.compile(r"(?<![\w.])/(?:home|opt|etc|var|root|srv|usr|tmp|mnt|media)/[^\s\"']*"), "[PATH]"),
-    (re.compile(r"\b[A-Za-z]:\\[^\s\"']*"), "[PATH]"),
-    # Relative traversal, which the absolute rule cannot see.
-    (re.compile(r"(?<![\w])\.{1,2}/[^\s\"']*"), "[PATH]"),
-    # host:port and bare private addresses.
-    (re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}\b"), "[ADDR]"),
-    (re.compile(r"\b(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01])|127\.0)\.\d{1,3}\.\d{1,3}\b"), "[ADDR]"),
-    # Internal hostnames.
-    (re.compile(r"(?i)\b[a-z0-9][a-z0-9.-]*\.(?:internal|local|lan|intranet|corp)\b"), "[HOST]"),
-    # Terminal control sequences. `\x1b]0;title\x07` retitles a CLI consumer's
-    # window; CSI sequences let output rewrite what an operator already read.
-    (re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"), ""),
-    (re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]"), ""),
-)
-
-
 def redact(value: str | None) -> str | None:
     """Strip from any executor-influenced text what a response must never carry.
 
@@ -120,12 +76,7 @@ def redact(value: str | None) -> str | None:
     Order matters: URL userinfo is handled before host:port, or the host is
     replaced and the password is left standing next to the placeholder.
     """
-    if value is None:
-        return None
-    out = sanitize_log_line(value)
-    for pattern, replacement in _REDACTIONS:
-        out = pattern.sub(replacement, out)
-    return out
+    return redact_sensitive_text(value)
 
 
 def _cursor_time(value: datetime) -> str:

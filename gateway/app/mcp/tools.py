@@ -5,7 +5,7 @@ from typing import Any
 from gateway.app.services.issue_types import EPIC_STATUSES, ISSUE_PRIORITIES, ISSUE_STATUSES
 
 
-def tool_definitions() -> list[dict[str, Any]]:
+def tool_definitions(default_engine: str = "claude") -> list[dict[str, Any]]:
     return [
         {
             "name": "executor_status",
@@ -145,11 +145,13 @@ def tool_definitions() -> list[dict[str, Any]]:
             "name": "start_development_task",
             "title": "Start development task",
             "description": (
-                "Ponto de entrada conversacional: 'resolva a issue X do projeto Y'. "
-                "Resolve o projeto por id, nome ou prefixo unico; resolve o executor "
-                "automaticamente quando omitido; calcula expires_at sozinho; e devolve uma "
-                "estimativa de duracao baseada no historico. Sem path de disco: o projeto "
-                "e sempre um project_id, nunca um caminho."
+                "Ponto de entrada conversacional: 'resolva a issue X do projeto Y' ou "
+                "'em devel3, verifique as issues locais ainda abertas no wa-hub'. Resolve o "
+                "projeto e o Bridge Node por id, nome ou prefixo unico; escolhe nesse node um "
+                "executor autorizado para o projeto; calcula expires_at sozinho; e devolve uma "
+                "estimativa de duracao baseada no historico. Para pedidos de verificar/listar/"
+                "analisar sem alterar arquivos, use mode='analyze'. Sem path de disco: o projeto "
+                "e sempre um project_id e a maquina e sempre um node, nunca um caminho."
             ),
             "inputSchema": {
                 "type": "object",
@@ -174,9 +176,23 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "engine": {
                         "type": "string",
                         "enum": ["claude", "codex", "cursor-agent", "gemini", "opencode", "aider"],
-                        "default": "claude",
+                        "default": default_engine,
                     },
-                    "executor_id": {"type": "string", "description": "Omitido: escolhido automaticamente entre os executores autorizados para o projeto."},
+                    "node": {
+                        "type": "string",
+                        "description": (
+                            "Bridge Node onde a pasta deve ser operada: node id, nome ou prefixo "
+                            "unico (ex 'devel3'). O executor e escolhido somente dentro desse node. "
+                            "Nao combine com executor_id."
+                        ),
+                    },
+                    "executor_id": {
+                        "type": "string",
+                        "description": (
+                            "Seletor tecnico legado. Omitido: escolhido automaticamente entre os "
+                            "executores autorizados para o projeto. Nao combine com node."
+                        ),
+                    },
                     "mode": {"type": "string", "enum": ["analyze", "review", "edit", "test", "implement"], "default": "implement"},
                     "branch": {
                         "type": "string",
@@ -446,7 +462,12 @@ def tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "list_issues",
             "title": "List issues",
-            "description": "Listar issues de um projeto, mais recentes primeiro, com filtros opcionais.",
+            "description": (
+                "Listar as issues locais cadastradas no banco deste gateway, mais recentes "
+                "primeiro, com filtros opcionais. Nao inspeciona arquivos ou docs/issues/ na "
+                "pasta de um projeto. Quando o operador nomear uma maquina ('em devel3') ou "
+                "pedir para verificar a pasta, use start_development_task com node e mode='analyze'."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {

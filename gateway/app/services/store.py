@@ -499,6 +499,67 @@ async def effective_task_modes(
     return frozenset(base) & granted
 
 
+async def require_active_node_project_authorization(
+    session: AsyncSession,
+    executor: ExecutorModel,
+    project: ProjectModel,
+    mode: TaskMode,
+) -> None:
+    """Fail closed for an explicitly Node-directed task submission.
+
+    Legacy submissions intentionally retain ``effective_task_modes``'s no-binding
+    compatibility behavior. A conversational request that names a Node is a new,
+    stronger contract: the selected Node/Project pair must have a currently active
+    workspace binding and an active capability grant for the requested mode.
+    """
+    binding = (
+        (
+            await session.execute(
+                select(WorkspaceBindingModel).where(
+                    WorkspaceBindingModel.node_id == executor.node_id,
+                    WorkspaceBindingModel.project_id == project.id,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if binding is None:
+        raise ValueError(f"workspace_binding_required:{project.id}:{executor.node_id}")
+    if binding.state != BindingState.ACTIVE.value:
+        raise ValueError(
+            f"workspace_binding_inactive:{project.id}:{executor.node_id}:{binding.state}"
+        )
+
+    authorizations = list(
+        (
+            await session.execute(
+                select(ProjectAuthorizationModel)
+                .where(
+                    ProjectAuthorizationModel.node_id == executor.node_id,
+                    ProjectAuthorizationModel.project_id == project.id,
+                )
+                .order_by(ProjectAuthorizationModel.granted_at.desc())
+            )
+        ).scalars()
+    )
+    authorization = next(
+        (row for row in authorizations if row.revoked_at is None),
+        None,
+    )
+    if authorization is None:
+        reason = "project_authorization_revoked" if authorizations else "project_authorization_required"
+        raise ValueError(f"{reason}:{project.id}:{executor.node_id}")
+
+    granted_modes = capabilities_to_modes(
+        json.loads(authorization.capabilities_json or "[]")
+    )
+    if mode not in granted_modes:
+        raise ValueError(
+            f"capability_not_authorized_for_mode:{project.id}:{executor.node_id}:{mode.value}"
+        )
+
+
 async def create_task(
     session: AsyncSession,
     request: SubmitTaskRequest,
@@ -507,6 +568,7 @@ async def create_task(
     requested_by_user_id: str | None = None,
     requested_by_email: str | None = None,
     can_approve_push: bool = False,
+    require_active_binding: bool = False,
 ) -> TaskModel:
     executor = await session.get(ExecutorModel, request.executor_id)
     if executor is None or not executor.enabled:
@@ -517,6 +579,13 @@ async def create_task(
     executor_metadata = json.loads(executor.metadata_json)
     if request.project_id not in executor_metadata.get("allowed_projects", []):
         raise ValueError("project_not_allowed_for_executor")
+    if require_active_binding:
+        await require_active_node_project_authorization(
+            session,
+            executor,
+            project,
+            request.mode,
+        )
     project_config = json.loads(project.config_json)
     if request.mode not in await effective_task_modes(session, executor, project):
         raise ValueError("mode_not_allowed_for_project")
@@ -984,6 +1053,34 @@ async def get_discovered_resource(session: AsyncSession, resource_id: str) -> Di
     return await session.get(DiscoveredResourceModel, resource_id)
 
 
+async def _allow_project_on_node_executor(
+    session: AsyncSession,
+    *,
+    node_id: str,
+    project_id: str,
+) -> None:
+    """Make an adopted project dispatchable through this node's executor.
+
+    `WorkspaceBindingModel` is the source of truth for where the project lives
+    on a node, but `create_task` still retains the pre-control-plane executor
+    `allowed_projects` gate for compatibility. Adoption is the operator action
+    that says "this node may operate this project", so it must update both
+    surfaces atomically; otherwise Control can show an adopted/authorized
+    project that MCP still refuses as not onboarded.
+    """
+    result = await session.execute(select(ExecutorModel).where(ExecutorModel.node_id == node_id))
+    executor = result.scalars().first()
+    if executor is None:
+        return
+    metadata = json.loads(executor.metadata_json or "{}")
+    allowed = list(metadata.get("allowed_projects") or [])
+    if project_id in allowed:
+        return
+    allowed.append(project_id)
+    metadata["allowed_projects"] = allowed
+    executor.metadata_json = json.dumps(metadata, ensure_ascii=True)
+
+
 async def _matching_discovery_root(
     session: AsyncSession, node_id: str, root_path: str | None
 ) -> DiscoveryRoot | None:
@@ -1287,12 +1384,17 @@ async def adopt_discovered_resource(
                 "already_exists",
                 f"Project {new_project_id!r} already exists; pass project_id to reuse it.",
             )
+        project_config = ProjectRegistration(
+            project_id=new_project_id,
+            name=new_project_name or new_project_id,
+            path=row.resource_path or "",
+        )
         project = ProjectModel(
             id=new_project_id,
             name=new_project_name or new_project_id,
             path=row.resource_path or "",
             enabled=True,
-            config_json="{}",
+            config_json=project_config.model_dump_json(),
         )
         session.add(project)
 
@@ -1333,6 +1435,8 @@ async def adopt_discovered_resource(
         binding.state = BindingState.ACTIVE.value
         binding.last_scan_at = row.last_seen_at
         binding.updated_at = now
+
+    await _allow_project_on_node_executor(session, node_id=row.node_id, project_id=project.id)
 
     if remote_url:
         # Deduplicated by `(project_id, provider)`, not by `(project_id,
@@ -4319,6 +4423,20 @@ class AmbiguousProjectReference(ValueError):
         self.candidates = candidates
 
 
+class AmbiguousNodeReference(ValueError):
+    """More than one Bridge Node matched a conversational node reference.
+
+    Node and executor are intentionally different domain concepts.  The MCP
+    layer resolves the operator's machine name to a Node first, then chooses
+    an executor connected to that node; it must never guess between two nodes
+    whose human names share a prefix.
+    """
+
+    def __init__(self, candidates: list[NodeModel]):
+        super().__init__("ambiguous_node")
+        self.candidates = candidates
+
+
 def _like_escape(text: str) -> str:
     """Escapes SQL LIKE wildcards in caller-supplied text before it is used
 
@@ -4369,6 +4487,48 @@ async def resolve_project_reference(session: AsyncSession, text: str) -> Project
         raise AmbiguousProjectReference(prefix_matches)
 
     raise ValueError("unknown_project")
+
+
+async def resolve_node_reference(session: AsyncSession, text: str) -> NodeModel:
+    """Resolve an operator's machine name to exactly one Bridge Node.
+
+    This deliberately mirrors `resolve_project_reference`: exact node id,
+    exact display name (case-insensitive), then a unique case-insensitive
+    prefix of either.  It resolves only identity; whether that node may run a
+    particular project is a separate authorization check in the MCP handler.
+    """
+    text = text.strip()
+    if not text:
+        raise ValueError("unknown_node")
+
+    exact = await session.get(NodeModel, text)
+    if exact is not None:
+        return exact
+
+    lowered = text.lower()
+    result = await session.execute(select(NodeModel).where(func.lower(NodeModel.display_name) == lowered))
+    name_matches = list(result.scalars())
+    if len(name_matches) == 1:
+        return name_matches[0]
+    if len(name_matches) > 1:
+        raise AmbiguousNodeReference(name_matches)
+
+    pattern = f"{_like_escape(lowered)}%"
+    result = await session.execute(
+        select(NodeModel).where(
+            or_(
+                func.lower(NodeModel.id).like(pattern, escape="\\"),
+                func.lower(NodeModel.display_name).like(pattern, escape="\\"),
+            )
+        )
+    )
+    prefix_matches = list(result.scalars())
+    if len(prefix_matches) == 1:
+        return prefix_matches[0]
+    if len(prefix_matches) > 1:
+        raise AmbiguousNodeReference(prefix_matches)
+
+    raise ValueError("unknown_node")
 
 
 _ETA_SAMPLE_LIMIT = 50

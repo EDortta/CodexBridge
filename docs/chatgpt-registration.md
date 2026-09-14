@@ -27,6 +27,34 @@ claude, branch feature/uc-57, pode dar push"` já é suficiente: o modelo chama
 mais uma estimativa de duração baseada no histórico real
 (`eta_seconds`/`eta_basis`).
 
+### Direcionar a ordem a uma máquina específica
+
+`"Em devel3, verifique as issues locais que ainda não resolvemos no wa-hub"`
+chama a mesma ferramenta com esta intenção estruturada:
+
+```json
+{
+  "project": "wa-hub",
+  "node": "devel3",
+  "request": "Verifique as issues locais que ainda não resolvemos e devolva a lista.",
+  "mode": "analyze"
+}
+```
+
+`node` é um **Bridge Node**, resolvido por id, nome ou prefixo único. O gateway
+escolhe um executor somente dentro desse node e somente se ele estiver
+onboarded para o Logical Project pedido. `node` e o `executor_id` técnico
+legado são seletores mutuamente exclusivos. Em nenhum momento o ChatGPT envia
+ou recebe um path: a pasta real continua resolvida no executor e confinada pela
+allowlist/`realpath` local.
+
+A ferramenta responde imediatamente com `task_id`; a inspeção da pasta é
+assíncrona. Quando `get_task_status` indicar estado terminal,
+`get_task_result(task_id)` traz em `last_message` a resposta final do runner —
+nesse exemplo, a lista encontrada. Isso é diferente de `list_issues`, que lê
+as issues cadastradas no banco local do **gateway** e não inspeciona a pasta do
+projeto em node algum.
+
 ## Acompanhar conclusão por polling (metade do aviso de conclusão)
 
 O gateway **não empurra nada para dentro do ChatGPT** — não há canal de push

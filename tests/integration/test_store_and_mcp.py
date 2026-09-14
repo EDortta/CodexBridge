@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -604,6 +605,121 @@ async def test_mcp_reject_and_request_revision_do_not_dispatch(mcp_hub_factory):
     async with mcp_hub_factory() as session:
         reloaded = await store.get_task(session, task.id)
     assert reloaded.state == TaskState.CANCELLED.value
+
+
+# --------------------------------------------------------------------------
+# Safe MCP projection of executor-controlled result and diagnostic text.
+# --------------------------------------------------------------------------
+
+
+async def _read_task_surface(session, hub, name: str, task_id: str) -> dict:
+    response = await handle_mcp_call(
+        {
+            "jsonrpc": "2.0",
+            "id": "safe-read",
+            "method": "tools/call",
+            "params": {"name": name, "arguments": {"task_id": task_id}},
+        },
+        session,
+        hub,
+        ADMIN,
+    )
+    return response["result"]["structuredContent"]
+
+
+@pytest.mark.asyncio
+async def test_get_task_result_omits_internal_payload_and_redacts_free_text(db_session: AsyncSession):
+    task = await store.create_task(
+        db_session,
+        _submit(run_when_available=True),
+        executor_online=True,
+    )
+    secret = "github_pat_11ABCDEFG0abcdefghijklmnopqrstuvwxyz0123456789"
+    task.result_json = json.dumps(
+        {
+            "final_state": "completed",
+            "return_code": 0,
+            "duration_seconds": 1.25,
+            "started_at": "2026-09-12T12:00:00+00:00",
+            "last_message": (
+                "Open: docs/issues/123-open.md; workspace /home/operator/wa-hub; "
+                "temp /tmp/codex-last.txt; Windows C:\\Users\\operator\\wa-hub; "
+                f"token={secret}; traversal ../../etc/shadow"
+            ),
+            "tests_ran": ["pytest tests/unit/test_example.py", "/tmp/private-test.sh"],
+            "no_changes": True,
+            "cost_usd": 0.02,
+            "command": ["codex", "exec", "-C", "/home/operator/wa-hub"],
+            "command_redacted": ["codex", "exec", "-o", "/tmp/codex-last.txt"],
+            "raw_events": [{"type": "secret", "value": secret}],
+            "pre_git": {"diff": "secret diff"},
+            "post_git": {"diff": "secret diff"},
+            "provider_run_ref": "private-provider-session",
+        }
+    )
+    task.state = TaskState.COMPLETED.value
+    await db_session.commit()
+
+    payload = await _read_task_surface(db_session, DummyHub(), "get_task_result", task.id)
+    serialized = json.dumps(payload)
+
+    assert set(payload) == {
+        "task_id",
+        "state",
+        "final_state",
+        "return_code",
+        "duration_seconds",
+        "started_at",
+        "last_message",
+        "tests_ran",
+        "no_changes",
+        "cost_usd",
+    }
+    assert "docs/issues/123-open.md" in payload["last_message"]
+    assert "tests/unit/test_example.py" in payload["tests_ran"][0]
+    for forbidden in (
+        "/home/operator",
+        "/tmp/codex-last.txt",
+        "C:\\Users\\operator",
+        "../../etc/shadow",
+        secret,
+        "private-provider-session",
+        "secret diff",
+        '"command"',
+        '"raw_events"',
+        '"pre_git"',
+        '"post_git"',
+    ):
+        assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_task_status_and_logs_redact_executor_controlled_diagnostics(db_session: AsyncSession):
+    task = await store.create_task(
+        db_session,
+        _submit(run_when_available=True),
+        executor_online=True,
+    )
+    task.last_error = "failed under /srv/private/repo with token=supersecret123"
+    await db_session.commit()
+    await store.append_log(
+        db_session,
+        task.id,
+        0,
+        "stderr",
+        "trace from /home/operator/repo Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+    )
+
+    status = await _read_task_surface(db_session, DummyHub(), "get_task_status", task.id)
+    logs = await _read_task_surface(db_session, DummyHub(), "get_task_logs", task.id)
+    serialized = json.dumps({"status": status, "logs": logs})
+
+    assert "/srv/private" not in serialized
+    assert "/home/operator" not in serialized
+    assert "supersecret123" not in serialized
+    assert "abcdefghijklmnopqrstuvwxyz" not in serialized
+    assert "[PATH]" in serialized
+    assert "[REDACTED]" in serialized
 
 
 # --------------------------------------------------------------------------

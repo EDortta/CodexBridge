@@ -169,7 +169,7 @@ class AgentSettings(BaseSettings):
     # it without touching code.
     forge_credential_relative_path: str = ".credentials/github-token"
 
-    model_config = SettingsConfigDict(env_prefix="CODEX_BRIDGE_AGENT_", env_file=".env")
+    model_config = SettingsConfigDict(env_prefix="CODEX_BRIDGE_AGENT_", env_file=".env", extra="ignore")
 
     @field_validator("discovery_roots", mode="before")
     @classmethod

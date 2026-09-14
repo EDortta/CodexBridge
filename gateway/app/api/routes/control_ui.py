@@ -2,8 +2,8 @@
 
 Four routes, on purpose only four: `GET /control` (fleet), `GET
 /control/nodes/{nodeId}` (node detail: capabilities/engines, discovered
-candidates, authorizations), and `GET /control/invite` (see its own section
-below — this one does not do what its name promises yet). Missions,
+candidates, authorizations), and `GET /control/invite` (node enrollment invite
+fronting `POST /api/v1/nodes/invite`). Missions,
 Decisions, Audit and Settings are Stage 6; the epic (#73) lists them as
 non-goals for this cycle.
 
@@ -131,33 +131,13 @@ query string (pagination here cursors on the resource's opaque `id`, exactly
 like `routes/discovery.py`'s own cursor, never on the path), and this module
 calls no logger at any level — there is nothing for it to leak into.
 
-## `/control/invite`: what this screen cannot do yet, and why
+## `/control/invite`: node enrollment invite
 
-The brief for this PR describes `GET /control/invite` calling `POST
-/api/v1/nodes/invite` and printing a ready-to-copy `scripts/enroll_node.py`
-command. Neither exists in this codebase: `gateway/app/api/routes/nodes.py`
-serves only `GET /nodes` and `GET /nodes/{nodeId}`, no route registers a node
-or mints it a `machine_token`; `scripts/` holds `discover_projects.py`,
-`register_projects.py`, `apply_migrations.py`, `install.sh`, `diagnose.sh` —
-no `enroll_node.py`. `docs/project-onboarding.md`'s own "Schema de executor"
-section confirms this is by design so far: a node is registered today by
-hand-editing `registry.json` (`machine_token` included) on both sides and
-restarting the gateway, the same two-file, two-machine procedure that page
-documents in full for projects.
-
-Building the described screen would mean inventing, inside this UI PR, the
-one thing the brief itself forbids inventing here: real backend business
-logic (a token-minting endpoint with its own security posture — hashing at
-rest, an audit trail, a revocation story — and a new script) with no existing
-API to front. "Se uma tela precisa de um dado que a API não dá, a resposta
-certa é parar e relatar, não calcular no template" — this is exactly that
-case, at the level of an entire endpoint rather than one field. So this route
-renders an honest explanation instead of a form that posts to nothing: it
-names the missing endpoint and script by their exact expected names, and
-points at `docs/project-onboarding.md`'s real, current procedure. See this
-PR's own final report for the recommendation (a follow-up Stage 5 PR to
-design and build the invite endpoint) rather than silently shipping a button
-that 404s.
+`GET /control/invite` connects to `POST /api/v1/nodes/invite` (Issue #76 minimal cut).
+Operators with `nodes.invite` can generate a single-use node enrollment token with an
+optional display name hint. The screen renders a ready-to-copy `scripts/enroll_node.py`
+command that calls `POST /api/v1/nodes/enroll` from the node host to complete enrollment
+and save the minted `machine_token` locally.
 """
 
 from __future__ import annotations
@@ -330,6 +310,8 @@ code { background: #f3f3f3; padding: .1rem .3rem; border-radius: 3px; font-size:
 .warn { background: #fffbeb; border: 1px solid #fde68a; padding: .5rem .75rem; border-radius: 6px; font-size: .88rem; }
 form.inline { display: inline; }
 fieldset { border: 1px solid #ddd; border-radius: 6px; margin: .5rem 0; }
+pre { background: #f3f3f3; padding: .5rem .75rem; border-radius: 4px; overflow-x: auto; font-size: .88rem; }
+pre code { background: none; padding: 0; }
 nav a { margin-right: 1rem; }
 """.strip()
 
@@ -784,33 +766,91 @@ async def control_node_detail(
 
 
 # ---------------------------------------------------------------------------
-# GET /control/invite — see module docstring, "/control/invite"
+# GET /control/invite — node enrollment invite
 # ---------------------------------------------------------------------------
 
 
 @router.get("/invite", response_class=HTMLResponse)
 async def control_invite(
     request: Request,
+    session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
-    await _control_principal(request, permissions.NODES_READ)
-    body = """
+    principal = await _control_principal(request, permissions.NODES_READ)
+    can_invite = permissions.is_allowed(principal, permissions.NODES_INVITE)
+
+    if not can_invite:
+        body = """
     <h1>Invite a node</h1>
-    <div class="notice">
-      <p><strong>Not available yet on this build.</strong> This screen would
-      call <code>POST /api/v1/nodes/invite</code> and hand you a one-time
-      token plus a ready <code>scripts/enroll_node.py</code> command. Both
-      exist — they are issue #76's minimal cut — but they are not in this
-      build: they live on a branch this one was not cut from, so the endpoint
-      this page needs is genuinely absent from the process serving it.</p>
-      <p>This screen lights up once that work merges. Nothing here needs to be
-      designed or built again; the gap is which commits this build contains,
-      not a missing capability.</p>
-      <p>Until then, registering a Bridge Node is the manual, two-machine
-      procedure it has always been: add the node's <code>machine_token</code>
-      and <code>allowed_projects</code> to <code>registry.json</code> on the
-      gateway host, add the matching project entries to the executor's own
-      allowlist, and restart both processes —
-      <code>docs/project-onboarding.md</code>, "Schema de executor".</p>
+    <p class="warn">This account lacks permission to issue node invites.</p>
+"""
+        return _page("CodexBridge Control · Invite a node", body)
+
+    token = await _mint_page_token(session, principal)
+    gateway_url = settings.public_base_url.rstrip("/")
+
+    script = f"""
+    <script>
+    const CB_TOKEN = {json.dumps(token)};
+    const CB_GATEWAY_URL = {json.dumps(gateway_url)};
+    document.getElementById("invite-form").addEventListener("submit", async function (evt) {{
+      evt.preventDefault();
+      const errorEl = document.getElementById("invite-error");
+      const resultEl = document.getElementById("invite-result");
+      errorEl.textContent = "";
+      resultEl.style.display = "none";
+      const hint = document.getElementById("displayNameHint").value.trim();
+      try {{
+        const resp = await fetch("/api/v1/nodes/invite", {{
+          method: "POST",
+          headers: {{
+            "Authorization": "Bearer " + CB_TOKEN,
+            "Content-Type": "application/json"
+          }},
+          body: JSON.stringify({{ displayNameHint: hint || undefined }})
+        }});
+        const data = await resp.json().catch(function () {{ return {{}}; }});
+        if (!resp.ok) {{
+          throw new Error((data && data.message) || (resp.status + " " + resp.statusText));
+        }}
+        document.getElementById("result-token").textContent = data.inviteToken || "";
+        document.getElementById("result-expires").textContent = data.expiresAt || "";
+        const hintArg = hint || "<HINT>";
+        document.getElementById("result-command").textContent =
+          "python3 scripts/enroll_node.py --gateway-url " + CB_GATEWAY_URL +
+          " --invite-token " + (data.inviteToken || "") +
+          " --display-name " + hintArg;
+        resultEl.style.display = "block";
+      }} catch (err) {{
+        errorEl.textContent = err.message || String(err);
+      }}
+    }});
+    </script>
+"""
+
+    body = f"""
+    <h1>Invite a node</h1>
+    <p class="hint">Issue a one-time enrollment token to admit a new Bridge Node into the fleet.</p>
+
+    <form id="invite-form">
+      <p>
+        <label for="displayNameHint"><strong>Node display name hint</strong></label><br />
+        <input type="text" id="displayNameHint" name="displayNameHint" placeholder="e.g. devel3, workstation-gpu" size="40" />
+      </p>
+      <p>
+        <button type="submit">Generate Invite</button>
+      </p>
+    </form>
+
+    <div id="invite-error" class="error"></div>
+
+    <div id="invite-result" class="notice" style="display: none; margin-top: 1.5rem;">
+      <h2>Invite Generated</h2>
+      <p><strong>Invite token:</strong> <code id="result-token"></code></p>
+      <p><strong>Expires at:</strong> <span id="result-expires"></span></p>
+      <p><strong>Ready-to-copy command:</strong></p>
+      <pre><code id="result-command">python3 scripts/enroll_node.py --gateway-url {_e(gateway_url)} --invite-token &lt;TOKEN&gt; --display-name &lt;HINT&gt;</code></pre>
+      <p class="hint">Running this script on the node calls <code>POST /api/v1/nodes/enroll</code> and saves the generated machine token locally.</p>
     </div>
-    """
+    {script}
+"""
     return _page("CodexBridge Control · Invite a node", body)

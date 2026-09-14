@@ -19,7 +19,6 @@ from agent.codex_bridge_agent.config import (
     resolve_auto_project,
     resolve_machine_token,
 )
-from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects, resolve_auto_project
 from agent.codex_bridge_agent.forge.base import ForgeOutcome
 from agent.codex_bridge_agent.forge.github import run_forge_operation
 from agent.codex_bridge_agent.git_delivery import deliver_changes
@@ -148,8 +147,17 @@ class AgentService:
             try:
                 await self._run_once()
                 delay = self.settings.reconnect_min_seconds
-            except Exception:
-                await asyncio.sleep(delay + random.uniform(0, 1))
+            except Exception as exc:
+                retry_in = delay + random.uniform(0, 1)
+                # Exception messages may embed the WebSocket URL, local paths,
+                # proxy credentials or provider output. Log only the structural
+                # category and bounded retry timing; no traceback or raw value.
+                logger.warning(
+                    "connection_failed error_type=%s retry_in_seconds=%.3f",
+                    type(exc).__name__,
+                    retry_in,
+                )
+                await asyncio.sleep(retry_in)
                 delay = min(delay * 2, self.settings.reconnect_max_seconds)
 
     async def _run_once(self) -> None:

@@ -28,6 +28,7 @@ from gateway.app.models.entities import (
     ExecutorModel,
     ProjectAuthorizationModel,
     ProjectModel,
+    WorkspaceBindingModel,
 )
 from gateway.app.services import store
 from shared.protocol import (
@@ -482,6 +483,64 @@ async def test_a_matching_auto_authorize_root_grants_nothing_from_a_report_alone
     assert len(granted) == 1
     assert granted[0].granted_by == "root-config:/root"
     assert json.loads(granted[0].capabilities_json) == ["read"]
+
+
+async def test_adoption_onboards_the_project_for_the_node_executor(db_session) -> None:
+    """An adopted project is immediately targetable by the same node's executor.
+
+    Discovery adoption is the operator action behind the Control panel's
+    "Adopt" button. It must produce every durable fact the MCP
+    `start_development_task(project=..., node=...)` path later requires:
+    Project, active WorkspaceBinding, ProjectAuthorization when requested, and
+    the legacy executor allowlist entry that `create_task` still enforces.
+    """
+    executor = await _executor(db_session)
+    report = _report("/root", [_candidate("/root/hub", suggested_project_id="hub", suggested_name="Hub")])
+    await store.record_discovery_report(db_session, executor, report)
+    hub = await _row(db_session, "E1", "/root/hub")
+
+    adopted = await store.adopt_discovered_resource(
+        db_session,
+        hub.id,
+        project_id=None,
+        new_project_id="hub",
+        new_project_name="Hub",
+        grant_capabilities=[Capability.READ],
+        actor_user_id="esteban",
+    )
+
+    assert adopted.state == DiscoveredState.AUTHORIZED.value
+    binding = (
+        (
+            await db_session.execute(
+                select(WorkspaceBindingModel).where(
+                    WorkspaceBindingModel.node_id == "E1",
+                    WorkspaceBindingModel.project_id == "hub",
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert binding is not None
+    assert binding.state == "active"
+    assert binding.local_path == "/root/hub"
+    authorization = (
+        (
+            await db_session.execute(
+                select(ProjectAuthorizationModel).where(
+                    ProjectAuthorizationModel.node_id == "E1",
+                    ProjectAuthorizationModel.project_id == "hub",
+                    ProjectAuthorizationModel.revoked_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert authorization is not None
+    executor = await db_session.get(ExecutorModel, "E1")
+    assert "hub" in json.loads(executor.metadata_json)["allowed_projects"]
 
 
 # --------------------------------------------------------------------------

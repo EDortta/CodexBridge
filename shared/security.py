@@ -13,6 +13,30 @@ SECRET_PATTERNS = [
     re.compile(r"(Bearer\s+[A-Za-z0-9._-]{16,})", re.IGNORECASE),
 ]
 
+# Response-boundary redaction for executor-, Engine-, and operator-controlled
+# free text. Order matters: URL credentials must be removed before host/address
+# patterns can hide the delimiter that identifies them.
+PUBLIC_TEXT_REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@:]*(?::[^\s/@]*)?@"), r"\1[CREDENTIAL]@"),
+    (re.compile(r"(?i)([?&](?:token|access_token|refresh_token|api_key|apikey|secret|password|passwd|pwd|sig|signature)=)[^\s&\"']+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)([\"']?\b(?:token|access_token|refresh_token|api[_-]?key|secret|password|passwd|pwd)\b[\"']?\s*[:=]\s*)[\"']?[^\s,;}\"']{4,}[\"']?"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b(authorization\s*:\s*)\S+\s+\S+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b(x-api-key\s*:\s*)\S+"), r"\1[REDACTED]"),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), "[REDACTED]"),
+    (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "[REDACTED]"),
+    (re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"), "[REDACTED]"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), "[REDACTED]"),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"), "[REDACTED]"),
+    (re.compile(r"(?<![\w.])/(?:home|opt|etc|var|root|srv|usr|tmp|mnt|media)/[^\s\"']*"), "[PATH]"),
+    (re.compile(r"\b[A-Za-z]:\\[^\s\"']*"), "[PATH]"),
+    (re.compile(r"(?<![\w])\.{1,2}/[^\s\"']*"), "[PATH]"),
+    (re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}\b"), "[ADDR]"),
+    (re.compile(r"\b(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01])|127\.0)\.\d{1,3}\.\d{1,3}\b"), "[ADDR]"),
+    (re.compile(r"(?i)\b[a-z0-9][a-z0-9.-]*\.(?:internal|local|lan|intranet|corp)\b"), "[HOST]"),
+    (re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"), ""),
+    (re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]"), ""),
+)
+
 
 def secure_compare(left: str, right: str) -> bool:
     return hmac.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
@@ -62,6 +86,16 @@ def sanitize_log_line(line: str) -> str:
     redacted = line
     for pattern in SECRET_PATTERNS:
         redacted = pattern.sub("[REDACTED]", redacted)
+    return redacted
+
+
+def redact_sensitive_text(value: str | None) -> str | None:
+    """Sanitize free text immediately before it crosses a public boundary."""
+    if value is None:
+        return None
+    redacted = sanitize_log_line(value)
+    for pattern, replacement in PUBLIC_TEXT_REDACTIONS:
+        redacted = pattern.sub(replacement, redacted)
     return redacted
 
 

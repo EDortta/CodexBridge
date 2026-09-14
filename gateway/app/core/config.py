@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from gateway.app.version import APP_VERSION
 from shared.protocol import (
+    AgentEngine,
     DEFAULT_CANCEL_REPLAY_MAX_AGE_SECONDS,
     DEFAULT_CONTROL_REPLAY_MAX_AGE_SECONDS,
     MAX_REPLAY_MAX_AGE_SECONDS,
@@ -91,6 +92,12 @@ class Settings(BaseSettings):
     max_log_chunk_chars: int = 4000
     max_result_chars: int = 200000
     diff_max_chars: int = 120000
+    # Conversational MCP calls may omit `engine`. Keep Claude as the historical
+    # default, but let each gateway choose a runner that is actually usable in
+    # its deployment (for example, Codex when Claude subscription access is
+    # disabled). `tools/list` and `start_development_task` both read this one
+    # value so the advertised JSON Schema can never disagree with execution.
+    default_engine: AgentEngine = AgentEngine.CLAUDE
     # How long after its last heartbeat an executor is still presented as
     # connected (`store.executor_is_live`, issue #5). `ExecutorModel.connected`
     # is flipped false only by a graceful WebSocket disconnect
@@ -301,7 +308,7 @@ class Settings(BaseSettings):
     def effective_oauth_issuer(self) -> str:
         return (self.oauth_issuer_url or self.public_base_url).rstrip("/")
 
-    model_config = SettingsConfigDict(env_prefix="CODEX_BRIDGE_", env_file=".env")
+    model_config = SettingsConfigDict(env_prefix="CODEX_BRIDGE_", env_file=".env", extra="ignore")
 
 
 settings = Settings()

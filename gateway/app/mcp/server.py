@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.app.api import idempotency, permissions
 from gateway.app.api.errors import ApiError
+from gateway.app.core.config import settings
 from gateway.app.models.entities import ExecutorModel, IssueModel
 from gateway.app.services import store
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
@@ -19,6 +20,7 @@ from gateway.app.services.issue_types import IssuePlanningError
 from gateway.app.mcp.tools import tool_definitions
 from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.version import APP_VERSION
+from shared.security import redact_sensitive_text
 from shared.protocol import (
     AgentEngine,
     AgentEnvelope,
@@ -27,7 +29,6 @@ from shared.protocol import (
     DeliveryRequest,
     ForgeOperationKind,
     ForgeOperationRequest,
-    IMPLEMENTED_ENGINES,
     ISSUE_REF_PATTERN,
     MaterializeRequest,
     PUSHABLE_BRANCH_PATTERN,
@@ -37,6 +38,7 @@ from shared.protocol import (
     TaskPriority,
     TaskState,
 )
+from agent.codex_bridge_agent.runners.registry import get_all_engines
 
 
 def _text_result(message: str, data: dict) -> dict:
@@ -44,6 +46,50 @@ def _text_result(message: str, data: dict) -> dict:
         "structuredContent": data,
         "content": [{"type": "text", "text": message}],
     }
+
+
+_MCP_RESULT_SCALARS = frozenset(
+    {
+        "final_state",
+        "return_code",
+        "duration_seconds",
+        "started_at",
+        "last_message",
+        "no_changes",
+        "cost_usd",
+    }
+)
+_MCP_RESULT_STRING_LISTS = frozenset(
+    {"tests_ran", "tests", "evidence", "warnings", "changed_files"}
+)
+
+
+def _safe_task_result_projection(raw: object) -> dict:
+    """Return only documented, sanitized Engine output fields to MCP clients.
+
+    The persisted result remains available to trusted internal audit paths, but
+    command lines, raw provider events, session identifiers and Git snapshots
+    are deliberately impossible to select through this allowlist.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    projected: dict = {}
+    for key in _MCP_RESULT_SCALARS:
+        value = raw.get(key)
+        if isinstance(value, str):
+            projected[key] = redact_sensitive_text(value)
+        elif value is None or isinstance(value, (bool, int, float)):
+            if key in raw:
+                projected[key] = value
+    for key in _MCP_RESULT_STRING_LISTS:
+        value = raw.get(key)
+        if isinstance(value, list):
+            projected[key] = [
+                redact_sensitive_text(item)
+                for item in value
+                if isinstance(item, str)
+            ]
+    return projected
 
 
 def _strip_issue_ref(raw: object) -> str:
@@ -91,6 +137,43 @@ async def _resolve_executor_for_project(
     return (connected[0] if connected else onboarded[0]).id
 
 
+async def _resolve_node_executor_for_project(
+    session: AsyncSession, hub: AgentHub, project, node_text: str
+) -> tuple[str, str]:
+    """Resolve an operator-facing Bridge Node name to one eligible executor.
+
+    The Node identifies the machine; the executor remains the protocol target.
+    Keeping those two steps explicit preserves the control-plane model while
+    ensuring a phrase such as "on devel3" can never spill onto another node.
+    """
+    try:
+        node = await store.resolve_node_reference(session, node_text)
+    except store.AmbiguousNodeReference as exc:
+        candidates = ", ".join(f"{c.id} ({c.display_name})" for c in exc.candidates)
+        raise HTTPException(status_code=409, detail=f"ambiguous_node: {candidates}")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="unknown_node")
+
+    if not node.enabled or node.admission_state != "enrolled":
+        raise HTTPException(status_code=409, detail=f"node_unavailable:{node.id}")
+
+    onboarded = await store.executors_allowing_project(session, project.id)
+    candidates = [
+        executor
+        for executor in onboarded
+        if executor.enabled and executor.node_id == node.id
+    ]
+    if not candidates:
+        raise HTTPException(
+            status_code=409,
+            detail=f"project_not_onboarded_on_node:{project.id}:{node.id}",
+        )
+
+    connected = [executor for executor in candidates if hub.is_connected(executor.id)]
+    executor = (connected or candidates)[0]
+    return node.id, executor.id
+
+
 async def _resolve_project_for_forge_tool(session: AsyncSession, principal, project_text: str):
     """Shared `project` resolution + access check for every forge-routed
 
@@ -125,14 +208,20 @@ async def handle_mcp_call(
                 "protocolVersion": "2025-06-18",
                 "serverInfo": {"name": "codex-bridge", "version": APP_VERSION},
                 "instructions": (
-                    "Use apenas project_id e executor_id retornados por este servidor. "
-                    "Nao presuma caminhos e trate tarefas sensiveis como aprovacao pendente."
+                    "Nunca envie caminhos de disco. Em start_development_task, use project para o "
+                    "projeto logico e node quando o operador nomear a maquina (por exemplo, "
+                    "'em devel3'); use mode='analyze' para pedidos somente de leitura. Trate "
+                    "tarefas sensiveis como aprovacao pendente."
                 ),
                 "capabilities": {"tools": {}},
             },
         }
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": rpc_id, "result": {"tools": tool_definitions()}}
+        return {
+            "jsonrpc": "2.0",
+            "id": rpc_id,
+            "result": {"tools": tool_definitions(settings.default_engine.value)},
+        }
     if method != "tools/call":
         raise HTTPException(status_code=400, detail=f"unsupported_method:{method}")
 
@@ -339,7 +428,7 @@ async def handle_mcp_call(
             "project_id": task.project_id,
             "started_at": task.started_at.isoformat() if task.started_at else None,
             "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-            "last_error": task.last_error,
+            "last_error": redact_sensitive_text(task.last_error),
             "session_id": task.session_id,
             # Additive, WK-20260830-chatgpt-entry-provider-and-delivery: none
             # of the fields above changed shape or meaning -- this is what
@@ -371,7 +460,12 @@ async def handle_mcp_call(
         payload = {
             "task_id": arguments["task_id"],
             "logs": [
-                {"offset": item.offset, "stream": item.stream, "line": item.line, "created_at": item.created_at.isoformat()}
+                {
+                    "offset": item.offset,
+                    "stream": item.stream,
+                    "line": redact_sensitive_text(item.line),
+                    "created_at": item.created_at.isoformat(),
+                }
                 for item in logs
             ],
         }
@@ -382,7 +476,11 @@ async def handle_mcp_call(
         if task is None:
             raise HTTPException(status_code=404, detail="unknown_task")
         require_task_access(task)
-        payload = json.loads(task.result_json or "{}")
+        try:
+            stored_result = json.loads(task.result_json or "{}")
+        except (TypeError, json.JSONDecodeError):
+            stored_result = {}
+        payload = _safe_task_result_projection(stored_result)
         payload["task_id"] = task.id
         payload["state"] = task.state
         result = _text_result(f"Loaded result for task {task.id}.", payload)
@@ -569,7 +667,15 @@ async def handle_mcp_call(
             raise HTTPException(status_code=403, detail="project_access_denied")
 
         executor_id = arguments.get("executor_id")
-        if executor_id:
+        node_text = arguments.get("node")
+        node_id: str | None = None
+        if executor_id and node_text:
+            raise HTTPException(status_code=400, detail="executor_selector_conflict")
+        if node_text:
+            node_id, executor_id = await _resolve_node_executor_for_project(
+                session, hub, project, str(node_text)
+            )
+        elif executor_id:
             executor = await session.get(ExecutorModel, executor_id)
             if executor is None:
                 raise HTTPException(status_code=404, detail="unknown_executor")
@@ -584,6 +690,7 @@ async def handle_mcp_call(
                         "both processes."
                     ),
                 )
+            node_id = executor.node_id
         else:
             onboarded = await store.executors_allowing_project(session, project.id)
             if not onboarded:
@@ -596,12 +703,16 @@ async def handle_mcp_call(
                     ),
                 )
             connected = [item for item in onboarded if hub.is_connected(item.id)]
-            executor_id = (connected[0] if connected else onboarded[0]).id
+            executor = connected[0] if connected else onboarded[0]
+            executor_id = executor.id
+            node_id = executor.node_id
 
-        engine_value = arguments.get("engine", "claude")
-        if engine_value not in IMPLEMENTED_ENGINES:
+        engine_value = arguments.get("engine", settings.default_engine.value)
+        # Check against the extensible engine registry instead of hardcoded list
+        all_engines = get_all_engines()
+        if not any(reg.engine == engine_value and reg.implemented for reg in all_engines.values()):
             # Council round 1, "the second caller": without this, the gateway
-            # accepted any of the six candidate engines in the tool's own
+            # accepted any of the candidate engines in the tool's own
             # JSON Schema, created the task, and dispatched it -- only for
             # the executor's RunnerPool.for_engine to reject it with
             # engine_not_implemented, after already spending a dispatch
@@ -683,6 +794,10 @@ async def handle_mcp_call(
             requested_by_user_id=principal.user_id if principal else None,
             requested_by_email=principal.email if principal else None,
             can_approve_push=bool(principal is not None and (principal.can_approve_sensitive or principal.is_admin())),
+            # Explicit Node routing is a stronger contract than the legacy
+            # executor/automatic paths: the dangerous write itself revalidates
+            # Binding + Authorization instead of relying on caller discipline.
+            require_active_binding=bool(node_text),
         )
         task = await store.get_task(session, task.id)
         if task.state == TaskState.QUEUED.value:
@@ -701,6 +816,7 @@ async def handle_mcp_call(
             "state": task.state,
             "engine": task.engine,
             "project_id": task.project_id,
+            "node_id": node_id,
             "executor_id": task.executor_id,
             "issue_ref": task.issue_ref,
             "branch": branch,
