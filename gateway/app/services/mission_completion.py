@@ -201,3 +201,80 @@ def build_completion_evidence(
         failure_evidence=tuple(failures),
         remains=tuple(remains),
     )
+
+
+class DeliveryMode(str, Enum):
+    COMMIT_ONLY = "commit_only"
+    PUSH_BRANCH = "push_branch"
+    PULL_REQUEST = "pull_request"
+    ARTIFACT = "artifact"
+    OPERATOR_REVIEW = "operator_review"
+
+
+@dataclass(frozen=True)
+class CompletionPolicy:
+    required_validation_kinds: tuple[str, ...] = ("test",)
+    delivery_mode: DeliveryMode = DeliveryMode.COMMIT_ONLY
+    require_review: bool = False
+    allow_merge: bool = False
+
+
+@dataclass(frozen=True)
+class CompletionDecision:
+    complete: bool
+    reasons: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"complete": self.complete, "reasons": list(self.reasons)}
+
+
+def evaluate_completion_gate(
+    evidence: MissionCompletionEvidence,
+    policy: CompletionPolicy,
+) -> CompletionDecision:
+    """Decide whether a Mission may become completed under project policy.
+
+    This is intentionally stricter than provider/task success. Every required
+    validation kind must be present and passing, the selected delivery mode must
+    have durable evidence, review must be explicit when required, and merged
+    state is accepted only when policy explicitly allows merge.
+    """
+    reasons: list[str] = []
+
+    if not evidence.implemented:
+        reasons.append("implementation_not_complete")
+
+    by_kind: dict[str, list[ValidationEvidence]] = {}
+    for row in evidence.validations:
+        by_kind.setdefault(row.kind, []).append(row)
+    for kind in policy.required_validation_kinds:
+        rows = by_kind.get(kind, [])
+        if not rows:
+            reasons.append(f"missing_validation:{kind}")
+        elif not all(row.passed for row in rows):
+            reasons.append(f"failed_validation:{kind}")
+
+    mode = policy.delivery_mode
+    if mode == DeliveryMode.COMMIT_ONLY:
+        if evidence.delivery_outcome not in {"committed_only", "committed_and_pushed"} or not evidence.commit:
+            reasons.append("commit_delivery_missing")
+    elif mode == DeliveryMode.PUSH_BRANCH:
+        if evidence.delivery_outcome != "committed_and_pushed" or not evidence.commit:
+            reasons.append("push_delivery_missing")
+    elif mode == DeliveryMode.PULL_REQUEST:
+        if not any(link.startswith("http") and "/pull/" in link for link in evidence.external_links):
+            reasons.append("pull_request_missing")
+    elif mode == DeliveryMode.ARTIFACT:
+        if not evidence.artifacts:
+            reasons.append("artifact_missing")
+    elif mode == DeliveryMode.OPERATOR_REVIEW:
+        if evidence.review_outcome not in {"approved", "accepted"}:
+            reasons.append("operator_review_missing")
+
+    if policy.require_review and evidence.review_outcome not in {"approved", "accepted"}:
+        reasons.append("review_not_approved")
+
+    if evidence.merged and not policy.allow_merge:
+        reasons.append("merge_not_permitted")
+
+    return CompletionDecision(complete=not reasons, reasons=tuple(reasons))
