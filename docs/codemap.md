@@ -5,8 +5,8 @@
 
 ## Summary
 
-- 201 file(s) · 2219 symbol(s) indexed
-- Languages: config (2), python (186), shell (13)
+- 204 file(s) · 2232 symbol(s) indexed
+- Languages: config (2), python (188), shell (14)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `temp-tools`, `tests`
 
 ## Governance
@@ -46,6 +46,7 @@ agent/
     git_tools.py
     instructions.py  — "Resolves `issue_ref` to file content, and builds the provider prompt with"
     issue_materialize.py  — "Writes one epic's rendered markdown to disk -- issue #78, Commit 2c."
+    mission_worktree.py
     runners/
       __init__.py
       base.py  — "The provider-neutral surface the executor dispatches a task through."
@@ -161,6 +162,7 @@ temp-tools/
   09-devel3-implement-issue-to-mission-workflow.sh
   10-devel3-validate-issue44-foundation.sh
   11-devel3-implement-issue44.sh
+  12-devel3-implement-mission-worktrees.sh
 tests/
   conftest.py
   contract/
@@ -241,6 +243,7 @@ tests/
     test_issue_render.py  — "`render_epic_markdown` -- issue #78, Commit 2a."
     test_main_import.py
     test_mission_types.py
+    test_mission_worktree.py
     test_node_enrollment.py  — "`store.create_node_invite` / `store.enroll_node` / `store.revoke_node` —"
     test_node_store.py  — "`store.ensure_node_for_executor` / `upsert_registry` / `record_node_announcement`"
     test_notify.py  — "`gateway.app.services.notify` -- the task-finished completion email."
@@ -320,6 +323,14 @@ tests/
   - `__init__(self, code)` *(method)*
 - **`MaterializeOutcome`** *(class)*
 - `materialize_epic(project_root, request)` — "Writes `request.files` under `project_root/docs/issues/`, allocating"
+
+### `agent/codex_bridge_agent/mission_worktree.py`
+
+- **`MissionWorktreeError`** *(class)* — "A worktree cannot be acquired or released without risking operator work."
+- **`MissionWorktree`** *(class)*
+- `names_for(mission_id, attempt_number)` — "Return deterministic branch and directory names; never caller paths."
+- `acquire_mission_worktree(repository_root, managed_root, mission_id, attempt_number)` *(async function)* — "Create an isolated, deterministic worktree without touching operator files."
+- `release_mission_worktree(worktree)` *(async function)* — "Remove only a clean owned worktree. Dirty/unmerged work is preserved."
 
 ### `agent/codex_bridge_agent/runners/base.py`
 
@@ -3112,6 +3123,17 @@ tests/
 - `test_legacy_session_control_paths_can_project_into_mission_state(current, target)`
 - `test_unrelated_terminal_missions_still_reject_cancelled_restarts()`
 - `test_finished_missions_do_not_skip_the_queue_on_restart()`
+
+### `tests/unit/test_mission_worktree.py`
+
+- `git(path, *args)`
+- `init_repo(path)`
+- `test_names_are_deterministic_and_path_free()`
+- `test_parallel_missions_get_distinct_worktrees_and_pinned_base(tmp_path)` *(async function)*
+- `test_acquisition_is_idempotent_for_same_attempt(tmp_path)` *(async function)*
+- `test_dirty_operator_checkout_is_never_cleaned(tmp_path)` *(async function)*
+- `test_cleanup_preserves_dirty_mission_work(tmp_path)` *(async function)*
+- `test_unowned_existing_path_is_refused(tmp_path)` *(async function)*
 
 ### `tests/unit/test_node_enrollment.py`
 
