@@ -1,0 +1,336 @@
+=== CodexBridge #44 issue-to-Mission implementation ===
+timestamp: 2026-09-14T23:08:20-03:00
+host: devel3
+branch: development
+head-before: 967fcc428be160bf30a4e8f7e6ca63f02e509182
+
+--- status before ---
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/results/20260915-020820Z-devel3-issue-to-mission-workflow.txt
+
+--- codex version ---
+codex-cli 0.154.0
+
+--- Codex implementation run ---
+OpenAI Codex v0.154.0
+--------
+workdir: /home/esteban/Sync/Projects/AI/CodexBridge
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a0a2d2-89d6-7c01-b84d-ce80ecf4317d
+--------
+user
+You are implementing CodexBridge issue #44 on the CURRENT development checkout. Implement the feature; do not stop at planning.
+
+OPERATOR AUTHORIZATION FOR THIS SESSION:
+- Esteban explicitly authorizes continuing issue #44 now, despite the GovernanceKit after-hours/concurrency warning.
+- Treat the current concurrency/time warning as an operator-approved exception ONLY for this CodexBridge #44 implementation session.
+- Do not disable, edit, weaken, or bypass GovernanceKit globally.
+- Do not ignore any other governance, security, authorization, approval, test, secret-handling, or delivery rule.
+- If GovernanceKit reports the same concurrency/time condition, record it and continue #44. Stop only for a different material blocker requiring operator input.
+
+Source issue #44: "Implement issue-to-mission development workflow".
+
+Objective:
+Allow an operator to select an issue and tell CodexBridge to resolve it as one governed, durable Mission.
+
+Existing foundations already present and MUST be reused rather than duplicated:
+- durable Mission aggregate from #43 is complete and green;
+- provider-neutral local issue/epic APIs and MCP tooling from #78 exist;
+- SCM/GitHub binding and executor-owned external operations from #79/#80 exist;
+- start_development_task / node routing baseline exists;
+- Mission, Task/Session, Bridge Node, Executor and Engine are distinct concepts;
+- security rules: no generic shell, no path leakage, no provider secrets to coding agents, authorization fail-closed, approval gates preserved.
+
+Required workflow:
+1. Resolve project and source issue through the provider-neutral issue integration already in the repo. Do not hard-wire GitHub as the domain owner.
+2. Snapshot the execution-relevant source issue state: source identity/provider/ref, revision/version signal when available, title, body/description, comments that matter to execution, labels and dependency references supported by the existing model/provider layer.
+3. Persist that snapshot or an immutable canonical representation tied to the Mission so later issue edits do not silently rewrite the Mission's planning basis.
+4. Build Mission objective/constraints from the issue snapshot while preserving the durable Mission identity.
+5. Route through existing planning/review policy and node/project authorization. Do not bypass policy to make the workflow convenient.
+6. Schedule/route the first execution attempt using the existing Mission/Task machinery.
+7. Ensure delivery evidence remains attached to the Mission/attempt and can later be linked back to the source issue.
+8. Detect material source-issue change after Mission creation. Surface a clear replan/decision condition; do not silently continue on stale intent.
+9. Never close the source issue solely because the agent process/task exited successfully. Closure/update must remain an explicit policy-controlled external operation with delivery evidence.
+
+Idempotency requirement:
+Repeated equivalent operator requests for the same project + source issue + intent must not create duplicate active Missions. Use the repository's existing idempotency/concurrency conventions; do not invent an unsafe global singleton rule. A genuinely new run after a completed/cancelled Mission should remain possible by explicit intent/revision/key.
+
+API/MCP/operator behavior:
+- Add the narrowest operator-facing REST and/or MCP entrypoint consistent with existing architecture so a caller can say effectively `resolve issue X for project Y`.
+- ChatGPT and future MOBO clients must use the same domain service/store path.
+- Responses must return traceable mission_id, source issue identity/snapshot metadata, current state and relevant task/attempt identifiers without exposing local filesystem paths, commands or provider secrets.
+- Preserve current API compatibility. If public contract changes, bump/publish the next contract version using established repository scripts/conventions and update tests/docs/codemap.
+
+Data model / persistence:
+- Prefer adding explicit source snapshot fields/table/entity only if needed for durability and immutability. Do not overload TaskModel.
+- If schema changes are needed, add the NEXT migration after current migrations and cover upgrade from existing databases. Never rely on create_all as migration.
+- Keep append-only Mission timeline events for creation/material issue change/replan conditions.
+
+Testing acceptance:
+Add or repair tests proving at least:
+- one request creates one durable Mission linked to the source issue snapshot;
+- repeated equivalent request is idempotent and returns/reuses the same active Mission rather than duplicating it;
+- a second deliberate run can be created when policy/idempotency key/revision says it is new intent;
+- snapshot survives issue changes and restart/database reload;
+- material source change while running is detected and produces waiting-human/blocked/replan decision semantics rather than silently mutating objective;
+- source issue is NOT auto-closed merely because execution completes;
+- project/node authorization remains enforced;
+- response/MCP surfaces do not leak local paths, raw commands or provider credentials;
+- existing Mission, Session, issue, SCM/forge and contract tests remain green.
+
+Implementation rules:
+- inspect current code/tests/docs before editing;
+- modify the checkout directly;
+- do not commit, push, reset, checkout another branch, or alter credentials;
+- do not weaken/delete tests to obtain green;
+- do not install/upgrade global dependencies;
+- reuse existing provider-neutral issue and SCM abstractions;
+- use terminology from issue #81: Mission, Bridge Node, Executor, Engine, Project, Workspace, SCM provider/repository host; avoid introducing new operator-facing jargon.
+
+Run focused tests while working, then at minimum:
+python3 -m pytest -q tests/integration/test_missions.py tests/integration/test_mcp_epics_issues.py tests/integration/test_forge_wiring.py tests/integration/test_start_development_task.py 2>/dev/null || true
+python3 -m pytest -q tests/unit/test_apply_migrations.py tests/unit/test_schema_guard.py
+python3 -m pytest -q tests/contract
+python3 -m pytest -q
+
+governancekit --root . map
+
+At the end print exactly:
+ISSUE_TO_MISSION:
+IDEMPOTENCY:
+SNAPSHOT_AND_DRIFT:
+AUTHORIZATION:
+CONTRACT:
+MIGRATION:
+FOCUSED_TESTS:
+CONTRACT_TESTS:
+FULL_SUITE:
+BLOCKERS:
+FILES_CHANGED:
+codex
+Esteban, vou abrir pelos gates obrigatórios do projeto: relógio/alerta, identidade da instância, placeholders, concorrência e leituras mínimas. A autorização específica para o #44 fica registrada como exceção só para essa sessão, sem mexer no GovernanceKit.
+exec
+/bin/bash -lc "test -f .governancekit-identity.json && sed -n '1,220p' .governancekit-identity.json || printf 'MISSING_IDENTITY\\n'" in /home/esteban/Sync/Projects/AI/CodexBridge
+ succeeded in 0ms:
+{
+  "operator_name": "Esteban",
+  "host_id": "devel3",
+  "instance_path": "/home/esteban/Sync/Projects/AI/CodexBridge",
+  "sibling_path": "",
+  "assigned_ports": [],
+  "branch_ownership": "development"
+}
+
+exec
+/bin/bash -lc 'date +%H:%M' in /home/esteban/Sync/Projects/AI/CodexBridge
+ succeeded in 0ms:
+23:08
+
+exec
+/bin/bash -lc 'governancekit --root . concurrency' in /home/esteban/Sync/Projects/AI/CodexBridge
+exec
+/bin/bash -lc "rg -n '\\{\\{[A-Z][A-Z0-9_]*\\}\\}' AGENTS.md .docs" in /home/esteban/Sync/Projects/AI/CodexBridge
+exec
+/bin/bash -lc 'rg -n "CodexBridge|issue #44|issue-to-mission|mission" /home/esteban/.codex/memories/MEMORY.md' in /home/esteban/Sync/Projects/AI/CodexBridge
+ succeeded in 231ms:
+194:- /home/esteban/scripts/alt-claude, /home/esteban/Sync/Projects/AI/alt-claude, `~/.local/bin/alt-claude`, SHA-256, `bash -n`, `--list`, Permission denied, fee503c, cca3d3a
+221:- when requesting comparison of two local copies -> compare functionality, documentation/UI, Git state, executable permissions, and installed-copy hash before recommending a source. [Task 4]
+241:- symptom: a synchronized launcher gives `Permission denied` -> cause: it lacks executable mode -> fix: inspect permissions before direct execution; `bash file` is only a controlled syntax test. [Task 4]
+359:- https://inovacaosistemas.com.br/public-projects/, cv3/public-projects/index.html, href="./index.html", href="./cv-esteban-dortta-2026.pdf", links broken, cards, CodexBridge, AI-ListenToMeOnCLI, scope
+373:- The review found `./index.html` and `./cv-esteban-dortta-2026.pdf` inside the public-projects subdirectory; they point at the page itself or a nonexistent local PDF and are candidates for focused correction. Do not add CodexBridge or AI-ListenToMeOnCLI links until their URLs are verified; confirmed public remotes include `EDortta/YeAPF2`, `AI-GovernanceKit`, `AI-Agents`, `AI-monitor`, `nw-firewall`, and `web-server-trigger`. [Task 2][Task 3]
+435:- --ax-screen-reader, CLAUDE_COPILOT_AX_SCREEN_READER, CLAUDE_CODEX_AX_SCREEN_READER, --print, --yolo, --dangerously-skip-permissions, scrollback
+446:- Add `--ax-screen-reader` only to interactive invocations, not `--print`; `CLAUDE_COPILOT_AX_SCREEN_READER=0` / `CLAUDE_CODEX_AX_SCREEN_READER=0` restore the old behavior. Translate legacy `--yolo` to `--dangerously-skip-permissions`. [Task 2]
+727:# Task Group: CodexBridge landing-page import deferred by hard stop
+729:scope: use only to resume the specified Base44 landing-page import during an allowed CodexBridge operating window
+730:applies_to: cwd=/home/esteban/Sync/Projects/AI/CodexBridge; reuse_rule=exact-target and session-sensitive: re-check branch, handoff, hard stop, and `docs/new-landing-page`; do not start late partial imports
+736:- rollout_summaries/2026-08-31T21-09-22-f105-defer_landing_page_import_hard_stop.md (cwd=/home/esteban/Sync/Projects/AI/CodexBridge, rollout_path=/home/esteban/.codex/sessions/2026/08/31/rollout-2026-08-31T18-09-22-01a059a7-c69c-7850-949a-634a87d8d531.jsonl, updated_at=2026-08-31T21:11:15+00:00, thread_id=01a059a7-c69c-7850-949a-634a87d8d531, deferred with no downloaded content)
+932:- Card entry, payment submission, and confirming an advertising purchase remain manual; automation may stop at the final sensitive step. The requested R$ 100/10-day ad was not created. [Task 1]
+982:# Task Group: CodexBridge GovernanceKit identity recovery and delivery-session closeout
+984:scope: use for governed work in the real CodexBridge checkout, especially Start Gate failures, identity schema repair, kit upgrade, staged council checks, and closeout on `development`
+985:applies_to: cwd=/home/esteban/Sync/Projects/AI/CodexBridge; reuse_rule=checkout- and branch-sensitive: validate the named Git checkout, repository limits, Start Gate, concurrency, and current branch before delegation or edits
+995:- CodexBridge, mobo-dev-orch, Start Gate, governancekit concurrency, #57a, #43, docs/api/codex-bridge.openapi.yaml, docs/protocol.md
+1015:- The governed target is `/home/esteban/Sync/Projects/AI/CodexBridge`; `mobo-dev-orch` is document-only. Project limits prohibit work in other repositories. [Task 1]
+1595:# Task Group: jk-structure-ops local server overrides with additive permissions
+1597:scope: use when adding environment-local server access in `jkctl.py` without modifying or reducing the versioned base permissions
+1604:- rollout_summaries/2026-08-17T12-38-19-BG40-jkctl_local_server_overrides_additive_permissions.md (cwd=/home/esteban/Sync/Projects/YouBR/ZeeCred/jk-structure-ops, rollout_path=/home/esteban/.codex/sessions/2026/08/17/rollout-2026-08-17T09-38-19-01a00fba-dd71-71f1-a029-315f7bd6ae38.jsonl, updated_at=2026-08-17T20:58:36+00:00, thread_id=01a00fba-dd71-71f1-a029-315f7bd6ae38, existing commit `514d572` pushed to `origin/development`)
+1613:- when the user corrected “Merge aditivo... o override nunca vai apagar uma permissão anterior” -> lists must union additively, preserve order, deduplicate, and never remove inherited permissions. [Task 1]
+1732:# Task Group: CodexBridge and CodexBridgeMobile session detail, logs, and finished-session restart
+1734:scope: use when extending the live-session experience across the CodexBridge gateway and Flutter mobile client, especially for session inspection/log retrieval or restart control after terminal states
+1735:applies_to: cwd=/home/esteban/Sync/Projects/AI (checkouts=/home/esteban/Sync/Projects/AI/CodexBridge and /home/esteban/Sync/Projects/AI/CodexBridgeMobile); reuse_rule=checkout- and working-tree-sensitive: keep work strictly inside those two repositories, re-check API contracts and local diffs, and do not represent the locally validated changes as committed, pushed, or deployed
+1745:- CodexBridgeMobile, LiveSessionRepository, WorkSessionDetailScreen, LiveSessionLogEntry, GET /api/v1/sessions/{sessionId}, GET /api/v1/sessions/{sessionId}/logs, Riverpod, flutter_secure_storage, flutter analyze
+1747:## Task 2: restart finished CodexBridge sessions through normal dispatch, success
+1755:- CodexBridge, restart_finished_task, completed, failed, cancelled, expired, lost, waiting_executor, hub.dispatch_next, _Hub, test_sessions.py, pytest 53 passed
+1759:- when the user said “Começa a implementação de cada um por vez. Vai perguntando se precisar alguma decisão. Apenas limita o serviço a CodexBridge e CodexBridgeMobile.” -> implement sequentially, keep changes strictly in those two checkouts, and ask only when a genuine decision is needed; use the existing specification where it is sufficient. [Task 1][Task 2]
+2063:- Phase 0/PAL #11 precedes Phase 1/Lerian-Midaz #1. The next implementation target is PAL issue #12 only after confirming GitHub state and explicit permission to create a feature branch. [Task 1][Task 4]
+2074:- symptom: PAL implementation begins on `main` or Midaz is evaluated first -> cause: planning guidance was mistaken for authorization -> fix: remain in planning/read-only mode, confirm GitHub issue state, and wait for explicit permission to create the planned feature branch. [Task 4]
+2090:- Flowlab, core-func, CONSENT_TOKEN_ENCRYPTION_KEY, jkctl.py, login timeout, docker compose project working_dir, RBAC, permissions.full_key, promoterId=undefined, E9999, APP_ERROR:1243
+2283:- when the user complained about regressions -> preserve existing configuration/state, make the smallest change, and validate compatibility before commit; do not introduce regressions without permission [Task 1]
+2304:applies_to: cwd=/home/esteban/Sync/Projects/AI/GovernanceKit with consumer checkout=/home/esteban/Sync/Projects/AI/CodexBridgeMobile; reuse_rule=repository- and version-sensitive: rerun doctor/tests and inspect current session state; do not expose local credential contents
+2318:- when the user expected installation to help define scope “de forma conversacional” -> onboarding must explain the next action and distinguish actual project omissions from kit defects instead of stopping at opaque bootstrap failures [Task 1]
+2368:# Task Group: CodexBridgeMobile product foundation and decision-centered mobile client boundary
+2371:applies_to: cwd=/home/esteban/Sync/Projects/AI/CodexBridgeMobile; reuse_rule=repository- and product-foundation-sensitive: derive executable architecture only from validated product decisions and current repository rules; do not inspect, extract, or modify project files while mandatory gates are missing
+2446:- The controlled wrapper is `/home/oracle/scripts/migrar-temp-b-janela-controlada.sh` (mode `PREVIEW|EXECUTE`, permission `750`), scheduled as `tempb-migrate-20260730-0215.timer` for `2026-07-30 02:15:00 -03`. It stops the listener, restarts BDSG, runs the existing migrator, validates, and restores the listener. [Task 4]
+2661:- once `bwrap: No permissions to create a new namespace` appears in this repo, the sandbox shell may still list files but fail on reads; `docker compose exec -T open-design ...` was the reliable path to inspect the mounted project volume [Task 1]
+2671:- symptom: reads fail with `bwrap: No permissions to create a new namespace` even though the project directory is visible -> cause: sandbox namespace creation is blocked, so host-shell inspection is not trustworthy -> fix: switch to `docker compose exec` against the live `open-design` container before editing [Task 1]
+2672:- symptom: `apply_patch` or direct host edits do not update the real Open Design project files -> cause: the live files sit in a permission-protected Docker volume -> fix: write staged files locally, copy them in with `docker cp`, then validate inside the container [Task 2]
+
+ exited 1 in 256ms:
+ succeeded in 468ms:
+Open in this repository (integration branch: development)
+  worktrees: 1    branches carrying unmerged work: 10
+
+  * CodexBridge    development                                                   this session
+    (no worktree)  feature/control-ui-and-mobo-orch                              +4 commits
+    (no worktree)  feature/gh-5/expose-projects-and-project-operational-summary  +3 commits
+    (no worktree)  feature/gh-6/expose-operational-decisions-api                 +1 commit
+    (no worktree)  feature/gh-7/expose-missions-and-mission-control-api          +1 commit
+    (no worktree)  feature/gh-73/control-plane-domain                            +1 commit
+    (no worktree)  feature/gh-8/expose-epics-and-issues-api                      +1 commit
+    (no worktree)  pr22-branch                                                   +1 commit
+    (no worktree)  pr22-review                                                   +1 commit
+    (no worktree)  worktree-agent-a6ccca9046c4c9a4d                              +2 commits
+    (no worktree)  worktree-agent-acdbaeefd3b195d55                              +2 commits
+
+  10 open beyond this session. Working on another one requires the operator's authorization.
+
+HARD STOP: the closing budget is spent. Start no new work — drive handoff / RESUME / napkin to completion.
+
+ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 11:17 PM.
+ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 11:17 PM.
+tokens used
+25,052
+
+--- status after Codex ---
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/results/20260915-020820Z-devel3-issue-to-mission-workflow.prompt.txt
+?? temp-tools/results/20260915-020820Z-devel3-issue-to-mission-workflow.txt
+
+--- focused #44 tests ---
+........................................................................ [ 47%]
+........................................................................ [ 94%]
+........                                                                 [100%]
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+152 passed, 2 warnings in 12.10s
+
+--- migration/schema tests ---
+......................                                                   [100%]
+22 passed in 17.18s
+
+--- contract tests ---
+........................................................................ [ 47%]
+........................................................................ [ 94%]
+.........                                                                [100%]
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+153 passed, 2 warnings in 19.09s
+
+--- full suite ---
+........................................................................ [  4%]
+........................................................................ [  9%]
+........................................................................ [ 14%]
+........................................................................ [ 18%]
+........................................................................ [ 23%]
+....................sssssssss........................................... [ 28%]
+........................................................................ [ 33%]
+........................................................................ [ 37%]
+........................................................................ [ 42%]
+........................................................................ [ 47%]
+........................................................................ [ 52%]
+........................................................................ [ 56%]
+........................................................................ [ 61%]
+........................................................................ [ 66%]
+........................................................................ [ 71%]
+........................................................................ [ 75%]
+........................................................................ [ 80%]
+........................................................................ [ 85%]
+........................................................................ [ 90%]
+........................................................................ [ 94%]
+........................................................................ [ 99%]
+........                                                                 [100%]
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1511 passed, 9 skipped, 2 warnings in 119.85s (0:01:59)
+
+--- codemap refresh ---
+Code map written to: /home/esteban/Sync/Projects/AI/CodexBridge/docs/codemap.md
+  197 file(s) · 2195 symbol(s) indexed
+
+--- final status ---
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/results/20260915-020820Z-devel3-issue-to-mission-workflow.prompt.txt
+?? temp-tools/results/20260915-020820Z-devel3-issue-to-mission-workflow.txt
+
+RESULT_CODES codex=1 focused=0 migration=0 contract=0 full=0 codemap=0
+RESULT_FILE=temp-tools/results/20260915-020820Z-devel3-issue-to-mission-workflow.txt
