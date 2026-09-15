@@ -1,0 +1,224 @@
+ISSUE: #44 issue-to-Mission implementation
+TIMESTAMP_UTC: 20260915-025724Z
+HOST: devel3
+BRANCH: development
+HEAD_BEFORE: e60903eca462210b72fbd89e30f3b84a4b0c69c3
+WORKTREE_BEFORE:
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/results/20260915-025724Z-devel3-issue44-implementation.prompt.txt
+?? temp-tools/results/20260915-025724Z-devel3-issue44-implementation.txt
+
+== CODEX ==
+OpenAI Codex v0.154.0
+--------
+workdir: /home/esteban/Sync/Projects/AI/CodexBridge
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a0a2ff-74d8-7301-abf9-9d15f3d1dde8
+--------
+user
+Implement GitHub issue #44 in the current CodexBridge development checkout. This is an implementation run, not a planning exercise.
+
+Context already established and do not redo it:
+- Durable Mission aggregate/state machine (#43) is complete and green.
+- Provider-neutral/local issue integration and executor-owned forge operations already exist.
+- migrations/0018_mission_issue_snapshots.sql has been added as the persistence foundation.
+- Prior after-hours Codex attempts were blocked by GovernanceKit; do not weaken or edit GovernanceKit.
+- Preserve unrelated untracked local noise (.claude-flow, .swarm, handoff files, coordination-status, ruvector.db).
+
+Implement the smallest coherent #44 slice that satisfies the issue acceptance criteria:
+1. Add the SQLAlchemy model corresponding to mission_issue_snapshots and integrate it with existing model conventions.
+2. Add provider-neutral issue snapshot construction with deterministic canonical hashing. Snapshot identity/provider/ref/revision/title/body or description/comments/labels/dependencies/status needed for planning. Never mutate a stored snapshot.
+3. Add a shared domain/store service for resolve-issue-as-Mission. It must use the same path for REST/MCP rather than duplicating orchestration.
+4. Idempotency: repeated equivalent project + source issue + intent requests reuse the same active Mission; support an explicit new run when the existing public contract has a suitable convention, otherwise design the narrowest explicit flag.
+5. Build Mission objective/constraints from the immutable snapshot, record source issue linkage, append Mission events, and route/schedule the first implementation attempt through existing Mission/Task machinery and authorization policy.
+6. Detect material issue drift by comparing the current canonical snapshot with the Mission planning snapshot. Never silently rewrite the plan. Surface a legal Mission replan/waiting-human/blocked condition and append evidence to the timeline.
+7. Delivery evidence must attach to Mission/attempt. Agent/task process success alone MUST NOT close the source issue. External update/close remains policy-controlled executor-owned forge work.
+8. Add the narrow REST and MCP operator entrypoint needed for: resolve issue X for project Y. Do not expose local paths, commands, tokens, or secrets.
+9. Update public contract/version/docs/codemap only if the repository's existing compatibility rules require it.
+10. Add focused tests for immutable snapshot, idempotency, explicit rerun, drift, authorization/security, source linkage/evidence, and no auto-close.
+
+Inspect current code and conventions before editing. Reuse existing IssueModel, MissionModel, mission transition service, authorization, store, MCP issue tools, forge routing, schemas and contract patterns. Do not hard-wire GitHub into the Mission domain.
+
+Do not commit, push, reset, install global/user dependencies, delete unrelated files, or change GovernanceKit. If a real material governance/security blocker occurs, stop and report it precisely. Otherwise implement and test.
+
+After implementation run the focused #44 tests you add, existing Mission tests, migration/schema tests using paths that actually exist in this checkout, contract tests, codemap/governance freshness tests using paths that actually exist, then the full pytest suite if feasible.
+
+Finish with a concise structured summary containing: IMPLEMENTED, FILES_CHANGED, MIGRATION, FOCUSED_TESTS, MISSION_TESTS, CONTRACT_TESTS, FULL_SUITE, BLOCKERS, NEXT.
+codex
+Esteban, vou respeitar o escopo de implementação e os gates do checkout sem mexer no GovernanceKit nem no ruído local. Primeiro faço só as verificações obrigatórias de identidade/concorrência/documentação e uma passada curta na memória relevante, depois entro no código.
+exec
+/bin/bash -lc 'date +%H:%M' in /home/esteban/Sync/Projects/AI/CodexBridge
+ succeeded in 0ms:
+23:57
+
+exec
+/bin/bash -lc "test -f .governancekit-identity.json && sed -n '1,220p' .governancekit-identity.json || printf 'MISSING\\n'" in /home/esteban/Sync/Projects/AI/CodexBridge
+ succeeded in 0ms:
+{
+  "operator_name": "Esteban",
+  "host_id": "devel3",
+  "instance_path": "/home/esteban/Sync/Projects/AI/CodexBridge",
+  "sibling_path": "",
+  "assigned_ports": [],
+  "branch_ownership": "development"
+}
+
+exec
+/bin/bash -lc 'rg -n "CodexBridge|mission|issue #44|#44|Mission" /home/esteban/.codex/memories/MEMORY.md' in /home/esteban/Sync/Projects/AI/CodexBridge
+ succeeded in 0ms:
+194:- /home/esteban/scripts/alt-claude, /home/esteban/Sync/Projects/AI/alt-claude, `~/.local/bin/alt-claude`, SHA-256, `bash -n`, `--list`, Permission denied, fee503c, cca3d3a
+221:- when requesting comparison of two local copies -> compare functionality, documentation/UI, Git state, executable permissions, and installed-copy hash before recommending a source. [Task 4]
+241:- symptom: a synchronized launcher gives `Permission denied` -> cause: it lacks executable mode -> fix: inspect permissions before direct execution; `bash file` is only a controlled syntax test. [Task 4]
+359:- https://inovacaosistemas.com.br/public-projects/, cv3/public-projects/index.html, href="./index.html", href="./cv-esteban-dortta-2026.pdf", links broken, cards, CodexBridge, AI-ListenToMeOnCLI, scope
+373:- The review found `./index.html` and `./cv-esteban-dortta-2026.pdf` inside the public-projects subdirectory; they point at the page itself or a nonexistent local PDF and are candidates for focused correction. Do not add CodexBridge or AI-ListenToMeOnCLI links until their URLs are verified; confirmed public remotes include `EDortta/YeAPF2`, `AI-GovernanceKit`, `AI-Agents`, `AI-monitor`, `nw-firewall`, and `web-server-trigger`. [Task 2][Task 3]
+435:- --ax-screen-reader, CLAUDE_COPILOT_AX_SCREEN_READER, CLAUDE_CODEX_AX_SCREEN_READER, --print, --yolo, --dangerously-skip-permissions, scrollback
+446:- Add `--ax-screen-reader` only to interactive invocations, not `--print`; `CLAUDE_COPILOT_AX_SCREEN_READER=0` / `CLAUDE_CODEX_AX_SCREEN_READER=0` restore the old behavior. Translate legacy `--yolo` to `--dangerously-skip-permissions`. [Task 2]
+727:# Task Group: CodexBridge landing-page import deferred by hard stop
+729:scope: use only to resume the specified Base44 landing-page import during an allowed CodexBridge operating window
+730:applies_to: cwd=/home/esteban/Sync/Projects/AI/CodexBridge; reuse_rule=exact-target and session-sensitive: re-check branch, handoff, hard stop, and `docs/new-landing-page`; do not start late partial imports
+736:- rollout_summaries/2026-08-31T21-09-22-f105-defer_landing_page_import_hard_stop.md (cwd=/home/esteban/Sync/Projects/AI/CodexBridge, rollout_path=/home/esteban/.codex/sessions/2026/08/31/rollout-2026-08-31T18-09-22-01a059a7-c69c-7850-949a-634a87d8d531.jsonl, updated_at=2026-08-31T21:11:15+00:00, thread_id=01a059a7-c69c-7850-949a-634a87d8d531, deferred with no downloaded content)
+932:- Card entry, payment submission, and confirming an advertising purchase remain manual; automation may stop at the final sensitive step. The requested R$ 100/10-day ad was not created. [Task 1]
+982:# Task Group: CodexBridge GovernanceKit identity recovery and delivery-session closeout
+984:scope: use for governed work in the real CodexBridge checkout, especially Start Gate failures, identity schema repair, kit upgrade, staged council checks, and closeout on `development`
+985:applies_to: cwd=/home/esteban/Sync/Projects/AI/CodexBridge; reuse_rule=checkout- and branch-sensitive: validate the named Git checkout, repository limits, Start Gate, concurrency, and current branch before delegation or edits
+995:- CodexBridge, mobo-dev-orch, Start Gate, governancekit concurrency, #57a, #43, docs/api/codex-bridge.openapi.yaml, docs/protocol.md
+1015:- The governed target is `/home/esteban/Sync/Projects/AI/CodexBridge`; `mobo-dev-orch` is document-only. Project limits prohibit work in other repositories. [Task 1]
+1595:# Task Group: jk-structure-ops local server overrides with additive permissions
+1597:scope: use when adding environment-local server access in `jkctl.py` without modifying or reducing the versioned base permissions
+1604:- rollout_summaries/2026-08-17T12-38-19-BG40-jkctl_local_server_overrides_additive_permissions.md (cwd=/home/esteban/Sync/Projects/YouBR/ZeeCred/jk-structure-ops, rollout_path=/home/esteban/.codex/sessions/2026/08/17/rollout-2026-08-17T09-38-19-01a00fba-dd71-71f1-a029-315f7bd6ae38.jsonl, updated_at=2026-08-17T20:58:36+00:00, thread_id=01a00fba-dd71-71f1-a029-315f7bd6ae38, existing commit `514d572` pushed to `origin/development`)
+1613:- when the user corrected “Merge aditivo... o override nunca vai apagar uma permissão anterior” -> lists must union additively, preserve order, deduplicate, and never remove inherited permissions. [Task 1]
+1732:# Task Group: CodexBridge and CodexBridgeMobile session detail, logs, and finished-session restart
+1734:scope: use when extending the live-session experience across the CodexBridge gateway and Flutter mobile client, especially for session inspection/log retrieval or restart control after terminal states
+1735:applies_to: cwd=/home/esteban/Sync/Projects/AI (checkouts=/home/esteban/Sync/Projects/AI/CodexBridge and /home/esteban/Sync/Projects/AI/CodexBridgeMobile); reuse_rule=checkout- and working-tree-sensitive: keep work strictly inside those two repositories, re-check API contracts and local diffs, and do not represent the locally validated changes as committed, pushed, or deployed
+1745:- CodexBridgeMobile, LiveSessionRepository, WorkSessionDetailScreen, LiveSessionLogEntry, GET /api/v1/sessions/{sessionId}, GET /api/v1/sessions/{sessionId}/logs, Riverpod, flutter_secure_storage, flutter analyze
+1747:## Task 2: restart finished CodexBridge sessions through normal dispatch, success
+1755:- CodexBridge, restart_finished_task, completed, failed, cancelled, expired, lost, waiting_executor, hub.dispatch_next, _Hub, test_sessions.py, pytest 53 passed
+1759:- when the user said “Começa a implementação de cada um por vez. Vai perguntando se precisar alguma decisão. Apenas limita o serviço a CodexBridge e CodexBridgeMobile.” -> implement sequentially, keep changes strictly in those two checkouts, and ask only when a genuine decision is needed; use the existing specification where it is sufficient. [Task 1][Task 2]
+2063:- Phase 0/PAL #11 precedes Phase 1/Lerian-Midaz #1. The next implementation target is PAL issue #12 only after confirming GitHub state and explicit permission to create a feature branch. [Task 1][Task 4]
+2074:- symptom: PAL implementation begins on `main` or Midaz is evaluated first -> cause: planning guidance was mistaken for authorization -> fix: remain in planning/read-only mode, confirm GitHub issue state, and wait for explicit permission to create the planned feature branch. [Task 4]
+2090:- Flowlab, core-func, CONSENT_TOKEN_ENCRYPTION_KEY, jkctl.py, login timeout, docker compose project working_dir, RBAC, permissions.full_key, promoterId=undefined, E9999, APP_ERROR:1243
+2283:- when the user complained about regressions -> preserve existing configuration/state, make the smallest change, and validate compatibility before commit; do not introduce regressions without permission [Task 1]
+2304:applies_to: cwd=/home/esteban/Sync/Projects/AI/GovernanceKit with consumer checkout=/home/esteban/Sync/Projects/AI/CodexBridgeMobile; reuse_rule=repository- and version-sensitive: rerun doctor/tests and inspect current session state; do not expose local credential contents
+2318:- when the user expected installation to help define scope “de forma conversacional” -> onboarding must explain the next action and distinguish actual project omissions from kit defects instead of stopping at opaque bootstrap failures [Task 1]
+2368:# Task Group: CodexBridgeMobile product foundation and decision-centered mobile client boundary
+2371:applies_to: cwd=/home/esteban/Sync/Projects/AI/CodexBridgeMobile; reuse_rule=repository- and product-foundation-sensitive: derive executable architecture only from validated product decisions and current repository rules; do not inspect, extract, or modify project files while mandatory gates are missing
+2446:- The controlled wrapper is `/home/oracle/scripts/migrar-temp-b-janela-controlada.sh` (mode `PREVIEW|EXECUTE`, permission `750`), scheduled as `tempb-migrate-20260730-0215.timer` for `2026-07-30 02:15:00 -03`. It stops the listener, restarts BDSG, runs the existing migrator, validates, and restores the listener. [Task 4]
+2661:- once `bwrap: No permissions to create a new namespace` appears in this repo, the sandbox shell may still list files but fail on reads; `docker compose exec -T open-design ...` was the reliable path to inspect the mounted project volume [Task 1]
+2671:- symptom: reads fail with `bwrap: No permissions to create a new namespace` even though the project directory is visible -> cause: sandbox namespace creation is blocked, so host-shell inspection is not trustworthy -> fix: switch to `docker compose exec` against the live `open-design` container before editing [Task 1]
+2672:- symptom: `apply_patch` or direct host edits do not update the real Open Design project files -> cause: the live files sit in a permission-protected Docker volume -> fix: write staged files locally, copy them in with `docker cp`, then validate inside the container [Task 2]
+
+exec
+/bin/bash -lc "grep -rnE '\\{\\{[A-Z][A-Z0-9_]*\\}\\}' AGENTS.md .docs/" in /home/esteban/Sync/Projects/AI/CodexBridge
+ exited 1 in 0ms:
+exec
+/bin/bash -lc 'governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge concurrency' in /home/esteban/Sync/Projects/AI/CodexBridge
+ succeeded in 796ms:
+Open in this repository (integration branch: development)
+  worktrees: 1    branches carrying unmerged work: 10
+
+  * CodexBridge    development                                                   this session
+    (no worktree)  feature/control-ui-and-mobo-orch                              +4 commits
+    (no worktree)  feature/gh-5/expose-projects-and-project-operational-summary  +3 commits
+    (no worktree)  feature/gh-6/expose-operational-decisions-api                 +1 commit
+    (no worktree)  feature/gh-7/expose-missions-and-mission-control-api          +1 commit
+    (no worktree)  feature/gh-73/control-plane-domain                            +1 commit
+    (no worktree)  feature/gh-8/expose-epics-and-issues-api                      +1 commit
+    (no worktree)  pr22-branch                                                   +1 commit
+    (no worktree)  pr22-review                                                   +1 commit
+    (no worktree)  worktree-agent-a6ccca9046c4c9a4d                              +2 commits
+    (no worktree)  worktree-agent-acdbaeefd3b195d55                              +2 commits
+
+  10 open beyond this session. Working on another one requires the operator's authorization.
+
+HARD STOP: the closing budget is spent. Start no new work — drive handoff / RESUME / napkin to completion.
+
+exec
+/bin/bash -lc "nl -ba /home/esteban/.codex/memories/MEMORY.md | sed -n '982,1016p'" in /home/esteban/Sync/Projects/AI/CodexBridge
+ succeeded in 0ms:
+   982	# Task Group: CodexBridge GovernanceKit identity recovery and delivery-session closeout
+   983	
+   984	scope: use for governed work in the real CodexBridge checkout, especially Start Gate failures, identity schema repair, kit upgrade, staged council checks, and closeout on `development`
+   985	applies_to: cwd=/home/esteban/Sync/Projects/AI/CodexBridge; reuse_rule=checkout- and branch-sensitive: validate the named Git checkout, repository limits, Start Gate, concurrency, and current branch before delegation or edits
+   986	
+   987	## Task 1: validate target and prepare #57a/#43 without bypassing gates, partial
+   988	
+   989	### rollout_summary_files
+   990	
+   991	- rollout_summaries/2026-08-24T17-04-46-Ixhx-codexbridge_governance_recovery_session_close.md (cwd=/home/esteban/Sync/Projects/AI, rollout_path=/home/esteban/.codex/sessions/2026/08/24/rollout-2026-08-24T14-04-46-01a034bb-5059-7a82-a0fd-9d5c56107473.jsonl, updated_at=2026-08-24T21:14:52+00:00, thread_id=01a034bb-5059-7a82-a0fd-9d5c56107473, #57a/#43 deferred)
+   992	
+   993	### keywords
+   994	
+   995	- CodexBridge, mobo-dev-orch, Start Gate, governancekit concurrency, #57a, #43, docs/api/codex-bridge.openapi.yaml, docs/protocol.md
+   996	
+   997	## Task 2: restore GovernanceKit identity, upgrade, council, and close session, success
+   998	
+   999	### rollout_summary_files
+  1000	
+  1001	- rollout_summaries/2026-08-24T17-04-46-Ixhx-codexbridge_governance_recovery_session_close.md (cwd=/home/esteban/Sync/Projects/AI, rollout_path=/home/esteban/.codex/sessions/2026/08/24/rollout-2026-08-24T14-04-46-01a034bb-5059-7a82-a0fd-9d5c56107473.jsonl, updated_at=2026-08-24T21:14:52+00:00, thread_id=01a034bb-5059-7a82-a0fd-9d5c56107473, pushed clean `development` at 2e18820)
+  1002	
+  1003	### keywords
+  1004	
+  1005	- .credentials/identity.json, state_version, values, refs, OPERATOR_NAME, governancekit --root, install-agents --upgrade, council, 699a60b, 2e18820, handoff.md
+  1006	
+  1007	## User preferences
+  1008	
+  1009	- when starting implementation, the user asked for “sub agentes baratos”, “revisão de críticos antes do commit”, “concilio a cada cinco commits ou o final da PR”, “push após cada commit”, regular progress, and reboot resilience -> use bounded local parallel agents, durable state, staged critique/council gates, incremental pushes, and concise progress updates [Task 1]
+  1010	- when cloud token availability delayed work, the user chose local because it could “começar agora” -> prefer local orchestration when it can start immediately [Task 1]
+  1011	- when the user said “commit e push. fecha sessão” -> finish with pushed state, clean tree, and session artifacts rather than leaving work pending [Task 2]
+  1012	
+  1013	## Reusable knowledge
+  1014	
+  1015	- The governed target is `/home/esteban/Sync/Projects/AI/CodexBridge`; `mobo-dev-orch` is document-only. Project limits prohibit work in other repositories. [Task 1]
+  1016	- `.credentials/identity.json` must use nested `state_version` / `values` / `refs`; a flat `{ "OPERATOR_NAME": "Esteban" }` fails with `required operator identity is not configured`. Keep the gitignored file mode `0600` and never store secrets. [Task 2]
+
+codex
+Esteban, BLOCKED by GovernanceKit hard stop before implementation.
+
+**IMPLEMENTED:** nothing changed.  
+**FILES_CHANGED:** none.  
+**MIGRATION:** not touched.  
+**FOCUSED_TESTS:** not run.  
+**MISSION_TESTS:** not run.  
+**CONTRACT_TESTS:** not run.  
+**FULL_SUITE:** not run.  
+**BLOCKERS:** `governancekit --root ... concurrency` reports `HARD STOP: the closing budget is spent. Start no new work`. It also reports `10 open beyond this session`, with this checkout on `development`. Start Gate placeholder and identity checks passed.  
+**NEXT:** resume #44 during an allowed work window, starting from the same `development` checkout and preserving the unrelated local noise exactly as requested.
+
+
+tokens used
+27,247
+Esteban, BLOCKED by GovernanceKit hard stop before implementation.
+
+**IMPLEMENTED:** nothing changed.  
+**FILES_CHANGED:** none.  
+**MIGRATION:** not touched.  
+**FOCUSED_TESTS:** not run.  
+**MISSION_TESTS:** not run.  
+**CONTRACT_TESTS:** not run.  
+**FULL_SUITE:** not run.  
+**BLOCKERS:** `governancekit --root ... concurrency` reports `HARD STOP: the closing budget is spent. Start no new work`. It also reports `10 open beyond this session`, with this checkout on `development`. Start Gate placeholder and identity checks passed.  
+**NEXT:** resume #44 during an allowed work window, starting from the same `development` checkout and preserving the unrelated local noise exactly as requested.
+
+
+
+== WORKTREE AFTER ==
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/results/20260915-025724Z-devel3-issue44-implementation.prompt.txt
+?? temp-tools/results/20260915-025724Z-devel3-issue44-implementation.txt
+HEAD_AFTER: e60903eca462210b72fbd89e30f3b84a4b0c69c3
+CODEX_RC: 0
+RESULT_FILE: temp-tools/results/20260915-025724Z-devel3-issue44-implementation.txt
+PROMPT_FILE: temp-tools/results/20260915-025724Z-devel3-issue44-implementation.prompt.txt
