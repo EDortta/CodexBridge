@@ -1,6 +1,11 @@
 import json
 
-from gateway.app.services.mission_completion import build_completion_evidence
+from gateway.app.services.mission_completion import (
+    CompletionPolicy,
+    DeliveryMode,
+    build_completion_evidence,
+    evaluate_completion_gate,
+)
 
 
 def test_successful_agent_exit_is_only_implemented_without_validation() -> None:
@@ -108,3 +113,86 @@ def test_artifact_and_operator_review_modes_are_explicit_delivery_modes() -> Non
     )
     assert review.delivered is True
     assert review.merged is False
+
+
+def test_completion_gate_requires_project_validation_and_delivery_policy() -> None:
+    evidence = build_completion_evidence(
+        task_state="completed",
+        result_json=json.dumps(
+            {
+                "tests_ran": [{"name": "pytest -q", "passed": True}],
+                "static_checks": [{"name": "ruff check .", "passed": True, "kind": "static"}],
+            }
+        ),
+        delivery_result_json=json.dumps({"outcome": "committed_only", "commit": "abc123"}),
+    )
+    decision = evaluate_completion_gate(
+        evidence,
+        CompletionPolicy(
+            required_validation_kinds=("test", "static"),
+            delivery_mode=DeliveryMode.COMMIT_ONLY,
+        ),
+    )
+    assert decision.complete is True
+    assert decision.reasons == ()
+
+
+def test_completion_gate_refuses_missing_required_validation() -> None:
+    evidence = build_completion_evidence(
+        task_state="completed",
+        result_json=json.dumps({"tests_ran": [{"name": "pytest -q", "passed": True}]}),
+        delivery_result_json=json.dumps({"outcome": "committed_only", "commit": "abc123"}),
+    )
+    decision = evaluate_completion_gate(
+        evidence,
+        CompletionPolicy(required_validation_kinds=("test", "static")),
+    )
+    assert decision.complete is False
+    assert "missing_validation:static" in decision.reasons
+
+
+def test_completion_gate_never_treats_push_as_merge_permission() -> None:
+    evidence = build_completion_evidence(
+        task_state="completed",
+        result_json=json.dumps({"tests_ran": [{"name": "pytest", "passed": True}]}),
+        delivery_result_json=json.dumps({"outcome": "committed_and_pushed", "commit": "abc"}),
+        merged=True,
+    )
+    denied = evaluate_completion_gate(
+        evidence,
+        CompletionPolicy(delivery_mode=DeliveryMode.PUSH_BRANCH, allow_merge=False),
+    )
+    assert denied.complete is False
+    assert "merge_not_permitted" in denied.reasons
+
+    allowed = evaluate_completion_gate(
+        evidence,
+        CompletionPolicy(delivery_mode=DeliveryMode.PUSH_BRANCH, allow_merge=True),
+    )
+    assert allowed.complete is True
+
+
+def test_pull_request_mode_requires_explicit_link() -> None:
+    without_pr = build_completion_evidence(
+        task_state="completed",
+        result_json=json.dumps({"tests_ran": [{"name": "pytest", "passed": True}]}),
+        delivery_result_json=json.dumps({"outcome": "committed_and_pushed", "commit": "abc"}),
+    )
+    denied = evaluate_completion_gate(
+        without_pr,
+        CompletionPolicy(delivery_mode=DeliveryMode.PULL_REQUEST),
+    )
+    assert denied.complete is False
+    assert denied.reasons == ("pull_request_missing",)
+
+    with_pr = build_completion_evidence(
+        task_state="completed",
+        result_json=json.dumps({"tests_ran": [{"name": "pytest", "passed": True}]}),
+        delivery_result_json=json.dumps({"outcome": "committed_and_pushed", "commit": "abc"}),
+        external_links=("https://github.com/EDortta/CodexBridge/pull/123",),
+    )
+    allowed = evaluate_completion_gate(
+        with_pr,
+        CompletionPolicy(delivery_mode=DeliveryMode.PULL_REQUEST),
+    )
+    assert allowed.complete is True
