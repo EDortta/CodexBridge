@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from codex_bridge_agent.git_tools import run_git
+from agent.codex_bridge_agent.git_tools import run_git
 
 _SAFE = re.compile(r"[^a-zA-Z0-9_-]+")
 
