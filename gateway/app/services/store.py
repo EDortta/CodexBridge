@@ -25,6 +25,7 @@ from gateway.app.models.entities import (
     MessageReceiptModel,
     MissionAttemptModel,
     MissionEventModel,
+    MissionIssueSnapshotModel,
     MissionModel,
     NotificationPreferenceModel,
     NodeInviteModel,
@@ -596,6 +597,27 @@ async def _record_mission_event(
             payload_json=json.dumps(payload or {}, ensure_ascii=True),
             created_at=datetime.now(timezone.utc),
         )
+    )
+
+
+async def append_mission_event(
+    session: AsyncSession,
+    mission_id: str,
+    event_type: str,
+    *,
+    state: str | None = None,
+    task_id: str | None = None,
+    actor_id: str | None = None,
+    payload: dict | None = None,
+) -> None:
+    await _record_mission_event(
+        session,
+        mission_id,
+        event_type,
+        state=state,
+        task_id=task_id,
+        actor_id=actor_id,
+        payload=payload,
     )
 
 
@@ -3155,6 +3177,34 @@ async def get_mission_active_task(session: AsyncSession, mission: MissionModel) 
     if mission.active_task_id is None:
         return None
     return await session.get(TaskModel, mission.active_task_id)
+
+
+async def get_mission_issue_snapshot(
+    session: AsyncSession, mission_id: str
+) -> MissionIssueSnapshotModel | None:
+    result = await session.execute(
+        select(MissionIssueSnapshotModel).where(MissionIssueSnapshotModel.mission_id == mission_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def find_active_issue_mission_snapshots(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    issue_id: str,
+    provider: str,
+) -> list[tuple[MissionIssueSnapshotModel, MissionModel]]:
+    result = await session.execute(
+        select(MissionIssueSnapshotModel, MissionModel)
+        .join(MissionModel, MissionModel.id == MissionIssueSnapshotModel.mission_id)
+        .where(MissionIssueSnapshotModel.project_id == project_id)
+        .where(MissionIssueSnapshotModel.issue_id == issue_id)
+        .where(MissionIssueSnapshotModel.provider == provider)
+        .where(~MissionModel.state.in_(TERMINAL_MISSION_STATES))
+        .order_by(MissionModel.created_at.desc(), MissionModel.id.desc())
+    )
+    return list(result.all())
 
 
 async def list_mission_attempts(session: AsyncSession, mission_id: str) -> list[MissionAttemptModel]:

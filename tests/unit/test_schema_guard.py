@@ -167,6 +167,12 @@ def test_mission_id_column_is_required(tmp_path) -> None:
     assert "0017_durable_missions.sql" in message
 
 
+def test_mission_issue_snapshots_table_is_registered() -> None:
+    from gateway.app.db.schema_guard import REQUIRED_TABLES
+
+    assert REQUIRED_TABLES["mission_issue_snapshots"] == "0018_mission_issue_snapshots.sql"
+
+
 def test_required_tables_cannot_fire_at_boot_today() -> None:
     """`REQUIRED_TABLES` is documentation, not a boot gate — pinned, not fixed.
 

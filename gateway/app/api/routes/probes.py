@@ -183,7 +183,7 @@ version_router = APIRouter()
 # this break mechanically (docs/api/README.md's own "meaning change that
 # keeps the name and the type... no schema diff catches it"); it is real
 # regardless, hence the version bump on prose-only content.
-API_CONTRACT_VERSION = "1.19.0"
+API_CONTRACT_VERSION = "1.20.0"
 
 # Namespaces this build serves. `/api/version` reports all of them, which is the
 # obligation that keeps it outside the versioned namespace instead of making it a

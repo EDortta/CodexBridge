@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-09-14 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-09-15 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 197 file(s) · 2195 symbol(s) indexed
-- Languages: config (2), python (184), shell (11)
+- 201 file(s) · 2219 symbol(s) indexed
+- Languages: config (2), python (186), shell (13)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `temp-tools`, `tests`
 
 ## Governance
@@ -126,6 +126,7 @@ gateway/
       forge_routing.py  — "The one place that answers "is this project bound to a forge repository?""
       google_calendar.py  — "A Google Calendar client for reminders, built to be tested without ever"
       issue_render.py  — "Pure markdown renderer for epic materialization -- issue #78, Commit 2a."
+      issue_resolution.py
       issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
       metrics.py
       mission_types.py
@@ -158,6 +159,8 @@ temp-tools/
   07-devel3-fix-mission-regressions-and-validate.sh
   08-devel3-finalize-mission-required-files.sh
   09-devel3-implement-issue-to-mission-workflow.sh
+  10-devel3-validate-issue44-foundation.sh
+  11-devel3-implement-issue44.sh
 tests/
   conftest.py
   contract/
@@ -191,6 +194,7 @@ tests/
     test_forge_mcp_tools.py  — "The forge-routed MCP tools -- issue #79/#80, WK-20260902-forge-binding"
     test_forge_wiring.py  — "End-to-end wiring for a forge operation -- issue #80/#79,"
     test_issue_materialize_result.py  — "`issue.materialize_result` handling in the `/agent/ws` message loop --"
+    test_issue_resolution.py
     test_mcp_epics_issues.py  — "The epics/issues MCP tools -- issue #78."
     test_mcp_reminders.py  — "The `create_reminder`/`cancel_reminder` MCP tools, at the `handle_mcp_call` layer."
     test_missions.py  — "Missions: durable operator intent with TaskModel execution attempts."
@@ -635,7 +639,9 @@ tests/
 - **`CreateMissionDelivery`** *(class)* — "Wire shape of `shared.protocol.DeliveryRequest` — issue #68/#66."
   - `to_protocol(self)` *(method)*
 - **`CreateMissionRequest`** *(class)* — "`POST /api/v1/missions` — issue #68."
+- **`ResolveIssueAsMissionRequest`** *(class)*
 - `list_missions(response, project_id, stage, state, risk, blocked, cursor, limit, principal, session)` *(async function)* — "Missions the caller may see, newest first."
+- `resolve_issue_mission(payload, response, principal, session)` *(async function)* — "Resolve a stored source issue as a durable Mission."
 - `get_mission(mission_id, response, principal, session)` *(async function)*
 - `create_mission(payload, response, idempotency_key, principal, session)` *(async function)* — "Create a durable mission and its first execution attempt."
 - `get_mission_timeline(mission_id, response, cursor, limit, principal, session)` *(async function)* — "The mission's recorded events, oldest first — the order a narrative reads in."
@@ -846,6 +852,7 @@ tests/
 - **`MissionModel`** *(class)* — "Durable operator intent, distinct from execution attempts."
 - **`MissionAttemptModel`** *(class)*
 - **`MissionEventModel`** *(class)*
+- **`MissionIssueSnapshotModel`** *(class)* — "Immutable source issue state a Mission was planned from."
 - **`EpicModel`** *(class)*
 - **`IssueModel`** *(class)*
 - **`ConversationModel`** *(class)* — "A contextual thread linked to at least one product entity — issue #10."
@@ -972,6 +979,15 @@ tests/
 - `issue_relative_key(issue)` — "The `issues/<issue_id>/<task-slug>-[<status>].md` key for one issue."
 - `render_epic_markdown(epic, issues)` — "Relative path -> content, for every file one epic materializes to."
 
+### `gateway/app/services/issue_resolution.py`
+
+- **`IssueSnapshot`** *(class)*
+- **`ResolvedIssueMission`** *(class)*
+- `build_issue_snapshot(issue)`
+- `resolve_issue_reference(session, project_id, issue_ref)` *(async function)*
+- `default_objective(snapshot)`
+- `resolve_issue_as_mission(session)` *(async function)*
+
 ### `gateway/app/services/issue_types.py`
 
 > Closed vocabularies for epics and issues, and the error they fail with.
@@ -1015,6 +1031,7 @@ tests/
 - `list_recent_tasks(session, limit, states)` *(async function)* — "`states` narrows to a caller-given set of `TaskState` values."
 - `effective_task_modes(session, executor, project)` *(async function)* — "The task modes `executor` may actually run on `project`, right now."
 - `require_active_node_project_authorization(session, executor, project, mode)` *(async function)* — "Fail closed for an explicitly Node-directed task submission."
+- `append_mission_event(session, mission_id, event_type)` *(async function)*
 - `transition_mission_state(session, mission, target_state)` *(async function)*
 - `create_task(session, request, executor_online, continue_session_id, requested_by_user_id, requested_by_email, can_approve_push, require_active_binding, mission_id, attempt_reason)` *(async function)*
 - `retry_mission(session, mission_id)` *(async function)*
@@ -1066,6 +1083,8 @@ tests/
 - `get_task_for_projects(session, task_id, project_ids)` *(async function)* — "A task the caller may see, or None."
 - `get_mission_for_projects(session, mission_id, project_ids)` *(async function)*
 - `get_mission_active_task(session, mission)` *(async function)*
+- `get_mission_issue_snapshot(session, mission_id)` *(async function)*
+- `find_active_issue_mission_snapshots(session)` *(async function)*
 - `list_mission_attempts(session, mission_id)` *(async function)*
 - `list_mission_events_page(session, mission_id)` *(async function)*
 - `mission_has_attempt_completion(session, mission_id)` *(async function)*
@@ -2072,6 +2091,19 @@ tests/
 - `test_a_result_with_no_epic_id_is_ignored_not_raised(factory)` *(async function)*
 - `test_apply_epic_materialization_ignores_non_issue_keys_and_unknown_issue_ids(factory)` *(async function)* — "Positive control: the real issue id updates; two adversarial-ish"
 
+### `tests/integration/test_issue_resolution.py`
+
+- `users_file(tmp_path)`
+- `api(users_file, monkeypatch)` *(async function)*
+- `auth(token)`
+- `test_snapshot_hash_is_deterministic_and_ordered(api)` *(async function)*
+- `test_resolve_issue_creates_traceable_mission_and_immutable_snapshot(api)` *(async function)*
+- `test_equivalent_request_reuses_active_mission(api)` *(async function)*
+- `test_force_new_creates_an_explicit_new_run(api)` *(async function)*
+- `test_issue_drift_holds_existing_mission_for_human(api)` *(async function)*
+- `test_resolve_issue_requires_submit_scope_and_visible_project(api)` *(async function)*
+- `test_agent_success_does_not_close_source_issue(api)` *(async function)*
+
 ### `tests/integration/test_mcp_epics_issues.py`
 
 > The epics/issues MCP tools -- issue #78.
@@ -2511,6 +2543,7 @@ tests/
 - `db_session()` *(async function)*
 - `test_tool_schema_exposes_the_operator_facing_node_selector()`
 - `test_happy_path_resolves_project_and_returns_eta_fields(db_session)` *(async function)*
+- `test_resolve_issue_as_mission_mcp_uses_the_shared_issue_flow(db_session)` *(async function)*
 - `test_operator_can_target_a_bridge_node_by_its_human_name(db_session)` *(async function)*
 - `test_named_node_requires_an_active_workspace_binding(db_session)` *(async function)*
 - `test_named_node_rejects_an_inactive_workspace_binding(db_session)` *(async function)*
@@ -3198,6 +3231,7 @@ tests/
 - `test_create_all_does_not_repair_an_existing_table(tmp_path)` — "The premise of the guard, asserted rather than assumed."
 - `test_engine_and_delivery_columns_are_required(tmp_path)` — "Migration 0008: engine/issue_ref/delivery_json/delivery_result_json."
 - `test_mission_id_column_is_required(tmp_path)` — "Migration 0017: existing task tables must get the Mission FK column."
+- `test_mission_issue_snapshots_table_is_registered()`
 - `test_required_tables_cannot_fire_at_boot_today()` — "`REQUIRED_TABLES` is documentation, not a boot gate — pinned, not fixed."
 
 ### `tests/unit/test_security.py`

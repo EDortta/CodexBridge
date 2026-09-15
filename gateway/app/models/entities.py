@@ -368,6 +368,28 @@ class MissionEventModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class MissionIssueSnapshotModel(Base):
+    """Immutable source issue state a Mission was planned from."""
+
+    __tablename__ = "mission_issue_snapshots"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(String(128), ForeignKey("missions.id"))
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    issue_id: Mapped[str] = mapped_column(String(128), ForeignKey("issues.id"))
+    provider: Mapped[str] = mapped_column(String(32))
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    issue_revision: Mapped[int] = mapped_column(Integer)
+    canonical_hash: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32))
+    labels_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    dependencies_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    snapshot_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class EpicModel(Base):
     __tablename__ = "epics"
 

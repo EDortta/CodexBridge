@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.19.0
+  version: 1.20.0
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -1926,6 +1926,51 @@ paths:
         '401': {$ref: '#/components/responses/Unauthenticated'}
         '403': {$ref: '#/components/responses/PermissionDenied'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/missions/resolve-issue:
+    post:
+      operationId: resolveIssueAsMission
+      tags: [missions]
+      summary: Resolve a stored issue as a mission
+      description: |
+        Creates or reuses one active Mission for a project issue already
+        represented in the gateway's issue catalogue. The gateway snapshots
+        the provider-neutral issue state used for planning and never rewrites
+        that snapshot. A later equivalent request returns the same active
+        Mission unless `forceNew` is true.
+
+        If the current issue state materially differs from the snapshot used
+        by the active Mission, the Mission is held for human attention and the
+        timeline records `mission.issue_drift_detected`; the stored planning
+        snapshot is not mutated. Successful execution does not close or update
+        the source issue.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveIssueAsMissionRequest'
+      responses:
+        '201':
+          description: The created or reused mission.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveIssueAsMissionResponse'
+        '400': {$ref: '#/components/responses/ValidationFailed'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
         '429': {$ref: '#/components/responses/RateLimited'}
         '500': {$ref: '#/components/responses/InternalError'}
 
@@ -5378,9 +5423,8 @@ components:
       description: |
         Present exactly when `Mission.blocked` is `true`. `code` is stable and
         machine-readable; `summary` is redacted human text, safe to render
-        directly. This build reports one code: `awaiting_approval` — the only
-        state a mission is held in without the agent protocol having a way to
-        move it forward on its own.
+        directly. This build reports `awaiting_approval` and `issue_drift`;
+        both require operator attention before the mission may proceed.
       required: [code, summary]
       properties:
         code:
@@ -5627,14 +5671,89 @@ components:
         baseBranch:
           type: string
           maxLength: 200
-          description: Defaults to `development`.
         remote:
           type: string
           maxLength: 200
-          description: Defaults to `origin`.
         commitSubject:
-          type: string
+          type: [string, 'null']
           maxLength: 200
+
+    ResolveIssueAsMissionRequest:
+      type: object
+      description: |
+        Request to create or reuse a Mission from an immutable source-issue
+        snapshot. `issue` names an issue already stored in this gateway:
+        `local:<id>`, the local id, `gh:<number>` for a GitHub-backed row, or
+        that row's provider `externalId`. It never carries a filesystem path,
+        command, token or provider credential.
+      required: [projectId, issue]
+      properties:
+        projectId:
+          $ref: '#/components/schemas/ProjectId'
+        issue:
+          type: string
+          minLength: 1
+          maxLength: 512
+        executorId:
+          type: string
+          maxLength: 128
+        objective:
+          type: string
+          minLength: 1
+          maxLength: 12000
+          description: Optional operator intent. Omitted, the server builds one from the immutable issue snapshot.
+        mode:
+          type: string
+          description: One of `TaskMode`. Defaults to `implement`.
+        priority:
+          type: string
+          description: One of `TaskPriority`. Defaults to `normal`.
+        engine:
+          type: string
+          description: Which development-agent CLI runs this mission. Defaults to `codex`.
+        timeoutSeconds:
+          type: integer
+          minimum: 30
+          maximum: 86400
+        runWhenAvailable:
+          type: boolean
+        delivery:
+          $ref: '#/components/schemas/CreateMissionDelivery'
+        forceNew:
+          type: boolean
+          description: Explicit rerun switch. When false, an equivalent active mission is reused.
+
+    SourceIssueSnapshot:
+      type: object
+      required: [provider, issueId, snapshotHash, snapshotRevision]
+      properties:
+        provider:
+          type: string
+        issueId:
+          $ref: '#/components/schemas/Id'
+        externalId:
+          type: [string, 'null']
+        snapshotHash:
+          type: string
+          minLength: 64
+          maxLength: 64
+        snapshotRevision:
+          type: integer
+
+    ResolveIssueAsMissionResponse:
+      allOf:
+        - $ref: '#/components/schemas/Mission'
+        - type: object
+          required: [sourceIssue, reused, driftDetected]
+          properties:
+            sourceIssue:
+              $ref: '#/components/schemas/SourceIssueSnapshot'
+            reused:
+              type: boolean
+              description: True when an equivalent active mission already existed.
+            driftDetected:
+              type: boolean
+              description: True when the active mission's planning snapshot differs from the current issue state.
 
     MissionDeliveryOutcome:
       type: string

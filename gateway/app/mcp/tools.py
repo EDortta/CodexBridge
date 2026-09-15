@@ -213,6 +213,45 @@ def tool_definitions(default_engine: str = "claude") -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "resolve_issue_as_mission",
+            "title": "Resolve issue as mission",
+            "description": (
+                "Criar ou reutilizar uma Mission governada a partir de uma issue cadastrada no "
+                "gateway. Usa snapshot imutavel da issue, detecta drift e nunca fecha a issue "
+                "de origem automaticamente."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "project_id, nome, ou prefixo unico de um dos dois.",
+                    },
+                    "issue": {
+                        "type": "string",
+                        "description": "id local, local:<id>, gh:<numero>, ou external_id de uma issue ja cadastrada.",
+                    },
+                    "request": {"type": "string", "maxLength": 8000},
+                    "engine": {
+                        "type": "string",
+                        "enum": ["claude", "codex", "cursor-agent", "gemini", "opencode", "aider"],
+                        "default": default_engine,
+                    },
+                    "executor_id": {"type": "string"},
+                    "mode": {"type": "string", "enum": ["analyze", "review", "edit", "test", "implement"], "default": "implement"},
+                    "branch": {"type": "string"},
+                    "allow_push": {"type": "boolean", "default": False},
+                    "base_branch": {"type": "string", "default": "development"},
+                    "timeout_seconds": {"type": "integer", "minimum": 30, "maximum": 86400, "default": 3600},
+                    "priority": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
+                    "run_when_available": {"type": "boolean", "default": True},
+                    "force_new": {"type": "boolean", "default": False},
+                },
+                "required": ["project", "issue"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "bind_project_forge",
             "title": "Bind project to a forge repository",
             "description": (

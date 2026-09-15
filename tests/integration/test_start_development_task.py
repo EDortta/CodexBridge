@@ -134,6 +134,10 @@ def test_tool_schema_exposes_the_operator_facing_node_selector() -> None:
     assert "banco deste gateway" in list_issues["description"]
     assert "Nao inspeciona arquivos" in list_issues["description"]
 
+    resolve_issue = next(item for item in tool_definitions() if item["name"] == "resolve_issue_as_mission")
+    assert resolve_issue["inputSchema"]["required"] == ["project", "issue"]
+    assert "snapshot imutavel" in resolve_issue["description"]
+
 
 @pytest.mark.asyncio
 async def test_happy_path_resolves_project_and_returns_eta_fields(db_session: AsyncSession):
@@ -151,6 +155,49 @@ async def test_happy_path_resolves_project_and_returns_eta_fields(db_session: As
     assert payload["eta_sample_size"] == 0
     task = await store.get_task(db_session, payload["task_id"])
     assert task.state == "queued"
+
+
+@pytest.mark.asyncio
+async def test_resolve_issue_as_mission_mcp_uses_the_shared_issue_flow(db_session: AsyncSession):
+    issue = await store.create_issue(
+        db_session,
+        project_id="p1",
+        epic_id=None,
+        title="Implement the thing",
+        description="Do it through a Mission.",
+        status=None,
+        priority=None,
+        labels=None,
+        assignee_user_id=None,
+        assignee_email=None,
+        dependencies=None,
+        blocked_reason=None,
+        actor_user_id="admin",
+        actor_email="admin@example.com",
+    )
+    hub = DummyHub()
+    hub.connected.add("T610")
+    response = await handle_mcp_call(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "resolve_issue_as_mission",
+                "arguments": {"project": "p1", "issue": f"local:{issue.id}"},
+            },
+        },
+        db_session,
+        hub,
+        ADMIN,
+    )
+    payload = response["result"]["structuredContent"]
+    assert payload["issue_id"] == issue.id
+    assert payload["reused"] is False
+    assert payload["drift_detected"] is False
+    task = await store.get_task(db_session, payload["task_id"])
+    assert task.mission_id == payload["mission_id"]
+    assert task.issue_ref == f"local:{issue.id}"
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ from gateway.app.services import store
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
 from gateway.app.services.audit import record_event
 from gateway.app.services.issue_render import render_epic_markdown, epic_directory_slug
+from gateway.app.services.issue_resolution import resolve_issue_as_mission
 from gateway.app.services.forge_routing import project_forge_binding
 from gateway.app.services.issue_types import IssuePlanningError
 from gateway.app.mcp.tools import tool_definitions
@@ -828,6 +829,76 @@ async def handle_mcp_call(
         }
         result = _text_result(
             f"Mission {task.mission_id} created with attempt {task.id} in state {task.state}, running on engine {task.engine}.",
+            payload,
+        )
+    elif tool_name == "resolve_issue_as_mission":
+        require_scope("codexbridge.task.submit")
+        project = await _resolve_project_for_forge_tool(session, principal, str(arguments["project"]))
+
+        executor_id = await _resolve_executor_for_project(session, hub, project, arguments.get("executor_id"))
+        executor = await session.get(ExecutorModel, executor_id)
+        if executor is None:
+            raise HTTPException(status_code=404, detail="unknown_executor")
+
+        engine_value = arguments.get("engine", settings.default_engine.value)
+        all_engines = get_all_engines()
+        if not any(reg.engine == engine_value and reg.implemented for reg in all_engines.values()):
+            raise HTTPException(status_code=400, detail=f"engine_not_implemented:{engine_value}")
+
+        allow_push = bool(arguments.get("allow_push", False))
+        branch = arguments.get("branch")
+        if allow_push:
+            require_scope("codexbridge.task.approve")
+            if principal is not None and not (principal.can_approve_sensitive or principal.is_admin()):
+                raise HTTPException(status_code=403, detail="approval_not_allowed")
+            if not branch:
+                raise HTTPException(status_code=400, detail="branch_required_for_push")
+            if not PUSHABLE_BRANCH_PATTERN.match(branch):
+                raise HTTPException(status_code=400, detail="branch_not_pushable")
+        delivery = (
+            DeliveryRequest(branch=branch, allow_push=allow_push, base_branch=arguments.get("base_branch", "development"))
+            if branch
+            else None
+        )
+        try:
+            resolved = await resolve_issue_as_mission(
+                session,
+                hub=hub,
+                project_id=project.id,
+                issue_ref=str(arguments["issue"]),
+                executor=executor,
+                objective=arguments.get("request"),
+                mode=TaskMode(arguments.get("mode", "implement")),
+                timeout_seconds=int(arguments.get("timeout_seconds", 3600)),
+                priority=TaskPriority(arguments.get("priority", "normal")),
+                run_when_available=bool(arguments.get("run_when_available", True)),
+                engine=AgentEngine(engine_value),
+                delivery=delivery,
+                force_new=bool(arguments.get("force_new", False)),
+                requested_by_user_id=principal.user_id if principal else None,
+                requested_by_email=principal.email if principal else None,
+                can_approve_push=bool(principal is not None and (principal.can_approve_sensitive or principal.is_admin())),
+            )
+        except ValueError as exc:
+            if str(exc) == "unknown_issue":
+                raise HTTPException(status_code=404, detail="unknown_issue") from exc
+            raise
+        task = resolved.task
+        payload = {
+            "mission_id": resolved.mission.id,
+            "task_id": task.id if task else resolved.mission.active_task_id,
+            "state": resolved.mission.state,
+            "project_id": resolved.mission.project_id,
+            "executor_id": resolved.mission.selected_executor_id,
+            "issue_id": resolved.snapshot.issue.id,
+            "provider": resolved.snapshot.issue.provider,
+            "external_id": resolved.snapshot.issue.external_id,
+            "snapshot_hash": resolved.snapshot.canonical_hash,
+            "reused": resolved.reused,
+            "drift_detected": resolved.drift_detected,
+        }
+        result = _text_result(
+            f"Mission {resolved.mission.id} {'reused' if resolved.reused else 'created'} for issue {resolved.snapshot.issue.id}.",
             payload,
         )
     elif tool_name == "bind_project_forge":

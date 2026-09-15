@@ -37,6 +37,7 @@ from gateway.app.api.routes.sessions import redact
 from gateway.app.core.users import AuthenticatedPrincipal
 from gateway.app.db.session import get_session
 from gateway.app.models.entities import ExecutorModel, IssueModel, MissionEventModel, MissionModel, ProjectModel, TaskModel
+from gateway.app.services.issue_resolution import resolve_issue_as_mission
 from gateway.app.services import store
 from gateway.app.services.audit import record_event
 from gateway.app.services.agent_hub import AgentHub, hub_envelope
@@ -147,6 +148,22 @@ class CreateMissionRequest(BaseModel):
     delivery: CreateMissionDelivery | None = None
 
 
+class ResolveIssueAsMissionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(alias="projectId", min_length=1, max_length=128)
+    issue: str = Field(min_length=1, max_length=512)
+    executor_id: str | None = Field(default=None, alias="executorId", max_length=128)
+    objective: str | None = Field(default=None, min_length=1, max_length=12000)
+    mode: TaskMode = TaskMode.IMPLEMENT
+    priority: TaskPriority = TaskPriority.NORMAL
+    engine: AgentEngine = AgentEngine.CODEX
+    timeout_seconds: int = Field(default=3600, ge=30, le=86400, alias="timeoutSeconds")
+    run_when_available: bool = Field(default=True, alias="runWhenAvailable")
+    delivery: CreateMissionDelivery | None = None
+    force_new: bool = Field(default=False, alias="forceNew")
+
+
 def _iso(value: datetime | None) -> str | None:
     return timestamps.utc_z(value)
 
@@ -167,7 +184,8 @@ def _blocked_reason(mission: MissionModel) -> dict | None:
     if mission.state not in {"waiting_human", "blocked"}:
         return None
     summary = redact(mission.last_error) or "Held for operator input before it may proceed."
-    return {"code": BLOCKED_REASON_AWAITING_APPROVAL, "summary": summary}
+    code = "issue_drift" if mission.last_error and "Source issue changed" in mission.last_error else BLOCKED_REASON_AWAITING_APPROVAL
+    return {"code": code, "summary": summary}
 
 
 def _delivery_dto(raw_json: str | None) -> dict | None:
@@ -333,6 +351,72 @@ async def list_missions(
         position_of=lambda mission: {"createdAt": _cursor_time(mission.created_at), "id": mission.id},
     )
     return {"items": [_mission_dto(mission) for mission in page], "page": info}
+
+
+@router.post("/missions/resolve-issue", tags=["missions"], status_code=201)
+async def resolve_issue_mission(
+    payload: ResolveIssueAsMissionRequest,
+    response: Response,
+    principal: AuthenticatedPrincipal = Depends(require_action(permissions.MISSIONS_CREATE)),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Resolve a stored source issue as a durable Mission."""
+    from gateway.app.main import hub
+
+    projects = visible_projects(principal)
+    if projects is not None and payload.project_id not in projects:
+        raise ApiError(status_code=404, code=NOT_FOUND, message="No such project.")
+    project = await session.get(ProjectModel, payload.project_id)
+    if project is None or not project.enabled:
+        raise ApiError(status_code=404, code=NOT_FOUND, message="No such project.")
+
+    if payload.engine.value not in IMPLEMENTED_ENGINES:
+        raise _validation_error(
+            "engine", "engine_not_implemented", f"engine {payload.engine.value!r} is not implemented."
+        )
+    delivery: DeliveryRequest | None = None
+    if payload.delivery is not None:
+        if payload.delivery.allow_push:
+            _require_push_authority(principal, payload.delivery)
+        delivery = payload.delivery.to_protocol()
+    executor = await _resolve_executor(session, hub, payload.project_id, payload.executor_id)
+
+    try:
+        resolved = await resolve_issue_as_mission(
+            session,
+            hub=hub,
+            project_id=payload.project_id,
+            issue_ref=payload.issue,
+            executor=executor,
+            objective=payload.objective,
+            mode=payload.mode,
+            priority=payload.priority,
+            engine=payload.engine,
+            timeout_seconds=payload.timeout_seconds,
+            run_when_available=payload.run_when_available,
+            delivery=delivery,
+            force_new=payload.force_new,
+            requested_by_user_id=principal.user_id,
+            requested_by_email=principal.email,
+            can_approve_push=bool(principal.can_approve_sensitive or principal.is_admin()),
+        )
+    except ValueError as exc:
+        if str(exc) == "unknown_issue":
+            raise ApiError(status_code=404, code=NOT_FOUND, message="No such issue.") from exc
+        raise _task_creation_error(exc) from exc
+
+    body = _mission_dto(resolved.mission, resolved.task)
+    body["sourceIssue"] = {
+        "provider": resolved.snapshot.issue.provider,
+        "issueId": resolved.snapshot.issue.id,
+        "externalId": resolved.snapshot.issue.external_id,
+        "snapshotHash": resolved.snapshot.canonical_hash,
+        "snapshotRevision": resolved.snapshot.issue.revision,
+    }
+    body["reused"] = resolved.reused
+    body["driftDetected"] = resolved.drift_detected
+    response.headers[concurrency.ETAG_HEADER] = concurrency.etag_for(resolved.mission.revision)
+    return body
 
 
 @router.get("/missions/{mission_id}", tags=["missions"])

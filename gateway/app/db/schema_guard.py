@@ -71,6 +71,7 @@ REQUIRED_TABLES: dict[str, str] = {
     "missions": "0017_durable_missions.sql",
     "mission_attempts": "0017_durable_missions.sql",
     "mission_events": "0017_durable_missions.sql",
+    "mission_issue_snapshots": "0018_mission_issue_snapshots.sql",
 }
 
 # READ THIS BEFORE TRUSTING THE TABLE ABOVE.
