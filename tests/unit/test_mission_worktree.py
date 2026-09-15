@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_bridge_agent.mission_worktree import (
+from agent.codex_bridge_agent.mission_worktree import (
     MissionWorktreeError,
     acquire_mission_worktree,
     names_for,
