@@ -1,0 +1,100 @@
+ISSUE: #44 issue-to-Mission workflow foundation
+TIMESTAMP_UTC: 20260915-025004Z
+HOST: devel3
+BRANCH: development
+HEAD: b4bd4bdd89e1fb16c2cc60a3547739310ecf4541
+
+== WORKTREE ==
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/results/20260915-025004Z-devel3-issue44-foundation.txt
+
+== REQUIRED FILES ==
+OK migrations/0017_durable_missions.sql
+OK migrations/0018_mission_issue_snapshots.sql
+OK gateway/app/models/entities.py
+
+== MIGRATION 0018 CONTENT ==
+-- Issue #44: immutable source-issue snapshots for durable Missions.
+--
+-- A Mission must keep the issue state it was planned from even when the
+-- provider/local issue changes later.  This table is append-only by design:
+-- drift creates Mission events / replanning decisions; it never rewrites the
+-- planning basis stored here.
+
+CREATE TABLE mission_issue_snapshots (
+    id VARCHAR(128) PRIMARY KEY,
+    mission_id VARCHAR(128) NOT NULL,
+    project_id VARCHAR(128) NOT NULL,
+    issue_id VARCHAR(128) NOT NULL,
+    provider VARCHAR(32) NOT NULL,
+    external_id VARCHAR(255),
+    issue_revision INTEGER NOT NULL,
+    canonical_hash VARCHAR(64) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    status VARCHAR(32) NOT NULL,
+    labels_json TEXT NOT NULL DEFAULT '[]',
+    dependencies_json TEXT NOT NULL DEFAULT '[]',
+    snapshot_json TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    CONSTRAINT fk_mission_issue_snapshots_mission FOREIGN KEY (mission_id) REFERENCES missions(id),
+    CONSTRAINT fk_mission_issue_snapshots_project FOREIGN KEY (project_id) REFERENCES projects(id),
+    CONSTRAINT fk_mission_issue_snapshots_issue FOREIGN KEY (issue_id) REFERENCES issues(id),
+    CONSTRAINT uq_mission_issue_snapshot_mission UNIQUE (mission_id)
+);
+
+CREATE INDEX mission_issue_snapshots_source_idx
+    ON mission_issue_snapshots (project_id, provider, issue_id, issue_revision);
+
+CREATE INDEX mission_issue_snapshots_hash_idx
+    ON mission_issue_snapshots (canonical_hash);
+
+== MODEL IMPORT SMOKE ==
+MODEL_IMPORT: OK
+MissionModel: True
+IssueModel: True
+MissionIssueSnapshotModel: False
+
+== MIGRATION TESTS ==
+ERROR: file or directory not found: tests/test_migrations.py
+
+
+no tests ran in 0.00s
+
+== MISSION FOCUSED TESTS ==
+........................................................................ [ 78%]
+....................                                                     [100%]
+=============================== warnings summary ===============================
+tests/integration/test_missions.py::test_missions_require_a_token
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+tests/integration/test_missions.py::test_missions_require_a_token
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+92 passed, 2 warnings in 9.29s
+
+== CONTRACT / GOVERNANCE FRESHNESS ==
+ERROR: file or directory not found: tests/test_docs_and_governance.py
+
+
+no tests ran in 0.00s
+
+RESULT_CODES: model=0 migrations=4 missions=0 docs=4
+RESULT_FILE: temp-tools/results/20260915-025004Z-devel3-issue44-foundation.txt
