@@ -23,6 +23,13 @@ git status --short
 cat > "$PROMPT" <<'EOF'
 You are implementing CodexBridge issue #44 on the CURRENT development checkout. Implement the feature; do not stop at planning.
 
+OPERATOR AUTHORIZATION FOR THIS SESSION:
+- Esteban explicitly authorizes continuing issue #44 now, despite the GovernanceKit after-hours/concurrency warning.
+- Treat the current concurrency/time warning as an operator-approved exception ONLY for this CodexBridge #44 implementation session.
+- Do not disable, edit, weaken, or bypass GovernanceKit globally.
+- Do not ignore any other governance, security, authorization, approval, test, secret-handling, or delivery rule.
+- If GovernanceKit reports the same concurrency/time condition, record it and continue #44. Stop only for a different material blocker requiring operator input.
+
 Source issue #44: "Implement issue-to-mission development workflow".
 
 Objective:
