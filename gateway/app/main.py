@@ -429,6 +429,7 @@ async def oauth_metadata() -> dict:
 
 
 @app.get("/.well-known/oauth-protected-resource")
+@app.get("/.well-known/oauth-protected-resource/mcp")
 async def oauth_protected_resource() -> dict:
     return protected_resource_metadata()
 
