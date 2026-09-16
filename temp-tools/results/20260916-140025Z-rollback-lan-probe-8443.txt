@@ -1,0 +1,47 @@
+== rollback false LAN assumption ==
+devel3 and Frida are NOT on the same connected LAN; identical RFC1918 ranges are unrelated
+== remove only CodexBridge pin added by script 31 ==
+186.194.227.198 codexbridge.inovacaosistemas.com.br
+== restore agent public route ==
+CODEX_BRIDGE_AGENT_GATEWAY_WS_URL=wss://codexbridge.inovacaosistemas.com.br:8443/agent/ws
+== public route probes from devel3 ==
+*   Trying 186.194.227.198:8443...
+* After 5978ms connect time, move on!
+* connect to 186.194.227.198 port 8443 failed: Connection timed out
+* Connection timeout after 6000 ms
+* Closing connection 0
+curl_8443_rc=28
+
+{ [5 bytes data]
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+{ [297 bytes data]
+* old SSL session ID is stale, removing
+* TLSv1.2 (IN), TLS header, Supplemental data (23):
+{ [5 bytes data]
+* Connection state changed (MAX_CONCURRENT_STREAMS == 128)!
+* TLSv1.2 (OUT), TLS header, Supplemental data (23):
+} [5 bytes data]
+* TLSv1.2 (IN), TLS header, Supplemental data (23):
+{ [5 bytes data]
+< HTTP/2 200 
+< server: nginx/1.22.1
+< date: Wed, 16 Sep 2026 14:00:32 GMT
+< content-type: application/json
+< content-length: 52
+< x-request-id: 303bc54e-00f5-44f2-95bc-ebc54b74e846
+< 
+{ [52 bytes data]
+* Connection #0 to host codexbridge.inovacaosistemas.com.br left intact
+curl_443_rc=0
+{"status":"ok","time":"2026-09-16T14:00:32.506828Z"}== restart agent on intended public 8443 route ==
+active
+Sep 16 10:59:09 devel3 python[586595]: connection_failed error_type=TimeoutError retry_in_seconds=30.268
+Sep 16 10:59:49 devel3 python[586595]: connection_failed error_type=TimeoutError retry_in_seconds=30.687
+Sep 16 11:00:30 devel3 python[586595]: connection_failed error_type=TimeoutError retry_in_seconds=30.308
+Sep 16 11:00:32 devel3 systemd[1]: Stopping Codex Bridge Agent...
+Sep 16 11:00:32 devel3 systemd[1]: codex-bridge-agent.service: Deactivated successfully.
+Sep 16 11:00:32 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 11:00:32 devel3 systemd[1]: Started Codex Bridge Agent.
+== interpretation ==
+8443 is NOT reachable from devel3. Because Frida is remote, this is NOT a hairpin/LAN issue. Inspect the public 8443 forwarding/firewall path at the Frida site.
+ROLLBACK_COMPLETE
