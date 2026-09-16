@@ -1,0 +1,124 @@
+== service ==
+● codex-bridge-agent.service - Codex Bridge Agent
+     Loaded: loaded (/etc/systemd/system/codex-bridge-agent.service; enabled; vendor preset: enabled)
+     Active: activating (auto-restart) (Result: exit-code) since Wed 2026-09-16 09:17:45 -03; 294ms ago
+    Process: 564589 ExecStart=/opt/codex-bridge/.venv/bin/python -m agent.codex_bridge_agent.service (code=exited, status=226/NAMESPACE)
+   Main PID: 564589 (code=exited, status=226/NAMESPACE)
+        CPU: 2ms
+
+Sep 16 09:17:45 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:17:45 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+
+== journal ==
+Sep 16 09:16:48 devel3 systemd[563912]: codex-bridge-agent.service: Failed at step NAMESPACE spawning /opt/codex-bridge/.venv/bin/python: No such file or directory
+Sep 16 09:16:48 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:16:48 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+Sep 16 09:16:53 devel3 systemd[1]: codex-bridge-agent.service: Scheduled restart job, restart counter is at 11.
+Sep 16 09:16:53 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 09:16:53 devel3 systemd[1]: Started Codex Bridge Agent.
+Sep 16 09:16:53 devel3 systemd[563950]: codex-bridge-agent.service: Failed to set up mount namespacing: /run/systemd/unit-root/home/codexbridge/.claude: No such file or directory
+Sep 16 09:16:53 devel3 systemd[563950]: codex-bridge-agent.service: Failed at step NAMESPACE spawning /opt/codex-bridge/.venv/bin/python: No such file or directory
+Sep 16 09:16:53 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:16:53 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+Sep 16 09:16:58 devel3 systemd[1]: codex-bridge-agent.service: Scheduled restart job, restart counter is at 12.
+Sep 16 09:16:58 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 09:16:58 devel3 systemd[1]: Started Codex Bridge Agent.
+Sep 16 09:16:58 devel3 systemd[564007]: codex-bridge-agent.service: Failed to set up mount namespacing: /run/systemd/unit-root/home/codexbridge/.claude: No such file or directory
+Sep 16 09:16:58 devel3 systemd[564007]: codex-bridge-agent.service: Failed at step NAMESPACE spawning /opt/codex-bridge/.venv/bin/python: No such file or directory
+Sep 16 09:16:58 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:16:58 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+Sep 16 09:17:03 devel3 systemd[1]: codex-bridge-agent.service: Scheduled restart job, restart counter is at 13.
+Sep 16 09:17:03 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 09:17:03 devel3 systemd[1]: Started Codex Bridge Agent.
+Sep 16 09:17:03 devel3 systemd[564083]: codex-bridge-agent.service: Failed to set up mount namespacing: /run/systemd/unit-root/home/codexbridge/.claude: No such file or directory
+Sep 16 09:17:03 devel3 systemd[564083]: codex-bridge-agent.service: Failed at step NAMESPACE spawning /opt/codex-bridge/.venv/bin/python: No such file or directory
+Sep 16 09:17:03 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:17:03 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+Sep 16 09:17:09 devel3 systemd[1]: codex-bridge-agent.service: Scheduled restart job, restart counter is at 14.
+Sep 16 09:17:09 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 09:17:09 devel3 systemd[1]: Started Codex Bridge Agent.
+Sep 16 09:17:09 devel3 systemd[564144]: codex-bridge-agent.service: Failed to set up mount namespacing: /run/systemd/unit-root/home/codexbridge/.claude: No such file or directory
+Sep 16 09:17:09 devel3 systemd[564144]: codex-bridge-agent.service: Failed at step NAMESPACE spawning /opt/codex-bridge/.venv/bin/python: No such file or directory
+Sep 16 09:17:09 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:17:09 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+Sep 16 09:17:14 devel3 systemd[1]: codex-bridge-agent.service: Scheduled restart job, restart counter is at 15.
+Sep 16 09:17:14 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 09:17:14 devel3 systemd[1]: Started Codex Bridge Agent.
+Sep 16 09:17:14 devel3 systemd[564209]: codex-bridge-agent.service: Failed to set up mount namespacing: /run/systemd/unit-root/home/codexbridge/.claude: No such file or directory
+Sep 16 09:17:14 devel3 systemd[564209]: codex-bridge-agent.service: Failed at step NAMESPACE spawning /opt/codex-bridge/.venv/bin/python: No such file or directory
+Sep 16 09:17:14 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:17:14 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+Sep 16 09:17:19 devel3 systemd[1]: codex-bridge-agent.service: Scheduled restart job, restart counter is at 16.
+Sep 16 09:17:19 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 09:17:19 devel3 systemd[1]: Started Codex Bridge Agent.
+Sep 16 09:17:19 devel3 systemd[564260]: codex-bridge-agent.service: Failed to set up mount namespacing: /run/systemd/unit-root/home/codexbridge/.claude: No such file or directory
+Sep 16 09:17:19 devel3 systemd[564260]: codex-bridge-agent.service: Failed at step NAMESPACE spawning /opt/codex-bridge/.venv/bin/python: No such file or directory
+Sep 16 09:17:19 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:17:19 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+Sep 16 09:17:24 devel3 systemd[1]: codex-bridge-agent.service: Scheduled restart job, restart counter is at 17.
+Sep 16 09:17:24 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 09:17:24 devel3 systemd[1]: Started Codex Bridge Agent.
+Sep 16 09:17:24 devel3 systemd[564293]: codex-bridge-agent.service: Failed to set up mount namespacing: /run/systemd/unit-root/home/codexbridge/.claude: No such file or directory
+Sep 16 09:17:24 devel3 systemd[564293]: codex-bridge-agent.service: Failed at step NAMESPACE spawning /opt/codex-bridge/.venv/bin/python: No such file or directory
+Sep 16 09:17:24 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:17:24 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+Sep 16 09:17:29 devel3 systemd[1]: codex-bridge-agent.service: Scheduled restart job, restart counter is at 18.
+Sep 16 09:17:29 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 09:17:29 devel3 systemd[1]: Started Codex Bridge Agent.
+Sep 16 09:17:29 devel3 systemd[564390]: codex-bridge-agent.service: Failed to set up mount namespacing: /run/systemd/unit-root/home/codexbridge/.claude: No such file or directory
+Sep 16 09:17:29 devel3 systemd[564390]: codex-bridge-agent.service: Failed at step NAMESPACE spawning /opt/codex-bridge/.venv/bin/python: No such file or directory
+Sep 16 09:17:29 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:17:29 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+Sep 16 09:17:34 devel3 systemd[1]: codex-bridge-agent.service: Scheduled restart job, restart counter is at 19.
+Sep 16 09:17:34 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 09:17:34 devel3 systemd[1]: Started Codex Bridge Agent.
+Sep 16 09:17:34 devel3 systemd[564463]: codex-bridge-agent.service: Failed to set up mount namespacing: /run/systemd/unit-root/home/codexbridge/.claude: No such file or directory
+Sep 16 09:17:34 devel3 systemd[564463]: codex-bridge-agent.service: Failed at step NAMESPACE spawning /opt/codex-bridge/.venv/bin/python: No such file or directory
+Sep 16 09:17:34 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:17:34 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+Sep 16 09:17:40 devel3 systemd[1]: codex-bridge-agent.service: Scheduled restart job, restart counter is at 20.
+Sep 16 09:17:40 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 09:17:40 devel3 systemd[1]: Started Codex Bridge Agent.
+Sep 16 09:17:40 devel3 systemd[564521]: codex-bridge-agent.service: Failed to set up mount namespacing: /run/systemd/unit-root/home/codexbridge/.claude: No such file or directory
+Sep 16 09:17:40 devel3 systemd[564521]: codex-bridge-agent.service: Failed at step NAMESPACE spawning /opt/codex-bridge/.venv/bin/python: No such file or directory
+Sep 16 09:17:40 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:17:40 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+Sep 16 09:17:45 devel3 systemd[1]: codex-bridge-agent.service: Scheduled restart job, restart counter is at 21.
+Sep 16 09:17:45 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 09:17:45 devel3 systemd[1]: Started Codex Bridge Agent.
+Sep 16 09:17:45 devel3 systemd[564589]: codex-bridge-agent.service: Failed to set up mount namespacing: /run/systemd/unit-root/home/codexbridge/.claude: No such file or directory
+Sep 16 09:17:45 devel3 systemd[564589]: codex-bridge-agent.service: Failed at step NAMESPACE spawning /opt/codex-bridge/.venv/bin/python: No such file or directory
+Sep 16 09:17:45 devel3 systemd[1]: codex-bridge-agent.service: Main process exited, code=exited, status=226/NAMESPACE
+Sep 16 09:17:45 devel3 systemd[1]: codex-bridge-agent.service: Failed with result 'exit-code'.
+
+== files ==
+drwxr-xr-x  2 root        root        4096 Sep 16 09:13 /etc/codex-bridge-agent
+drwxrwxr-x 25 codexbridge codexbridge 4096 Sep 16 09:15 /opt/codex-bridge
+drwxrwxr-x  5 codexbridge codexbridge 4096 Sep 16 09:15 /opt/codex-bridge/.venv
+drwxr-x---  3 codexbridge codexbridge 4096 Sep 16 09:03 /var/lib/codex-bridge-agent
+-rw------- 1 root root 771 Sep 16 09:13 /etc/codex-bridge-agent/env
+-rw-r--r-- 1 root root 654 Sep 16 09:13 /etc/codex-bridge-agent/projects.json
+
+== env keys only ==
+CODEX_BRIDGE_AGENT_ALLOWED_PROJECTS_FILE
+CODEX_BRIDGE_AGENT_ALLOW_GIT_DELIVERY
+CODEX_BRIDGE_AGENT_CODEX_BIN
+CODEX_BRIDGE_AGENT_EXECUTOR_ID
+CODEX_BRIDGE_AGENT_GATEWAY_WS_URL
+CODEX_BRIDGE_AGENT_HEARTBEAT_INTERVAL_SECONDS
+CODEX_BRIDGE_AGENT_MACHINE_TOKEN
+CODEX_BRIDGE_AGENT_MAX_CONCURRENT_TASKS
+CODEX_BRIDGE_AGENT_RECONNECT_MAX_SECONDS
+CODEX_BRIDGE_AGENT_RECONNECT_MIN_SECONDS
+PATH
+
+== referenced paths ==
+allowed_projects_file=/home/esteban/.config/codex-bridge-agent/allowed-projects.json exists=yes
+machine_token_file=<unset> exists=no
+
+== python/import ==
+/opt/codex-bridge/.venv/bin/python
+import_ok
+
+== processes ==
+560774 /home/esteban/.local/share/codex-bridge/.venv/bin/python -m agent.codex_bridge_agent.service
