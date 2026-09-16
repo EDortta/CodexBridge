@@ -51,3 +51,8 @@ CODEX_BRIDGE_PUBLIC_BASE_URL=https://codexbridge.inovacaosistemas.com.br
 CODEX_BRIDGE_MCP_AUTH_MODE=oauth
 
 RESULT_FILE=/home/esteban/Sync/Projects/AI/CodexBridge/temp-tools/results/20260916-132910Z-public-mcp-after-443-fix.txt
+[development d222be0] results: validate public MCP after 443 fix
+ 1 file changed, 53 insertions(+)
+ create mode 100644 temp-tools/results/20260916-132910Z-public-mcp-after-443-fix.txt
+To https://github.com/EDortta/CodexBridge.git
+   d50e5ff..d222be0  development -> development
