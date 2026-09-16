@@ -61,3 +61,8 @@ Sep 16 11:10:41 devel3 python[665595]: connection_failed error_type=TimeoutError
 == Result ==
 PUBLIC_443_OK_PUBLIC_8443_FAIL
 Frida is healthy locally, but :8443 is not reachable from devel3. Check router/NAT forwarding at the Frida site: public TCP 8443 should reach Frida HTTPS (normally local 443).
+[development f165fcf] results: check Frida public 8443 path
+ 1 file changed, 63 insertions(+)
+ create mode 100644 temp-tools/results/20260916-141047Z-check-frida-public-8443.txt
+To https://github.com/EDortta/CodexBridge.git
+   f520690..f165fcf  development -> development
