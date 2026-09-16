@@ -22,44 +22,30 @@ echo "== gateway state before repair =="
 sudo systemctl status codex-bridge-gateway.service --no-pager -l | sed -n '1,35p' || true
 sudo journalctl -u codex-bridge-gateway.service --since '-10 minutes' --no-pager | tail -n 120 || true
 
-# Do not touch a healthy gateway. Script 39 copied main.py, but the live output
-# may already prove that deployment is coherent: /health works and the agent
-# websocket is accepted. The 502 can then be only the nginx allowlist missing
-# the RFC9728 resource-derived metadata route.
 if curl -fsS --connect-timeout 5 http://127.0.0.1:18080/health >/tmp/cb-health.$$ 2>/dev/null; then
   echo "gateway_local_health=ok"
   cat /tmp/cb-health.$$
   echo
 else
   echo "gateway_local_health=failed"
-  if sudo test -d /opt/codex-bridge/.git; then
-    echo "== restore main.py from Frida deployment HEAD =="
-    sudo git -C /opt/codex-bridge checkout -- gateway/app/main.py
-    sudo systemctl restart codex-bridge-gateway.service
-    sleep 4
-    sudo systemctl is-active codex-bridge-gateway.service
-    curl -fsS --connect-timeout 5 http://127.0.0.1:18080/health
-    echo
-  else
-    echo "ERROR: gateway unhealthy and /opt/codex-bridge is not a git checkout; refusing blind overwrite"
-    exit 3
-  fi
+  exit 3
 fi
 rm -f /tmp/cb-health.$$ || true
 
-# Add compatibility at nginx instead of changing application code: ChatGPT may
-# request RFC9728 metadata for the resource path /mcp. Serve the already-working
-# protected-resource metadata at that derived URL.
+# Pick the TLS vhost, not the port-80 redirect vhost. The previous script chose
+# the first file with the server_name and landed on codexbridge-http.
 VHOST=""
 for f in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
   [ -f "$f" ] || continue
-  if sudo grep -q 'server_name codexbridge.inovacaosistemas.com.br' "$f"; then
+  if sudo grep -q 'server_name codexbridge.inovacaosistemas.com.br' "$f" \
+     && sudo grep -Eq 'listen .*443.*ssl|listen 443 ssl' "$f"; then
     VHOST="$f"
     break
   fi
 done
 if [ -z "$VHOST" ]; then
-  echo "ERROR: CodexBridge nginx vhost not found"
+  echo "ERROR: CodexBridge HTTPS nginx vhost not found"
+  sudo nginx -T 2>/dev/null | grep -n -A6 -B3 'server_name codexbridge.inovacaosistemas.com.br' || true
   exit 4
 fi
 
@@ -73,7 +59,7 @@ s = p.read_text()
 anchor = '    location /.well-known/oauth-protected-resource {\n'
 block = '''    location = /.well-known/oauth-protected-resource/mcp {\n        proxy_pass http://127.0.0.1:18080/.well-known/oauth-protected-resource;\n        proxy_http_version 1.1;\n        proxy_set_header Host $host;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto https;\n    }\n\n'''
 if anchor not in s:
-    raise SystemExit('oauth protected-resource nginx anchor not found')
+    raise SystemExit('oauth protected-resource nginx anchor not found in HTTPS vhost')
 p.write_text(s.replace(anchor, block + anchor, 1))
 PY
 else
