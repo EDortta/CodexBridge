@@ -1,0 +1,17 @@
+== CodexBridge self-onboarding ==
+bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8)
+executor=devel3
+== workspace ==
+== local project allowlist ==
+local_project=codexbridge backup=/etc/codex-bridge-agent/projects.json.bak-1789562360
+== gateway/user authorization ==
+bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8)
+gateway_project=codexbridge executor=devel3 user=esteban
+== restart services ==
+bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8)
+agent=active
+bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8)
+gateway=active
+project=codexbridge
+workspace=/srv/projects/CodexBridge
+SELF_ONBOARD_OK
