@@ -1,0 +1,20 @@
+== CodexBridge agent credential resync ==
+utc=2026-09-16T16:24:58Z
+executor_id=devel3
+ws_url=wss://codexbridge.inovacaosistemas.com.br:8443/agent/ws
+token_present=yes
+== compute current token hash locally ==
+token_hash_present=yes
+== resync gateway hash with the agent's current machine token ==
+gateway_token_hash_updated=yes
+== restart agent ==
+active
+== wait for agent connection ==
+Sep 16 13:25:09 devel3 systemd[1]: Stopping Codex Bridge Agent...
+Sep 16 13:25:09 devel3 systemd[1]: codex-bridge-agent.service: Deactivated successfully.
+Sep 16 13:25:09 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 13:25:09 devel3 systemd[1]: Started Codex Bridge Agent.
+== ask gateway for executor state through MCP ==
+curl: (22) The requested URL returned error: 401
+
+CODEXBRIDGE_AGENT_STILL_NOT_CONNECTED
