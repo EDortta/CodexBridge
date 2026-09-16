@@ -40,7 +40,7 @@ echo "token_hash_present=yes"
 echo "== resync gateway hash with the agent's current machine token =="
 REMOTE_EXECUTOR_ID="$(printf '%q' "$EXECUTOR_ID")"
 REMOTE_TOKEN_HASH="$(printf '%q' "$TOKEN_HASH")"
-ssh -p "$FRIDA_PORT" "$FRIDA" "EXECUTOR_ID=$REMOTE_EXECUTOR_ID TOKEN_HASH=$REMOTE_TOKEN_HASH python3 -" <<'PY'
+ssh -p "$FRIDA_PORT" "$FRIDA" "EXECUTOR_ID=$REMOTE_EXECUTOR_ID TOKEN_HASH=$REMOTE_TOKEN_HASH sudo -u codexbridge /bin/sh -c 'set -a; . /etc/codex-bridge/env; set +a; exec /opt/codex-bridge/.venv/bin/python -'" <<'PY'
 import asyncio
 import os
 import sys
