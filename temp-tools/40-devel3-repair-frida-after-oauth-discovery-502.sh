@@ -22,24 +22,30 @@ echo "== gateway state before repair =="
 sudo systemctl status codex-bridge-gateway.service --no-pager -l | sed -n '1,35p' || true
 sudo journalctl -u codex-bridge-gateway.service --since '-10 minutes' --no-pager | tail -n 120 || true
 
-# Script 39 copied only main.py from a newer checkout. If Frida's deployment is
-# at another commit that can make imports inconsistent and leave nginx with 502.
-# Restore main.py to Frida's own checked-out deployment before doing anything else.
-if sudo test -d /opt/codex-bridge/.git; then
-  echo "== restore main.py from Frida deployment HEAD =="
-  sudo git -C /opt/codex-bridge checkout -- gateway/app/main.py
+# Do not touch a healthy gateway. Script 39 copied main.py, but the live output
+# may already prove that deployment is coherent: /health works and the agent
+# websocket is accepted. The 502 can then be only the nginx allowlist missing
+# the RFC9728 resource-derived metadata route.
+if curl -fsS --connect-timeout 5 http://127.0.0.1:18080/health >/tmp/cb-health.$$ 2>/dev/null; then
+  echo "gateway_local_health=ok"
+  cat /tmp/cb-health.$$
+  echo
 else
-  echo "ERROR: /opt/codex-bridge is not a git checkout; refusing blind overwrite"
-  exit 3
+  echo "gateway_local_health=failed"
+  if sudo test -d /opt/codex-bridge/.git; then
+    echo "== restore main.py from Frida deployment HEAD =="
+    sudo git -C /opt/codex-bridge checkout -- gateway/app/main.py
+    sudo systemctl restart codex-bridge-gateway.service
+    sleep 4
+    sudo systemctl is-active codex-bridge-gateway.service
+    curl -fsS --connect-timeout 5 http://127.0.0.1:18080/health
+    echo
+  else
+    echo "ERROR: gateway unhealthy and /opt/codex-bridge is not a git checkout; refusing blind overwrite"
+    exit 3
+  fi
 fi
-
-sudo systemctl restart codex-bridge-gateway.service
-sleep 4
-sudo systemctl is-active codex-bridge-gateway.service
-
-echo "== local gateway health after restore =="
-curl -fsS --connect-timeout 5 http://127.0.0.1:18080/health
-echo
+rm -f /tmp/cb-health.$$ || true
 
 # Add compatibility at nginx instead of changing application code: ChatGPT may
 # request RFC9728 metadata for the resource path /mcp. Serve the already-working
@@ -70,6 +76,8 @@ if anchor not in s:
     raise SystemExit('oauth protected-resource nginx anchor not found')
 p.write_text(s.replace(anchor, block + anchor, 1))
 PY
+else
+  echo "nginx_oauth_mcp_route=already"
 fi
 
 sudo nginx -t
