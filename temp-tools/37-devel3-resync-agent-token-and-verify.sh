@@ -40,12 +40,22 @@ echo "token_hash_present=yes"
 echo "== resync gateway hash with the agent's current machine token =="
 REMOTE_EXECUTOR_ID="$(printf '%q' "$EXECUTOR_ID")"
 REMOTE_TOKEN_HASH="$(printf '%q' "$TOKEN_HASH")"
-ssh -p "$FRIDA_PORT" "$FRIDA" "EXECUTOR_ID=$REMOTE_EXECUTOR_ID TOKEN_HASH=$REMOTE_TOKEN_HASH sudo -u codexbridge /bin/sh -c 'set -a; . /etc/codex-bridge/env; set +a; exec /opt/codex-bridge/.venv/bin/python -'" <<'PY'
+ssh -p "$FRIDA_PORT" "$FRIDA" "EXECUTOR_ID=$REMOTE_EXECUTOR_ID TOKEN_HASH=$REMOTE_TOKEN_HASH /bin/bash -s" <<'REMOTE'
+set -euo pipefail
+DB_URL="$(sudo awk -F= '$1=="CODEX_BRIDGE_DATABASE_URL"{print substr($0,index($0,"=")+1)}' /etc/codex-bridge/env | tail -n1)"
+if [[ -z "$DB_URL" ]]; then
+  echo "ERROR: CODEX_BRIDGE_DATABASE_URL missing on Frida"
+  exit 2
+fi
+cd /tmp
+sudo -u codexbridge env \
+  CODEX_BRIDGE_DATABASE_URL="$DB_URL" \
+  EXECUTOR_ID="$EXECUTOR_ID" \
+  TOKEN_HASH="$TOKEN_HASH" \
+  PYTHONPATH=/opt/codex-bridge \
+  /opt/codex-bridge/.venv/bin/python - <<'PY'
 import asyncio
 import os
-import sys
-
-sys.path.insert(0, "/opt/codex-bridge")
 from gateway.app.db.session import SessionLocal
 from gateway.app.models.entities import ExecutorModel
 
@@ -62,6 +72,7 @@ async def main():
 
 asyncio.run(main())
 PY
+REMOTE
 unset TOKEN_HASH
 
 echo "== restart agent =="
