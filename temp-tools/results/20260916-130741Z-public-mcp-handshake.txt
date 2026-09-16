@@ -1,0 +1,67 @@
+== public MCP handshake diagnostic ==
+public_base=https://codexbridge.inovacaosistemas.com.br:8443
+
+== public reachability ==
+health_http=000
+
+-- initialize unauthenticated --
+status=000
+
+
+-- tools/list unauthenticated --
+status=000
+
+
+== runtime auth mode on Frida (no secrets) ==
+EnvironmentFiles=/etc/codex-bridge/env (ignore_errors=no)
+CODEX_BRIDGE_PUBLIC_BASE_URL=https://codexbridge.inovacaosistemas.com.br:8443
+CODEX_BRIDGE_MCP_AUTH_MODE=oauth
+
+== gateway status/journal tail ==
+active
+Sep 12 10:40:25 frida uvicorn[667]: INFO:     Uvicorn running on http://0.0.0.0:18080 (Press CTRL+C to quit)
+-- Boot 2a30f4162dc64cdeaf11fc2b36eb3b34 --
+Sep 12 11:15:07 frida systemd[1]: Started codex-bridge-gateway.service - Codex Bridge Gateway.
+Sep 12 11:15:45 frida uvicorn[677]: INFO:     Started server process [677]
+Sep 12 11:15:45 frida uvicorn[677]: INFO:     Waiting for application startup.
+Sep 12 11:15:46 frida uvicorn[677]: INFO:     Application startup complete.
+Sep 12 11:15:46 frida uvicorn[677]: INFO:     Uvicorn running on http://0.0.0.0:18080 (Press CTRL+C to quit)
+Sep 14 10:35:33 frida uvicorn[677]: INFO:     104.219.251.70:0 - "GET /api/session/properties HTTP/1.1" 404 Not Found
+Sep 15 02:03:43 frida uvicorn[677]: INFO:     38.211.128.10:0 - "GET /api/session/properties HTTP/1.1" 404 Not Found
+Sep 15 19:36:00 frida uvicorn[677]: INFO:     34.166.100.90:0 - "GET /api/.env HTTP/1.1" 404 Not Found
+Sep 15 19:36:19 frida uvicorn[677]: INFO:     34.166.100.90:0 - "GET /api/v1/.env HTTP/1.1" 404 Not Found
+Sep 15 19:36:19 frida uvicorn[677]: INFO:     34.166.100.90:0 - "GET /api/v2/.env HTTP/1.1" 404 Not Found
+Sep 15 19:36:21 frida uvicorn[677]: INFO:     34.166.100.90:0 - "GET /api/v3/.env HTTP/1.1" 404 Not Found
+Sep 15 19:36:22 frida uvicorn[677]: INFO:     34.166.100.90:0 - "GET /api/dev/.env HTTP/1.1" 404 Not Found
+Sep 15 19:36:22 frida uvicorn[677]: INFO:     34.166.100.90:0 - "GET /api/staging/.env HTTP/1.1" 404 Not Found
+Sep 16 09:15:34 frida systemd[1]: Stopping codex-bridge-gateway.service - Codex Bridge Gateway...
+Sep 16 09:15:34 frida uvicorn[677]: INFO:     Shutting down
+Sep 16 09:15:34 frida uvicorn[677]: INFO:     Waiting for application shutdown.
+Sep 16 09:15:35 frida uvicorn[677]: INFO:     Application shutdown complete.
+Sep 16 09:15:35 frida uvicorn[677]: INFO:     Finished server process [677]
+Sep 16 09:15:35 frida systemd[1]: codex-bridge-gateway.service: Deactivated successfully.
+Sep 16 09:15:35 frida systemd[1]: Stopped codex-bridge-gateway.service - Codex Bridge Gateway.
+Sep 16 09:15:35 frida systemd[1]: codex-bridge-gateway.service: Consumed 35min 58.577s CPU time.
+Sep 16 09:15:35 frida systemd[1]: Started codex-bridge-gateway.service - Codex Bridge Gateway.
+Sep 16 09:15:56 frida uvicorn[20246]: INFO:     Started server process [20246]
+Sep 16 09:15:56 frida uvicorn[20246]: INFO:     Waiting for application startup.
+Sep 16 09:15:58 frida uvicorn[20246]: INFO:     Application startup complete.
+Sep 16 09:15:58 frida uvicorn[20246]: INFO:     Uvicorn running on http://0.0.0.0:18080 (Press CTRL+C to quit)
+Sep 16 09:39:24 frida uvicorn[20246]: INFO:     Shutting down
+Sep 16 09:39:24 frida systemd[1]: Stopping codex-bridge-gateway.service - Codex Bridge Gateway...
+Sep 16 09:39:25 frida uvicorn[20246]: INFO:     Waiting for application shutdown.
+Sep 16 09:39:25 frida uvicorn[20246]: INFO:     Application shutdown complete.
+Sep 16 09:39:25 frida uvicorn[20246]: INFO:     Finished server process [20246]
+Sep 16 09:39:25 frida systemd[1]: codex-bridge-gateway.service: Deactivated successfully.
+Sep 16 09:39:25 frida systemd[1]: Stopped codex-bridge-gateway.service - Codex Bridge Gateway.
+Sep 16 09:39:25 frida systemd[1]: codex-bridge-gateway.service: Consumed 30.390s CPU time.
+Sep 16 09:39:25 frida systemd[1]: Started codex-bridge-gateway.service - Codex Bridge Gateway.
+Sep 16 09:39:44 frida uvicorn[23333]: INFO:     Started server process [23333]
+Sep 16 09:39:44 frida uvicorn[23333]: INFO:     Waiting for application startup.
+Sep 16 09:39:45 frida uvicorn[23333]: INFO:     Application startup complete.
+Sep 16 09:39:45 frida uvicorn[23333]: INFO:     Uvicorn running on http://0.0.0.0:18080 (Press CTRL+C to quit)
+
+== interpretation hints ==
+If unauthenticated tools/list is 200 with tool_count>0, public MCP schema is healthy and ChatGPT is likely using cached/old app metadata or a different app endpoint/auth session.
+If tools/list is 401 with OAuth discovery disabled, ChatGPT must complete OAuth before tool discovery, or the server should allow unauthenticated initialize/tools-list discovery.
+If public health works but MCP returns proxy/html/404, inspect nginx/public route rather than project onboarding.
