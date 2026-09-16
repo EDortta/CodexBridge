@@ -1,0 +1,42 @@
+== CodexBridge active 8443 repair ==
+utc=2026-09-16T14:24:02Z
+== current external state from devel3 ==
+curl: (28) Connection timeout after 6001 ms
+rc_before=28
+== inspect Frida and try automatic NAT repair ==
+frida_ip=192.168.71.248
+gateway=192.168.71.156
+-- local HTTPS --
+curl: (92) HTTP/2 stream 1 was not closed cleanly: PROTOCOL_ERROR (err 1)
+{"status":"ok","time":"2026-09-16T14:24:10.446074Z"}-- local firewall summary --
+-- UPnP discovery / mapping attempt --
+upnpc : miniupnpc library test client, version 2.2.4.
+ (c) 2005-2022 Thomas Bernard.
+Go to http://miniupnp.free.fr/ or https://miniupnp.tuxfamily.org/
+for more information.
+No IGD UPnP Device found on the network !
+upnpc : miniupnpc library test client, version 2.2.4.
+ (c) 2005-2022 Thomas Bernard.
+Go to http://miniupnp.free.fr/ or https://miniupnp.tuxfamily.org/
+for more information.
+No IGD UPnP Device found on the network !
+No IGD UPnP Device found on the network !
+upnpc : miniupnpc library test client, version 2.2.4.
+ (c) 2005-2022 Thomas Bernard.
+Go to http://miniupnp.free.fr/ or https://miniupnp.tuxfamily.org/
+for more information.
+-- mapping after attempt --
+upnpc : miniupnpc library test client, version 2.2.4.
+ (c) 2005-2022 Thomas Bernard.
+Go to http://miniupnp.free.fr/ or https://miniupnp.tuxfamily.org/
+for more information.
+-- NAT-PMP attempt if available --
+No IGD UPnP Device found on the network !
+== retest public 8443 from devel3 ==
+curl: (28) Connection timeout after 8000 ms
+rc_after=28
+FRIDA_8443_AUTOREPAIR_FAILED
+Automatic UPnP/NAT-PMP repair was unavailable or rejected by the router.
+Required router rule: TCP WAN 8443 -> codexbridge.inovacaosistemas.com.br Frida LAN 192.168.71.248:443
+Router gateway seen from Frida should be inspected for a disabled/stale port-forward rule.
+== save result ==
