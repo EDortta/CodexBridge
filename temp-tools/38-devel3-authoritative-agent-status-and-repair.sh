@@ -26,8 +26,17 @@ sudo systemctl is-active codex-bridge-agent.service
 sudo journalctl -u codex-bridge-agent.service --since '-3 minutes' --no-pager | tail -n 80 || true
 
 echo "== authoritative gateway DB state =="
-REMOTE_EXECUTOR_ID="$(printf '%q' "$EXECUTOR_ID")"
-STATUS="$({ ssh -p "$FRIDA_PORT" "$FRIDA" "EXECUTOR_ID=$REMOTE_EXECUTOR_ID sudo -u codexbridge env CODEX_BRIDGE_DATABASE_URL=\$(sudo awk -F= '\$1==\"CODEX_BRIDGE_DATABASE_URL\"{print substr(\$0,index(\$0,\"=\")+1)}' /etc/codex-bridge/env | tail -n1) /bin/sh -c 'cd /tmp && exec /opt/codex-bridge/.venv/bin/python -'" <<'PY'
+set +e
+STATUS="$(ssh -p "$FRIDA_PORT" "$FRIDA" "sudo bash -s -- '$EXECUTOR_ID'" <<'REMOTE'
+set -euo pipefail
+EXECUTOR_ID="$1"
+DB_URL="$(awk -F= '$1=="CODEX_BRIDGE_DATABASE_URL"{print substr($0,index($0,"=")+1)}' /etc/codex-bridge/env | tail -n1)"
+if [[ -z "$DB_URL" ]]; then
+  echo "gateway_status_error=missing_database_url"
+  exit 3
+fi
+sudo -u codexbridge env EXECUTOR_ID="$EXECUTOR_ID" CODEX_BRIDGE_DATABASE_URL="$DB_URL" \
+  /bin/sh -c 'cd /tmp && exec /opt/codex-bridge/.venv/bin/python -' <<'PY'
 import asyncio
 import os
 import sys
@@ -53,17 +62,22 @@ async def main():
                 print(f"node_enabled={str(bool(n.enabled)).lower()}")
                 print(f"node_admission_state={n.admission_state}")
                 print(f"node_health_reason={n.health_reason}")
+
 asyncio.run(main())
 PY
-} 2>&1)"
+REMOTE
+)"
+STATUS_RC=$?
+set -e
 printf '%s\n' "$STATUS"
+echo "gateway_status_rc=$STATUS_RC"
 
-if printf '%s\n' "$STATUS" | grep -q '^executor_connected=true$'; then
+if [[ "$STATUS_RC" -eq 0 ]] && printf '%s\n' "$STATUS" | grep -q '^executor_connected=true$'; then
   echo "CODEXBRIDGE_AGENT_CONNECTED"
   rc=0
 else
   echo "== gateway logs for rejected/failed agent handshake =="
-  ssh -p "$FRIDA_PORT" "$FRIDA" "sudo journalctl -u codex-bridge-gateway.service --since '-5 minutes' --no-pager | grep -Ei 'agent|websocket|4401|4403|4404|executor' | tail -n 120 || true"
+  ssh -p "$FRIDA_PORT" "$FRIDA" "sudo journalctl -u codex-bridge-gateway.service --since '-10 minutes' --no-pager | grep -Ei 'agent|websocket|4401|4403|4404|executor' | tail -n 160 || true"
   echo "CODEXBRIDGE_AGENT_NOT_CONNECTED"
   rc=2
 fi
