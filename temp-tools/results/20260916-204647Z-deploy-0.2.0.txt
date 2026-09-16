@@ -1,0 +1,42 @@
+== Deploy CodexBridge 0.2.0 ==
+utc=2026-09-16T20:46:47Z
+== sync local checkout ==
+From https://github.com/EDortta/CodexBridge
+ * branch            development -> FETCH_HEAD
+Already up to date.
+== verify local version sources ==
+gateway_version=0.2.0
+pyproject_version=0.2.0
+...............                                                          [100%]
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+15 passed, 2 warnings in 14.80s
+== stage release files for Frida ==
+backup=/var/backups/codex-bridge/release-20260916-204710Z
+{"status":"ok","time":"2026-09-16T20:47:36.014084Z"}
+== verify public MCP announces 0.2.0 ==
+{"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18", "serverInfo": {"name": "codex-bridge", "version": "0.2.0"}, "instructions": "Nunca envie caminhos de disco. Em start_development_task, use project para o projeto logico e node quando o operador nomear a maquina (por exemplo, 'em devel3'); use mode='analyze' para pedidos somente de leitura. Trate tarefas sensiveis como aprovacao pendente.", "capabilities": {"tools": {}}}}
+mcp_version=0.2.0
+== verify OAuth discovery ==
+oauth_discovery=ok
+== verify devel3 reconnect ==
+devel3_websocket=accepted
+CODEXBRIDGE_0_2_0_DEPLOYED
