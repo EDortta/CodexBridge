@@ -1,0 +1,11 @@
+== restore CodexBridge public edge to 8443 ==
+public_base=https://codexbridge.inovacaosistemas.com.br:8443
+== update Frida gateway env ==
+active
+CODEX_BRIDGE_PUBLIC_BASE_URL=https://codexbridge.inovacaosistemas.com.br:8443
+== validate metadata through Frida local TLS, preserving external :8443 identity ==
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+{"resource":"https://codexbridge.inovacaosistemas.com.br:8443/mcp","authorization_servers":["https://codexbridge.inovacaosistemas.com.br:8443"],"bearer_methods_supported":["header"],"scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"]}
+NOTE: devel3-to-public-8443 timeout is not authoritative for external reachability when the router lacks NAT loopback/hairpin.
+EXPECTED_CHATGPT_MCP_URL=https://codexbridge.inovacaosistemas.com.br:8443/mcp
+RESTORE_8443_OK
