@@ -1,0 +1,27 @@
+== CodexBridge public port repair probe ==
+host=codexbridge.inovacaosistemas.com.br
+
+== devel3 public 443 ==
+rc=0 http=200 remote=186.194.227.198:443
+body={"status":"ok","time":"2026-09-16T13:23:35.211077Z"}
+
+== devel3 public 8443 ==
+rc=28 curl: (28) Connection timeout after 8001 ms
+http=000 remote=:0
+
+== Frida local TLS sanity ==
+http=200
+{"status":"ok","time":"2026-09-16T13:23:44.911048Z"}
+
+== public 443 is healthy; normalize PUBLIC_BASE_URL ==
+active
+CODEX_BRIDGE_PUBLIC_BASE_URL=https://codexbridge.inovacaosistemas.com.br
+<html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx/1.22.1</center>
+</body>
+</html>
+
+PUBLIC_443_REPAIRED
