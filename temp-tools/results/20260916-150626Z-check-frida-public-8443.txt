@@ -60,3 +60,8 @@ Sep 16 12:05:24 devel3 python[665595]: connection_failed error_type=TimeoutError
 == Result ==
 PUBLIC_8443_OK
 The always-on Frida edge is reachable. Next step is MCP initialize/tools-list and agent connectivity.
+[development 0fcc730] results: check Frida public 8443 path
+ 1 file changed, 62 insertions(+)
+ create mode 100644 temp-tools/results/20260916-150626Z-check-frida-public-8443.txt
+To https://github.com/EDortta/CodexBridge.git
+   a26f3dd..0fcc730  development -> development
