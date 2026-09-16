@@ -22,3 +22,8 @@ Sep 16 12:56:22 devel3 systemd[1]: codex-bridge-agent.service: Deactivated succe
 Sep 16 12:56:22 devel3 systemd[1]: Stopped Codex Bridge Agent.
 Sep 16 12:56:22 devel3 systemd[1]: Started Codex Bridge Agent.
 AGENT_STILL_NOT_CONNECTED
+[development fcd4cfd] results: repair devel3 agent websocket after 8443 recovery
+ 1 file changed, 24 insertions(+)
+ create mode 100644 temp-tools/results/20260916-155617Z-fix-agent-websocket.txt
+To https://github.com/EDortta/CodexBridge.git
+   c4ec89d..fcd4cfd  development -> development
