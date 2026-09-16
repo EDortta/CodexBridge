@@ -15,3 +15,8 @@ node_admission_state=enrolled
 node_health_reason=None
 gateway_status_rc=0
 CODEXBRIDGE_AGENT_CONNECTED
+[development 9252134] results: authoritative devel3 agent status
+ 1 file changed, 17 insertions(+)
+ create mode 100644 temp-tools/results/20260916-163333Z-authoritative-agent-status.txt
+To https://github.com/EDortta/CodexBridge.git
+   74ac551..9252134  development -> development

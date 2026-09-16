@@ -18,3 +18,8 @@ Sep 16 13:25:09 devel3 systemd[1]: Started Codex Bridge Agent.
 curl: (22) The requested URL returned error: 401
 
 CODEXBRIDGE_AGENT_STILL_NOT_CONNECTED
+[development 84ed198] results: resync devel3 agent credential
+ 1 file changed, 20 insertions(+)
+ create mode 100644 temp-tools/results/20260916-162458Z-resync-agent-token.txt
+To https://github.com/EDortta/CodexBridge.git
+   e738dfe..84ed198  development -> development

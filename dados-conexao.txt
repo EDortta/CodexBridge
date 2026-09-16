@@ -1,0 +1,34 @@
+Use estes valores na instalação do plugin no ChatGPT:
+
+Nome: CodexBridge
+
+Descrição: Connects ChatGPT with Codex
+
+Server URL:
+https://codexbridge.inovacaosistemas.com.br:8443/mcp
+
+Authentication: OAuth
+
+Registration method: User-Defined OAuth Client
+
+OAuth Client ID:
+chatgpt-codexbridge
+
+OAuth Client Secret: deixe vazio
+
+Token endpoint auth method: none
+
+Auth URL:
+https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize
+
+Token URL:
+https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
+
+Authorization server base:
+https://codexbridge.inovacaosistemas.com.br:8443
+
+Resource:
+https://codexbridge.inovacaosistemas.com.br:8443/mcp
+
+Scopes:
+codexbridge.read codexbridge.task.submit codexbridge.task.cancel

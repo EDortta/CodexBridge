@@ -61,3 +61,8 @@ nginx: configuration file /etc/nginx/nginx.conf test is successful
 {"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
 == MCP initialize ==
 CHATGPT_OAUTH_EDGE_READY
+[development 4498a02] results: repair OAuth discovery 502
+ 1 file changed, 63 insertions(+)
+ create mode 100644 temp-tools/results/20260916-170421Z-repair-oauth-502.txt
+To https://github.com/EDortta/CodexBridge.git
+   191af54..4498a02  development -> development

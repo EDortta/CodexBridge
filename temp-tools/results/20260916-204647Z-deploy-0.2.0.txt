@@ -40,3 +40,8 @@ oauth_discovery=ok
 == verify devel3 reconnect ==
 devel3_websocket=accepted
 CODEXBRIDGE_0_2_0_DEPLOYED
+[development 675c929] results: deploy CodexBridge 0.2.0
+ 1 file changed, 42 insertions(+)
+ create mode 100644 temp-tools/results/20260916-204647Z-deploy-0.2.0.txt
+To https://github.com/EDortta/CodexBridge.git
+   89b1795..675c929  development -> development

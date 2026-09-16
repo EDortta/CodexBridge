@@ -23,3 +23,8 @@ mcp_initialize=ok
 == OAuth discovery remains healthy ==
 oauth_discovery=ok
 CODEXBRIDGE_PUBLIC_PATH_REDACTION_READY
+[development 592da8d] results: verify public path redaction
+ 1 file changed, 25 insertions(+)
+ create mode 100644 temp-tools/results/20260916-172633Z-public-path-redaction.txt
+To https://github.com/EDortta/CodexBridge.git
+   233ccb2..592da8d  development -> development
