@@ -1,0 +1,25 @@
+== Harden CodexBridge public path redaction ==
+utc=2026-09-16T17:19:22Z
+== local regression tests ==
+..........                                                               [100%]
+10 passed in 0.54s
+== verify canonical MCP boundary uses redact_sensitive_text ==
+mcp_boundary_redaction=present
+== stage deployment files ==
+== backup live files ==
+== install canonical redaction boundary ==
+== compile before restart ==
+== direct redaction proof on Frida ==
+[PATH]
+[PATH]
+frida_path_redaction=ok
+== restart gateway ==
+{"status":"ok","time":"2026-09-16T17:20:02.113358Z"}
+== wait for devel3 reconnect ==
+devel3_websocket=accepted
+== public MCP still healthy ==
+{"status":"ok","time":"2026-09-16T17:20:07.849705Z"}
+mcp_initialize=ok
+== OAuth discovery remains healthy ==
+oauth_discovery=ok
+CODEXBRIDGE_PUBLIC_PATH_REDACTION_READY
