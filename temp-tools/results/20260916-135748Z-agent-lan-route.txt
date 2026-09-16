@@ -1,0 +1,7 @@
+== CodexBridge devel3 agent LAN-route repair ==
+public endpoint remains https://codexbridge.inovacaosistemas.com.br:8443/mcp
+== discover Frida LAN address over existing SSH path ==
+frida_lan_ip=192.168.71.248
+== verify Frida HTTPS locally by LAN IP + SNI before changing anything ==
+curl: (7) Failed to connect to codexbridge.inovacaosistemas.com.br port 443 after 3076 ms: No route to host
+ERROR: Frida LAN TLS path is not healthy; no changes made

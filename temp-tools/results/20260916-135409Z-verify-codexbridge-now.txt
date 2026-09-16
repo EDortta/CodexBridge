@@ -1,0 +1,32 @@
+== CodexBridge live verification ==
+utc=2026-09-16T13:54:09Z
+host=codexbridge.inovacaosistemas.com.br
+
+== devel3 agent ==
+agent=active
+● codex-bridge-agent.service - Codex Bridge Agent
+     Loaded: loaded (/etc/systemd/system/codex-bridge-agent.service; enabled; vendor preset: enabled)
+     Active: active (running) since Wed 2026-09-16 09:39:23 -03; 1h 14min ago
+   Main PID: 586595 (python)
+      Tasks: 2 (limit: 256)
+     Memory: 21.2M (max: 2.0G available: 1.9G)
+        CPU: 484ms
+     CGroup: /system.slice/codex-bridge-agent.service
+             └─586595 /opt/codex-bridge/.venv/bin/python -m agent.codex_bridge_agent.service
+
+Sep 16 10:47:40 devel3 python[586595]: connection_failed error_type=TimeoutError retry_in_seconds=30.599
+Sep 16 10:48:21 devel3 python[586595]: connection_failed error_type=TimeoutError retry_in_seconds=30.935
+Sep 16 10:49:02 devel3 python[586595]: connection_failed error_type=TimeoutError retry_in_seconds=30.583
+Sep 16 10:49:42 devel3 python[586595]: connection_failed error_type=TimeoutError retry_in_seconds=30.424
+Sep 16 10:50:23 devel3 python[586595]: connection_failed error_type=TimeoutError retry_in_seconds=30.154
+Sep 16 10:51:03 devel3 python[586595]: connection_failed error_type=TimeoutError retry_in_seconds=30.061
+Sep 16 10:51:43 devel3 python[586595]: connection_failed error_type=TimeoutError retry_in_seconds=30.964
+Sep 16 10:52:24 devel3 python[586595]: connection_failed error_type=TimeoutError retry_in_seconds=30.378
+
+== Frida gateway ==
+active
+{"status":"ok","time":"2026-09-16T13:54:15.270801Z"}
+
+== public edge probes from devel3 ==
+curl: (28) Connection timeout after 5001 ms
+public_8443_health rc=28 http=000 body=

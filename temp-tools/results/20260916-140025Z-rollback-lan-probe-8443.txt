@@ -45,3 +45,8 @@ Sep 16 11:00:32 devel3 systemd[1]: Started Codex Bridge Agent.
 == interpretation ==
 8443 is NOT reachable from devel3. Because Frida is remote, this is NOT a hairpin/LAN issue. Inspect the public 8443 forwarding/firewall path at the Frida site.
 ROLLBACK_COMPLETE
+[development fcb3501] results: rollback false LAN route and probe 8443
+ 1 file changed, 47 insertions(+)
+ create mode 100644 temp-tools/results/20260916-140025Z-rollback-lan-probe-8443.txt
+To https://github.com/EDortta/CodexBridge.git
+   d06894b..fcb3501  development -> development
