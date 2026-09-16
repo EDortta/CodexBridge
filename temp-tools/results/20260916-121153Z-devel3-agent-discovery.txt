@@ -1,0 +1,18 @@
+== host ==
+devel3
+uid=1000(esteban) gid=1000(esteban) groups=1000(esteban),4(adm),10(uucp),20(dialout),24(cdrom),27(sudo),30(dip),46(plugdev),109(kvm),115(lpadmin),136(sambashare),143(libvirt),999(docker)
+== systemd units containing codex/bridge ==
+imac-usbmuxd-bridge.service                enabled         enabled
+  imac-tunnel.service                                   loaded    active   running SSH tunnel to iMac — ADB (5037) + usbmuxd bridge (27015)
+  imac-usbmuxd-bridge.service                           loaded    active   running iMac usbmuxd bridge — /var/run/usbmuxd → TCP 27015 (via tunnel)
+== running processes ==
+esteban     1867    1617  0 Sep15 ?        00:00:02 /home/esteban/.local/share/codex-bridge/.venv/bin/python -m agent.codex_bridge_agent.service
+== candidate config dirs/files ==
+/opt/ZeeCred/jk-dashboard-ops/projects.json
+/opt/ZeeCred/jk-structure/projects.json
+/var/lib/codex-bridge-agent
+== user ==
+codexbridge:x:999:998::/var/lib/codex-bridge-agent:/bin/sh
+== /srv/projects ==
+== result ==
+Wrote temp-tools/results/20260916-121153Z-devel3-agent-discovery.txt
