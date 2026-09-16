@@ -1,0 +1,62 @@
+== CodexBridge public 8443 check ==
+utc=2026-09-16T15:06:26Z
+source=devel3
+
+== DNS ==
+186.194.227.198 STREAM codexbridge.inovacaosistemas.com.br
+186.194.227.198 DGRAM  
+186.194.227.198 RAW    
+
+== devel3 -> public 443 ==
+{"status":"ok","time":"2026-09-16T15:06:26.318385Z"}
+http=200 remote=186.194.227.198:443
+rc443=0
+
+== devel3 -> public 8443 ==
+{"status":"ok","time":"2026-09-16T15:06:26.480524Z"}
+http=200 remote=186.194.227.198:8443
+rc8443=0
+
+== Frida local health and listeners ==
+host=frida
+ips=192.168.71.248 10.8.0.1 172.17.0.1 2804:554:28d:5400:b91:8cc7:7410:7857 
+-- listeners --
+LISTEN 0      2048         0.0.0.0:18080      0.0.0.0:*    users:(("uvicorn",pid=31979,fd=7))                                                                                                       
+LISTEN 0      511          0.0.0.0:443        0.0.0.0:*    users:(("nginx",pid=32337,fd=10),("nginx",pid=32336,fd=10),("nginx",pid=32335,fd=10),("nginx",pid=32334,fd=10),("nginx",pid=32333,fd=10))
+LISTEN 0      511             [::]:443           [::]:*    users:(("nginx",pid=32337,fd=11),("nginx",pid=32336,fd=11),("nginx",pid=32335,fd=11),("nginx",pid=32334,fd=11),("nginx",pid=32333,fd=11))
+-- gateway direct --
+{"status":"ok","time":"2026-09-16T15:06:28.271005Z"}
+-- nginx local TLS --
+{"status":"ok","time":"2026-09-16T15:06:28.457294Z"}
+-- default route --
+default via 192.168.71.156 dev eth0 proto static metric 100 
+10.8.0.0/24 dev tun0 proto kernel scope link src 10.8.0.1 
+172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1 
+192.168.71.0/24 dev eth0 proto kernel scope link src 192.168.71.248 metric 100 
+
+== devel3 agent state ==
+active
+Sep 16 11:52:34 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.587
+Sep 16 11:53:14 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.224
+Sep 16 11:53:55 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.907
+Sep 16 11:54:36 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.441
+Sep 16 11:55:16 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.954
+Sep 16 11:55:57 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.146
+Sep 16 11:56:37 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.216
+Sep 16 11:57:17 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.638
+Sep 16 11:57:58 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.221
+Sep 16 11:58:38 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.354
+Sep 16 11:59:19 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.750
+Sep 16 12:00:00 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.881
+Sep 16 12:00:41 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.047
+Sep 16 12:01:21 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.384
+Sep 16 12:02:01 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.129
+Sep 16 12:02:41 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.880
+Sep 16 12:03:22 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.687
+Sep 16 12:04:03 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.500
+Sep 16 12:04:43 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.881
+Sep 16 12:05:24 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.178
+
+== Result ==
+PUBLIC_8443_OK
+The always-on Frida edge is reachable. Next step is MCP initialize/tools-list and agent connectivity.
