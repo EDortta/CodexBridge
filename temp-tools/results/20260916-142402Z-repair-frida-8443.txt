@@ -40,3 +40,8 @@ Automatic UPnP/NAT-PMP repair was unavailable or rejected by the router.
 Required router rule: TCP WAN 8443 -> codexbridge.inovacaosistemas.com.br Frida LAN 192.168.71.248:443
 Router gateway seen from Frida should be inspected for a disabled/stale port-forward rule.
 == save result ==
+[development b6b3bca] results: active repair attempt for Frida public 8443
+ 1 file changed, 42 insertions(+)
+ create mode 100644 temp-tools/results/20260916-142402Z-repair-frida-8443.txt
+To https://github.com/EDortta/CodexBridge.git
+   e083eb4..b6b3bca  development -> development
