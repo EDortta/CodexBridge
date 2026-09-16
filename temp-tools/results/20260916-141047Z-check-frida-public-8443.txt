@@ -1,0 +1,63 @@
+== CodexBridge public 8443 check ==
+utc=2026-09-16T14:10:47Z
+source=devel3
+
+== DNS ==
+186.194.227.198 STREAM codexbridge.inovacaosistemas.com.br
+186.194.227.198 DGRAM  
+186.194.227.198 RAW    
+
+== devel3 -> public 443 ==
+{"status":"ok","time":"2026-09-16T14:10:47.724585Z"}
+http=200 remote=186.194.227.198:443
+rc443=0
+
+== devel3 -> public 8443 ==
+curl: (28) Connection timeout after 8001 ms
+
+http=000 remote=:0
+rc8443=28
+
+== Frida local health and listeners ==
+host=frida
+ips=192.168.71.248 10.8.0.1 172.17.0.1 2804:554:28d:5400:b91:8cc7:7410:7857 
+-- listeners --
+LISTEN 0      2048         0.0.0.0:18080      0.0.0.0:*    users:(("uvicorn",pid=31979,fd=7))                                                                                                       
+LISTEN 0      511          0.0.0.0:443        0.0.0.0:*    users:(("nginx",pid=32337,fd=10),("nginx",pid=32336,fd=10),("nginx",pid=32335,fd=10),("nginx",pid=32334,fd=10),("nginx",pid=32333,fd=10))
+LISTEN 0      511             [::]:443           [::]:*    users:(("nginx",pid=32337,fd=11),("nginx",pid=32336,fd=11),("nginx",pid=32335,fd=11),("nginx",pid=32334,fd=11),("nginx",pid=32333,fd=11))
+-- gateway direct --
+{"status":"ok","time":"2026-09-16T14:10:57.631488Z"}
+-- nginx local TLS --
+{"status":"ok","time":"2026-09-16T14:10:57.819629Z"}
+-- default route --
+default via 192.168.71.156 dev eth0 proto static metric 100 
+10.8.0.0/24 dev tun0 proto kernel scope link src 10.8.0.1 
+172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1 
+192.168.71.0/24 dev eth0 proto kernel scope link src 192.168.71.248 metric 100 
+
+== devel3 agent state ==
+active
+Sep 16 11:00:32 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 11:00:32 devel3 systemd[1]: Started Codex Bridge Agent.
+Sep 16 11:00:42 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=2.436
+Sep 16 11:00:55 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=4.436
+Sep 16 11:01:09 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=8.088
+Sep 16 11:01:27 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=16.321
+Sep 16 11:01:54 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.554
+Sep 16 11:02:34 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.748
+Sep 16 11:03:15 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.099
+Sep 16 11:03:55 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.585
+Sep 16 11:04:36 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.898
+Sep 16 11:05:17 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.613
+Sep 16 11:05:57 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.729
+Sep 16 11:06:38 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.768
+Sep 16 11:07:19 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.261
+Sep 16 11:07:59 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.045
+Sep 16 11:08:39 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.148
+Sep 16 11:09:20 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.983
+Sep 16 11:10:01 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.477
+Sep 16 11:10:41 devel3 python[665595]: connection_failed error_type=TimeoutError retry_in_seconds=30.076
+
+== Result ==
+PUBLIC_443_OK_PUBLIC_8443_FAIL
+Frida is healthy locally, but :8443 is not reachable from devel3. Check router/NAT forwarding at the Frida site: public TCP 8443 should reach Frida HTTPS (normally local 443).
