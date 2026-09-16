@@ -1,0 +1,244 @@
+== Diagnose ChatGPT PKCE OAuth discovery ==
+utc=2026-09-16T21:19:32Z
+== public metadata on permanent :8443 endpoint ==
+-- https://codexbridge.inovacaosistemas.com.br:8443/.well-known/oauth-authorization-server --
+HTTP/2 200 
+server: nginx/1.22.1
+date: Wed, 16 Sep 2026 21:19:33 GMT
+content-type: application/json
+content-length: 501
+x-request-id: cd4c943b-2ea3-496a-8370-9c98d260f14e
+
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+issuer= https://codexbridge.inovacaosistemas.com.br:8443
+authorization_endpoint= https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize
+token_endpoint= https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
+code_challenge_methods_supported= ['S256']
+resource= None
+authorization_servers= None
+-- https://codexbridge.inovacaosistemas.com.br:8443/.well-known/openid-configuration --
+HTTP/2 200 
+server: nginx/1.22.1
+date: Wed, 16 Sep 2026 21:19:33 GMT
+content-type: application/json
+content-length: 501
+x-request-id: 69b8bebe-a515-4128-ae97-333966e621e4
+
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+issuer= https://codexbridge.inovacaosistemas.com.br:8443
+authorization_endpoint= https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize
+token_endpoint= https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
+code_challenge_methods_supported= ['S256']
+resource= None
+authorization_servers= None
+-- https://codexbridge.inovacaosistemas.com.br:8443/.well-known/oauth-protected-resource --
+HTTP/2 200 
+server: nginx/1.22.1
+date: Wed, 16 Sep 2026 21:19:33 GMT
+content-type: application/json
+content-length: 274
+x-request-id: 7d38f6b1-3ba0-472e-ad2a-737ef8b7705b
+
+{"resource":"https://codexbridge.inovacaosistemas.com.br:8443/mcp","authorization_servers":["https://codexbridge.inovacaosistemas.com.br:8443"],"bearer_methods_supported":["header"],"scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"]}
+issuer= None
+authorization_endpoint= None
+token_endpoint= None
+code_challenge_methods_supported= None
+resource= https://codexbridge.inovacaosistemas.com.br:8443/mcp
+authorization_servers= ['https://codexbridge.inovacaosistemas.com.br:8443']
+-- https://codexbridge.inovacaosistemas.com.br:8443/.well-known/oauth-protected-resource/mcp --
+HTTP/2 200 
+server: nginx/1.22.1
+date: Wed, 16 Sep 2026 21:19:34 GMT
+content-type: application/json
+content-length: 274
+x-request-id: 4e586ada-22ea-4605-aedf-3df126d1429b
+
+{"resource":"https://codexbridge.inovacaosistemas.com.br:8443/mcp","authorization_servers":["https://codexbridge.inovacaosistemas.com.br:8443"],"bearer_methods_supported":["header"],"scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"]}
+issuer= None
+authorization_endpoint= None
+token_endpoint= None
+code_challenge_methods_supported= None
+resource= https://codexbridge.inovacaosistemas.com.br:8443/mcp
+authorization_servers= ['https://codexbridge.inovacaosistemas.com.br:8443']
+== compare legacy bare-443 endpoint ==
+-- https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-authorization-server --
+HTTP/2 200 
+server: nginx/1.22.1
+date: Wed, 16 Sep 2026 21:19:34 GMT
+content-type: application/json
+content-length: 501
+x-request-id: 65da0d20-c9aa-42bb-8899-59cf88b2219b
+
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+issuer= https://codexbridge.inovacaosistemas.com.br:8443
+authorization_endpoint= https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize
+token_endpoint= https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
+code_challenge_methods_supported= ['S256']
+resource= None
+authorization_servers= None
+-- https://codexbridge.inovacaosistemas.com.br/.well-known/openid-configuration --
+HTTP/2 200 
+server: nginx/1.22.1
+date: Wed, 16 Sep 2026 21:19:34 GMT
+content-type: application/json
+content-length: 501
+x-request-id: 59294803-cbd8-4a1c-9014-888fe59664b2
+
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+issuer= https://codexbridge.inovacaosistemas.com.br:8443
+authorization_endpoint= https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize
+token_endpoint= https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
+code_challenge_methods_supported= ['S256']
+resource= None
+authorization_servers= None
+-- https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-protected-resource --
+HTTP/2 200 
+server: nginx/1.22.1
+date: Wed, 16 Sep 2026 21:19:34 GMT
+content-type: application/json
+content-length: 274
+x-request-id: a31cac27-1049-4091-8d31-42f116e04122
+
+{"resource":"https://codexbridge.inovacaosistemas.com.br:8443/mcp","authorization_servers":["https://codexbridge.inovacaosistemas.com.br:8443"],"bearer_methods_supported":["header"],"scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"]}
+issuer= None
+authorization_endpoint= None
+token_endpoint= None
+code_challenge_methods_supported= None
+resource= https://codexbridge.inovacaosistemas.com.br:8443/mcp
+authorization_servers= ['https://codexbridge.inovacaosistemas.com.br:8443']
+-- https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-protected-resource/mcp --
+HTTP/2 200 
+server: nginx/1.22.1
+date: Wed, 16 Sep 2026 21:19:35 GMT
+content-type: application/json
+content-length: 274
+x-request-id: 5b9dff4e-2771-4b8f-842f-63c991664753
+
+{"resource":"https://codexbridge.inovacaosistemas.com.br:8443/mcp","authorization_servers":["https://codexbridge.inovacaosistemas.com.br:8443"],"bearer_methods_supported":["header"],"scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"]}
+issuer= None
+authorization_endpoint= None
+token_endpoint= None
+code_challenge_methods_supported= None
+resource= https://codexbridge.inovacaosistemas.com.br:8443/mcp
+authorization_servers= ['https://codexbridge.inovacaosistemas.com.br:8443']
+== assert PKCE S256 on :8443 authorization metadata ==
+/.well-known/oauth-authorization-server: methods=['S256']
+/.well-known/openid-configuration: methods=['S256']
+pkce_s256_public_8443=ok
+== inspect live Frida metadata and recent ChatGPT/OpenAI OAuth requests ==
+-- direct gateway authorization metadata --
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+-- direct gateway OIDC metadata --
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+-- nginx routes related to oauth/well-known --
+193:    location /.well-known/acme-challenge/ {
+194:        alias /var/www/html/.well-known/acme-challenge/;
+320:    location /.well-known/acme-challenge/ {
+321:        alias /var/www/html/.well-known/acme-challenge/;
+555:    server_name codexbridge.inovacaosistemas.com.br;
+557:    location /.well-known/acme-challenge/ {
+558:        alias /var/www/html/.well-known/acme-challenge/;
+569:    server_name codexbridge.inovacaosistemas.com.br;
+578:    location /.well-known/oauth-authorization-server {
+579:        proxy_pass http://127.0.0.1:18080/.well-known/oauth-authorization-server;
+586:    location /.well-known/openid-configuration {
+587:        proxy_pass http://127.0.0.1:18080/.well-known/openid-configuration;
+594:    location = /.well-known/oauth-protected-resource/mcp {
+595:        proxy_pass http://127.0.0.1:18080/.well-known/oauth-protected-resource;
+602:    location /.well-known/oauth-protected-resource {
+603:        proxy_pass http://127.0.0.1:18080/.well-known/oauth-protected-resource;
+610:    location /oauth/authorize {
+611:        proxy_pass http://127.0.0.1:18080/oauth/authorize;
+618:    location /oauth/token {
+619:        proxy_pass http://127.0.0.1:18080/oauth/token;
+-- recent nginx requests touching OAuth discovery --
+### /var/log/nginx/access.log
+127.0.0.1 - - [16/Sep/2026:10:23:50 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 502 157 "-" "curl/7.88.1"
+187.10.45.41 - - [16/Sep/2026:10:29:14 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 486 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:10:29:14 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 264 "-" "curl/7.81.0"
+127.0.0.1 - - [16/Sep/2026:10:45:52 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.88.1"
+127.0.0.1 - - [16/Sep/2026:10:45:54 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 274 "-" "curl/7.88.1"
+187.10.45.41 - - [16/Sep/2026:10:51:05 -0300] "GET /favicon.ico HTTP/2.0" 404 114 "https://codexbridge.inovacaosistemas.com.br/mcp" "Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0"
+187.10.45.41 - - [16/Sep/2026:13:46:07 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:13:49:49 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 502 157 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:13:57:27 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 502 157 "-" "curl/7.81.0"
+127.0.0.1 - - [16/Sep/2026:14:04:30 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.88.1"
+127.0.0.1 - - [16/Sep/2026:14:04:30 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 274 "-" "curl/7.88.1"
+127.0.0.1 - - [16/Sep/2026:14:04:31 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.88.1"
+187.10.45.41 - - [16/Sep/2026:14:04:31 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:14:04:32 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:14:04:32 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:14:20:08 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:14:27:17 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:14:46:52 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:15:08:15 -0300] "GET /oauth/authorize?response_type=code&client_id=chatgpt-codexbridge&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fconnector%2Foauth%2FH198HaN64Bbi&scope=codexbridge.read+codexbridge.task.cancel+codexbridge.task.submit&code_challenge=AdPQuJqWs5ybpUywgql71OyPbJbDkyT4q_VUWO97hdc&code_challenge_method=S256&resource=https%3A%2F%2Fcodexbridge.inovacaosistemas.com.br%3A8443%2Fmcp&state=chatgpt_scheme__oauth_s_6aaadb0ccd60819199778ee837f7f94c&ui_locales=pt-BR HTTP/2.0" 200 749 "-" "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+187.10.45.41 - - [16/Sep/2026:15:08:15 -0300] "GET /favicon.ico HTTP/2.0" 404 176 "https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize?response_type=code&client_id=chatgpt-codexbridge&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fconnector%2Foauth%2FH198HaN64Bbi&scope=codexbridge.read+codexbridge.task.cancel+codexbridge.task.submit&code_challenge=AdPQuJqWs5ybpUywgql71OyPbJbDkyT4q_VUWO97hdc&code_challenge_method=S256&resource=https%3A%2F%2Fcodexbridge.inovacaosistemas.com.br%3A8443%2Fmcp&state=chatgpt_scheme__oauth_s_6aaadb0ccd60819199778ee837f7f94c&ui_locales=pt-BR" "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+66.249.85.131 - - [16/Sep/2026:15:08:18 -0300] "GET /oauth/authorize?response_type=code&client_id=chatgpt-codexbridge&redirect_uri=https://chatgpt.com/connector/oauth/H198HaN64Bbi&scope=codexbridge.read+codexbridge.task.cancel+codexbridge.task.submit&code_challenge=AdPQuJqWs5ybpUywgql71OyPbJbDkyT4q_VUWO97hdc&code_challenge_method=S256&resource=https://codexbridge.inovacaosistemas.com.br:8443/mcp&state=chatgpt_scheme__oauth_s_6aaadb0ccd60819199778ee837f7f94c&ui_locales=pt-BR HTTP/1.1" 200 761 "-" "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36 (compatible; Google-Read-Aloud; +https://support.google.com/webmasters/answer/1061943)"
+187.10.45.41 - - [16/Sep/2026:15:08:32 -0300] "GET /oauth/authorize?response_type=code&client_id=chatgpt-codexbridge&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fconnector%2Foauth%2FH198HaN64Bbi&scope=codexbridge.read+codexbridge.task.cancel+codexbridge.task.submit&code_challenge=AdPQuJqWs5ybpUywgql71OyPbJbDkyT4q_VUWO97hdc&code_challenge_method=S256&resource=https%3A%2F%2Fcodexbridge.inovacaosistemas.com.br%3A8443%2Fmcp&state=chatgpt_scheme__oauth_s_6aaadb0ccd60819199778ee837f7f94c&ui_locales=pt-BR HTTP/1.1" 200 761 "-" "Mozilla/5.0 (X11; Ubuntu; Linux i686; rv:24.0) Gecko/20100101 Firefox/24.0 Chrome/80.0.3987.132 Safari/537.36"
+187.10.45.41 - - [16/Sep/2026:17:47:39 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:17:47:39 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:33 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:33 -0300] "GET /.well-known/openid-configuration HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:33 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:34 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:34 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:34 -0300] "GET /.well-known/openid-configuration HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:34 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:35 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:35 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:35 -0300] "GET /.well-known/openid-configuration HTTP/2.0" 200 501 "-" "curl/7.81.0"
+### /var/log/nginx/access.log
+127.0.0.1 - - [16/Sep/2026:10:23:50 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 502 157 "-" "curl/7.88.1"
+187.10.45.41 - - [16/Sep/2026:10:29:14 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 486 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:10:29:14 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 264 "-" "curl/7.81.0"
+127.0.0.1 - - [16/Sep/2026:10:45:52 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.88.1"
+127.0.0.1 - - [16/Sep/2026:10:45:54 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 274 "-" "curl/7.88.1"
+187.10.45.41 - - [16/Sep/2026:10:51:05 -0300] "GET /favicon.ico HTTP/2.0" 404 114 "https://codexbridge.inovacaosistemas.com.br/mcp" "Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0"
+187.10.45.41 - - [16/Sep/2026:13:46:07 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:13:49:49 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 502 157 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:13:57:27 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 502 157 "-" "curl/7.81.0"
+127.0.0.1 - - [16/Sep/2026:14:04:30 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.88.1"
+127.0.0.1 - - [16/Sep/2026:14:04:30 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 274 "-" "curl/7.88.1"
+127.0.0.1 - - [16/Sep/2026:14:04:31 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.88.1"
+187.10.45.41 - - [16/Sep/2026:14:04:31 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:14:04:32 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:14:04:32 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:14:20:08 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:14:27:17 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:14:46:52 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:15:08:15 -0300] "GET /oauth/authorize?response_type=code&client_id=chatgpt-codexbridge&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fconnector%2Foauth%2FH198HaN64Bbi&scope=codexbridge.read+codexbridge.task.cancel+codexbridge.task.submit&code_challenge=AdPQuJqWs5ybpUywgql71OyPbJbDkyT4q_VUWO97hdc&code_challenge_method=S256&resource=https%3A%2F%2Fcodexbridge.inovacaosistemas.com.br%3A8443%2Fmcp&state=chatgpt_scheme__oauth_s_6aaadb0ccd60819199778ee837f7f94c&ui_locales=pt-BR HTTP/2.0" 200 749 "-" "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+187.10.45.41 - - [16/Sep/2026:15:08:15 -0300] "GET /favicon.ico HTTP/2.0" 404 176 "https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize?response_type=code&client_id=chatgpt-codexbridge&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fconnector%2Foauth%2FH198HaN64Bbi&scope=codexbridge.read+codexbridge.task.cancel+codexbridge.task.submit&code_challenge=AdPQuJqWs5ybpUywgql71OyPbJbDkyT4q_VUWO97hdc&code_challenge_method=S256&resource=https%3A%2F%2Fcodexbridge.inovacaosistemas.com.br%3A8443%2Fmcp&state=chatgpt_scheme__oauth_s_6aaadb0ccd60819199778ee837f7f94c&ui_locales=pt-BR" "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
+66.249.85.131 - - [16/Sep/2026:15:08:18 -0300] "GET /oauth/authorize?response_type=code&client_id=chatgpt-codexbridge&redirect_uri=https://chatgpt.com/connector/oauth/H198HaN64Bbi&scope=codexbridge.read+codexbridge.task.cancel+codexbridge.task.submit&code_challenge=AdPQuJqWs5ybpUywgql71OyPbJbDkyT4q_VUWO97hdc&code_challenge_method=S256&resource=https://codexbridge.inovacaosistemas.com.br:8443/mcp&state=chatgpt_scheme__oauth_s_6aaadb0ccd60819199778ee837f7f94c&ui_locales=pt-BR HTTP/1.1" 200 761 "-" "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36 (compatible; Google-Read-Aloud; +https://support.google.com/webmasters/answer/1061943)"
+187.10.45.41 - - [16/Sep/2026:15:08:32 -0300] "GET /oauth/authorize?response_type=code&client_id=chatgpt-codexbridge&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fconnector%2Foauth%2FH198HaN64Bbi&scope=codexbridge.read+codexbridge.task.cancel+codexbridge.task.submit&code_challenge=AdPQuJqWs5ybpUywgql71OyPbJbDkyT4q_VUWO97hdc&code_challenge_method=S256&resource=https%3A%2F%2Fcodexbridge.inovacaosistemas.com.br%3A8443%2Fmcp&state=chatgpt_scheme__oauth_s_6aaadb0ccd60819199778ee837f7f94c&ui_locales=pt-BR HTTP/1.1" 200 761 "-" "Mozilla/5.0 (X11; Ubuntu; Linux i686; rv:24.0) Gecko/20100101 Firefox/24.0 Chrome/80.0.3987.132 Safari/537.36"
+187.10.45.41 - - [16/Sep/2026:17:47:39 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:17:47:39 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:33 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:33 -0300] "GET /.well-known/openid-configuration HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:33 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:34 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:34 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:34 -0300] "GET /.well-known/openid-configuration HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:34 -0300] "GET /.well-known/oauth-protected-resource HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:35 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/2.0" 200 274 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:35 -0300] "GET /.well-known/oauth-authorization-server HTTP/2.0" 200 501 "-" "curl/7.81.0"
+187.10.45.41 - - [16/Sep/2026:18:19:35 -0300] "GET /.well-known/openid-configuration HTTP/2.0" 200 501 "-" "curl/7.81.0"
+-- recent gateway OAuth requests --
+Sep 16 17:47:38 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "POST /mcp HTTP/1.1" 200 OK
+Sep 16 17:47:39 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "GET /.well-known/oauth-protected-resource HTTP/1.1" 200 OK
+Sep 16 17:47:39 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "GET /.well-known/oauth-authorization-server HTTP/1.1" 200 OK
+Sep 16 18:19:33 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "GET /.well-known/oauth-authorization-server HTTP/1.1" 200 OK
+Sep 16 18:19:33 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "GET /.well-known/openid-configuration HTTP/1.1" 200 OK
+Sep 16 18:19:33 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "GET /.well-known/oauth-protected-resource HTTP/1.1" 200 OK
+Sep 16 18:19:34 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "GET /.well-known/oauth-protected-resource HTTP/1.1" 200 OK
+Sep 16 18:19:34 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "GET /.well-known/oauth-authorization-server HTTP/1.1" 200 OK
+Sep 16 18:19:34 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "GET /.well-known/openid-configuration HTTP/1.1" 200 OK
+Sep 16 18:19:34 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "GET /.well-known/oauth-protected-resource HTTP/1.1" 200 OK
+Sep 16 18:19:35 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "GET /.well-known/oauth-protected-resource HTTP/1.1" 200 OK
+Sep 16 18:19:35 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "GET /.well-known/oauth-authorization-server HTTP/1.1" 200 OK
+Sep 16 18:19:35 frida uvicorn[22624]: INFO:     187.10.45.41:0 - "GET /.well-known/openid-configuration HTTP/1.1" 200 OK
+Sep 16 18:19:37 frida uvicorn[22624]: INFO:     127.0.0.1:55502 - "GET /.well-known/oauth-authorization-server HTTP/1.1" 200 OK
+Sep 16 18:19:37 frida uvicorn[22624]: INFO:     127.0.0.1:55508 - "GET /.well-known/openid-configuration HTTP/1.1" 200 OK
+== interpretation marker ==
+If :8443 metadata above contains code_challenge_methods_supported=[S256] but ChatGPT still rejects PKCE, compare the recent nginx request paths/host/port. That tells us which discovery URL ChatGPT actually fetched.
+CHATGPT_PKCE_DISCOVERY_DIAGNOSTIC_COMPLETE
