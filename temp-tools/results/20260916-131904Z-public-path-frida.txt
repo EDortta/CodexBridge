@@ -1,0 +1,222 @@
+== devel3 DNS ==
+186.194.227.198 STREAM codexbridge.inovacaosistemas.com.br
+186.194.227.198 DGRAM  
+186.194.227.198 RAW    
+
+== devel3 public curl verbose ==
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying 186.194.227.198:8443...
+  0     0    0     0    0     0      0      0 --:--:--  0:00:01 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:02 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:03 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:04 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:05 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:06 --:--:--     0  0     0    0     0    0     0      0      0 --:--:--  0:00:07 --:--:--     0* After 7969ms connect time, move on!
+* connect to 186.194.227.198 port 8443 failed: Connection timed out
+* Connection timeout after 8001 ms
+  0     0    0     0    0     0      0      0 --:--:--  0:00:08 --:--:--     0
+* Closing connection 0
+curl: (28) Connection timeout after 8001 ms
+body=
+
+== Frida local runtime/listeners/nginx ==
+-- hostname/address --
+frida
+186.194.227.198 STREAM codexbridge.inovacaosistemas.com.br
+186.194.227.198 DGRAM  
+186.194.227.198 RAW    
+-- listeners --
+LISTEN 0      2048         0.0.0.0:18080      0.0.0.0:*    users:(("uvicorn",pid=23333,fd=7))                                                                                             
+LISTEN 0      511          0.0.0.0:443        0.0.0.0:*    users:(("nginx",pid=728,fd=10),("nginx",pid=727,fd=10),("nginx",pid=726,fd=10),("nginx",pid=725,fd=10),("nginx",pid=724,fd=10))
+LISTEN 0      511             [::]:443           [::]:*    users:(("nginx",pid=728,fd=11),("nginx",pid=727,fd=11),("nginx",pid=726,fd=11),("nginx",pid=725,fd=11),("nginx",pid=724,fd=11))
+-- gateway direct --
+HTTP/1.1 200 OK
+date: Wed, 16 Sep 2026 13:19:13 GMT
+server: uvicorn
+content-length: 52
+content-type: application/json
+x-request-id: 26b2a85f-b7ef-4ac3-85d6-2cbcfd6857ba
+
+{"status":"ok","time":"2026-09-16T13:19:14.636629Z"}
+-- nginx local TLS with Host --
+HTTP/2 200 
+server: nginx/1.22.1
+date: Wed, 16 Sep 2026 13:19:14 GMT
+content-type: application/json
+content-length: 52
+x-request-id: 021941aa-4292-4541-b2dc-49017b6e1ec6
+
+{"status":"ok","time":"2026-09-16T13:19:14.870829Z"}
+-- nginx relevant config --
+#    }
+
+#    server {
+#        listen 443;
+#        proxy_pass backend_https;
+#        proxy_protocol on;
+#    }
+--
+# configuration file /etc/nginx/sites-enabled/000-main:
+# HTTPS server block for w2.inovacaosistemas.com.br
+server {
+    listen 443 ssl;
+#   listen [::]:443 ssl;
+    server_name w2.inovacaosistemas.com.br;
+    
+--
+
+# configuration file /etc/nginx/sites-enabled/000-reject-unknown:
+server {
+    listen 443 ssl default_server;
+    server_name _;
+
+    ssl_certificate /etc/letsencrypt/live/w2.inovacaosistemas.com.br/fullchain.pem;
+--
+# para que a frida possa perceber a requisicao e acordar o dom1 (Wake-on-LAN).
+# Ver projeto web-server-trigger.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name code.inovacaosistemas.com.br
+                clara.inovacaosistemas.com.br
+--
+# vhost 443 (interno) — a borda pública 8443 do roteador mapeia p/ frida:443 (SNI).
+# Proxy para o FastAPI local. Só habilitar DEPOIS que o cert existir.
+server {
+    listen 443 ssl;
+    server_name api.igrejapequena.com.br;
+
+    ssl_certificate     /etc/letsencrypt/live/api.igrejapequena.com.br/fullchain.pem;
+--
+    }
+}
+
+# configuration file /etc/nginx/sites-enabled/codexbridge-http:
+server {
+    listen 80;
+    listen [::]:80;
+    server_name codexbridge.inovacaosistemas.com.br;
+
+    location /.well-known/acme-challenge/ {
+        alias /var/www/html/.well-known/acme-challenge/;
+--
+    }
+}
+
+# configuration file /etc/nginx/sites-enabled/codexbridge-https:
+server {
+    listen 443 ssl http2;
+    server_name codexbridge.inovacaosistemas.com.br;
+
+    ssl_certificate /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    client_max_body_size 2m;
+
+    location /.well-known/oauth-authorization-server {
+        proxy_pass http://127.0.0.1:18080/.well-known/oauth-authorization-server;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+    }
+
+    location /.well-known/openid-configuration {
+        proxy_pass http://127.0.0.1:18080/.well-known/openid-configuration;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+    }
+
+    location /.well-known/oauth-protected-resource {
+        proxy_pass http://127.0.0.1:18080/.well-known/oauth-protected-resource;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+    }
+
+    location /oauth/authorize {
+        proxy_pass http://127.0.0.1:18080/oauth/authorize;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+    }
+
+    location /oauth/token {
+        proxy_pass http://127.0.0.1:18080/oauth/token;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+    }
+
+    location /mcp {
+        proxy_pass http://127.0.0.1:18080/mcp;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+    }
+
+    location /agent/ws {
+        proxy_pass http://127.0.0.1:18080/agent/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+--
+    }
+
+    location /healthz {
+        proxy_pass http://127.0.0.1:18080/healthz;
+    }
+
+    # --- Mobile contract surface (epic #1) ------------------------------------
+--
+
+    # Liveness. Cheap, touches no dependency, safe to poll.
+    location = /health {
+        proxy_pass http://127.0.0.1:18080/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+    # protection is a cached result (CODEX_BRIDGE_READY_CACHE_SECONDS), so a
+    # flood costs one database query per interval rather than one per request.
+    location = /ready {
+        proxy_pass http://127.0.0.1:18080/ready;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+    # addresses of the proxies in front of it — this one included. Unset, the
+    # header is ignored and every caller shares one bucket.
+    location /api/ {
+        proxy_pass http://127.0.0.1:18080/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+    location /metrics {
+        allow 127.0.0.1;
+        deny all;
+        proxy_pass http://127.0.0.1:18080/metrics;
+    }
+}
+
+--
+# ACME/webroot chega por 80 (roteador 8080 -> frida:80); adicionar este
+# server_name ao 000-certbot antes de emitir o cert.
+server {
+    listen 443 ssl;
+    server_name vgaspar-monitor.inovacaosistemas.com.br;
+
+    ssl_certificate     /etc/letsencrypt/live/vgaspar-monitor.inovacaosistemas.com.br/fullchain.pem;
+--
+# Criado em 2026-08-04. Aditivo: antes disto, frida.inovacaosistemas.com.br caia no default_server (444).
+# Removivel com:  sudo rm /etc/nginx/sites-enabled/zeecred-webhook-devel3 && sudo nginx -s reload
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name frida.inovacaosistemas.com.br;
+
