@@ -75,6 +75,11 @@ from gateway.app.services.issue_types import (
     ISSUE_STATUSES,
     IssuePlanningError,
 )
+from gateway.app.services.mission_completion import (
+    build_completion_evidence,
+    completion_policy_from_project_config,
+    evaluate_completion_gate,
+)
 from gateway.app.services.mission_types import (
     MissionState,
     MissionTransitionError,
@@ -2571,13 +2576,38 @@ async def store_result(session: AsyncSession, task_id: str, result: dict, final_
             if attempt is not None:
                 attempt.completed_at = task.completed_at
                 attempt.outcome = task.state
+            mission_target = mission_state_from_task_state(task.state)
+            completion_payload: dict = {"task_state": task.state}
+            if task.state == TaskState.COMPLETED.value and mission.requested_mode == TaskMode.IMPLEMENT.value:
+                project = await session.get(ProjectModel, mission.project_id)
+                policy = completion_policy_from_project_config(
+                    project.config_json if project is not None else None,
+                    mission.delivery_json,
+                )
+                evidence = build_completion_evidence(
+                    task_state=task.state,
+                    result_json=task.result_json,
+                    delivery_result_json=task.delivery_result_json,
+                    delivery_mode=policy.delivery_mode.value,
+                )
+                decision = evaluate_completion_gate(evidence, policy)
+                completion_payload["completion_evidence"] = evidence.to_dict()
+                completion_payload["completion_gate"] = decision.to_dict()
+                if not decision.complete:
+                    # The execution attempt finished, but the Mission did not.
+                    # REVIEWING is deliberately non-terminal and keeps the
+                    # missing validation/delivery evidence visible to operators.
+                    mission_target = MissionState.REVIEWING.value
+                    mission.last_error = "Completion gate: " + ", ".join(decision.reasons)
+                else:
+                    mission.last_error = None
             await transition_mission_state(
                 session,
                 mission,
-                mission_state_from_task_state(task.state),
+                mission_target,
                 task_id=task.id,
                 event_type="mission.attempt_completed",
-                payload={"task_state": task.state},
+                payload=completion_payload,
             )
     await session.commit()
     await session.refresh(task)

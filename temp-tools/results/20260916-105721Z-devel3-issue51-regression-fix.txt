@@ -1,0 +1,147 @@
+== issue #51 regression repair ==
+head_before=5fc078fe6392830a0fb4ca6e455b64661aa49575
+ M docs/codemap.md
+ M gateway/app/api/routes/missions.py
+ M gateway/app/services/mission_completion.py
+ M gateway/app/services/store.py
+ M tests/integration/test_issue_resolution.py
+ M tests/unit/test_mission_completion.py
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/results/20260916-104137Z-devel3-issue51-finalize.txt
+?? temp-tools/results/20260916-104400Z-devel3-issue51-resume.txt
+?? temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt
+== focused regression tests ==
+........................................................................ [ 59%]
+.................................................                        [100%]
+=============================== warnings summary ===============================
+tests/integration/test_issue_resolution.py::test_snapshot_hash_is_deterministic_and_ordered
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+tests/integration/test_issue_resolution.py::test_snapshot_hash_is_deterministic_and_ordered
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+121 passed, 2 warnings in 10.15s
+== refresh codemap ==
+Code map written to: /home/esteban/Sync/Projects/AI/CodexBridge/docs/codemap.md
+  209 file(s) · 2262 symbol(s) indexed
+== contract/docs tests ==
+..........................................                               [100%]
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+42 passed, 2 warnings in 3.56s
+== full suite ==
+........................................................................ [  4%]
+........................................................................ [  9%]
+........................................................................ [ 13%]
+........................................................................ [ 18%]
+........................................................................ [ 23%]
+....................sssssssss........................................... [ 27%]
+........................................................................ [ 32%]
+........................................................................ [ 37%]
+........................................................................ [ 41%]
+........................................................................ [ 46%]
+........................................................................ [ 50%]
+........................................................................ [ 55%]
+........................................................................ [ 60%]
+........................................................................ [ 64%]
+........................................................................ [ 69%]
+........................................................................ [ 74%]
+........................................................................ [ 78%]
+........................................................................ [ 83%]
+........................................................................ [ 88%]
+........................................................................ [ 92%]
+........................................................................ [ 97%]
+.........................................                                [100%]
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1544 passed, 9 skipped, 2 warnings in 125.45s (0:02:05)
+== stage only issue #51 product/test/docs changes ==
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:22: trailing whitespace.
++  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:24: trailing whitespace.
++  
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:27: trailing whitespace.
++          
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:31: trailing whitespace.
++  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:33: trailing whitespace.
++  
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:36: trailing whitespace.
++          
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:48: trailing whitespace.
++  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:50: trailing whitespace.
++  
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:53: trailing whitespace.
++          
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:57: trailing whitespace.
++  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:59: trailing whitespace.
++  
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:62: trailing whitespace.
++          
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:92: trailing whitespace.
++  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:94: trailing whitespace.
++  
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:97: trailing whitespace.
++          
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:101: trailing whitespace.
++  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:103: trailing whitespace.
++  
+temp-tools/results/20260916-105721Z-devel3-issue51-regression-fix.txt:106: trailing whitespace.
++          

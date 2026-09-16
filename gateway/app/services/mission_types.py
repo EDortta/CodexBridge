@@ -85,7 +85,15 @@ LEGAL_MISSION_TRANSITIONS: dict[str, frozenset[str]] = {
         {MissionState.RUNNING.value, MissionState.REVIEWING.value, MissionState.COMPLETED.value, MissionState.FAILED.value, MissionState.CANCELLED.value}
     ),
     MissionState.REVIEWING.value: frozenset(
-        {MissionState.RUNNING.value, MissionState.WAITING_HUMAN.value, MissionState.COMPLETED.value, MissionState.FAILED.value, MissionState.CANCELLED.value}
+        {
+            MissionState.RUNNING.value,
+            MissionState.QUEUED.value,
+            MissionState.WAITING_EXECUTOR.value,
+            MissionState.WAITING_HUMAN.value,
+            MissionState.COMPLETED.value,
+            MissionState.FAILED.value,
+            MissionState.CANCELLED.value,
+        }
     ),
     MissionState.WAITING_HUMAN.value: frozenset(
         {

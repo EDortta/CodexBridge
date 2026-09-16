@@ -4,6 +4,7 @@ from gateway.app.services.mission_completion import (
     CompletionPolicy,
     DeliveryMode,
     build_completion_evidence,
+    completion_policy_from_project_config,
     evaluate_completion_gate,
 )
 
@@ -196,3 +197,43 @@ def test_pull_request_mode_requires_explicit_link() -> None:
         CompletionPolicy(delivery_mode=DeliveryMode.PULL_REQUEST),
     )
     assert allowed.complete is True
+
+
+def test_default_policy_requires_tests_and_returns_no_delivery_to_operator() -> None:
+    policy = completion_policy_from_project_config(None, None)
+    assert policy.required_validation_kinds == ("test",)
+    assert policy.delivery_mode == DeliveryMode.OPERATOR_REVIEW
+    assert policy.allow_merge is False
+
+
+def test_operator_review_delivery_does_not_fake_operator_approval() -> None:
+    evidence = build_completion_evidence(
+        task_state="completed",
+        result_json=json.dumps({"tests_ran": [{"name": "pytest", "passed": True}]}),
+        delivery_result_json=None,
+        delivery_mode="operator_review",
+    )
+    decision = evaluate_completion_gate(evidence, CompletionPolicy(delivery_mode=DeliveryMode.OPERATOR_REVIEW))
+    assert decision.complete is True
+    reviewed = evaluate_completion_gate(
+        evidence,
+        CompletionPolicy(delivery_mode=DeliveryMode.OPERATOR_REVIEW, require_review=True),
+    )
+    assert reviewed.complete is False
+    assert "review_not_approved" in reviewed.reasons
+
+
+def test_project_policy_can_require_static_checks_and_push() -> None:
+    policy = completion_policy_from_project_config(
+        json.dumps({
+            "completion_policy": {
+                "required_validation_kinds": ["test", "static"],
+                "delivery_mode": "push_branch",
+                "require_review": True,
+            }
+        }),
+        json.dumps({"allow_push": False}),
+    )
+    assert policy.required_validation_kinds == ("test", "static")
+    assert policy.delivery_mode == DeliveryMode.PUSH_BRANCH
+    assert policy.require_review is True

@@ -1,0 +1,52 @@
+== issue #51 finalization ==
+head_before=138f9007f3ccd7763a827805ff4a36e1357fd230
+== focused tests ==
+...........F.F.........                                                  [100%]
+=================================== FAILURES ===================================
+____ test_default_policy_requires_tests_and_returns_no_delivery_to_operator ____
+
+    def test_default_policy_requires_tests_and_returns_no_delivery_to_operator() -> None:
+>       policy = completion_policy_from_project_config(None, None)
+E       NameError: name 'completion_policy_from_project_config' is not defined
+
+tests/unit/test_mission_completion.py:202: NameError
+____________ test_project_policy_can_require_static_checks_and_push ____________
+
+    def test_project_policy_can_require_static_checks_and_push() -> None:
+>       policy = completion_policy_from_project_config(
+            json.dumps({
+                "completion_policy": {
+                    "required_validation_kinds": ["test", "static"],
+                    "delivery_mode": "push_branch",
+                    "require_review": True,
+                }
+            }),
+            json.dumps({"allow_push": False}),
+        )
+E       NameError: name 'completion_policy_from_project_config' is not defined
+
+tests/unit/test_mission_completion.py:226: NameError
+=============================== warnings summary ===============================
+tests/integration/test_issue_resolution.py::test_snapshot_hash_is_deterministic_and_ordered
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+tests/integration/test_issue_resolution.py::test_snapshot_hash_is_deterministic_and_ordered
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/unit/test_mission_completion.py::test_default_policy_requires_tests_and_returns_no_delivery_to_operator
+FAILED tests/unit/test_mission_completion.py::test_project_policy_can_require_static_checks_and_push
+2 failed, 21 passed, 2 warnings in 3.06s

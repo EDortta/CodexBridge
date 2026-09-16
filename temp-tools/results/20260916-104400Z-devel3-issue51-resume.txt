@@ -1,0 +1,334 @@
+== issue #51 resume after focused-test import failure ==
+head_before=da5288593d6d82495bdbdbe382d020d6ea32b12c
+status_before:
+ M gateway/app/api/routes/missions.py
+ M gateway/app/services/mission_completion.py
+ M gateway/app/services/store.py
+ M tests/integration/test_issue_resolution.py
+ M tests/unit/test_mission_completion.py
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? ruvector.db
+?? temp-tools/results/20260916-104137Z-devel3-issue51-finalize.txt
+?? temp-tools/results/20260916-104400Z-devel3-issue51-resume.txt
+fixed: added completion_policy_from_project_config import
+== focused tests ==
+.......................                                                  [100%]
+=============================== warnings summary ===============================
+tests/integration/test_issue_resolution.py::test_snapshot_hash_is_deterministic_and_ordered
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+tests/integration/test_issue_resolution.py::test_snapshot_hash_is_deterministic_and_ordered
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+23 passed, 2 warnings in 2.84s
+== refresh codemap ==
+Code map written to: /home/esteban/Sync/Projects/AI/CodexBridge/docs/codemap.md
+  208 file(s) · 2262 symbol(s) indexed
+== contract/docs tests ==
+..........................................                               [100%]
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+42 passed, 2 warnings in 4.27s
+== full suite ==
+........................................................................ [  4%]
+........................................................................ [  9%]
+........................................................................ [ 13%]
+........................................................................ [ 18%]
+........................................................................ [ 23%]
+....................sssssssss........................................... [ 27%]
+........................................................................ [ 32%]
+........................................................................ [ 37%]
+........................................................................ [ 41%]
+........................................................................ [ 46%]
+...............................................................FFFFFF... [ 51%]
+........................................................................ [ 55%]
+............................................F........................... [ 60%]
+........................................................................ [ 64%]
+........................................................................ [ 69%]
+........................................................................ [ 74%]
+........................................................................ [ 78%]
+........................................................................ [ 83%]
+........................................................................ [ 88%]
+........................................................................ [ 92%]
+........................................................................ [ 97%]
+.......................................                                  [100%]
+=================================== FAILURES ===================================
+_________ test_delivery_evidence_is_present_after_a_completed_delivery _________
+
+api = <starlette.testclient.TestClient object at 0x7f1f27db1720>
+
+    async def test_delivery_evidence_is_present_after_a_completed_delivery(api) -> None:
+        task = await make_task(api.factory, "p1", delivery=DeliveryRequest(branch="feature/ship-it"))
+        await deliver(api.factory, task.id, commit="deadbeef1234", pushed=True, outcome="committed_and_pushed")
+    
+        body = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).json()
+>       assert body == {
+            "available": True,
+            "branch": "feature/ship-it",
+            "baseBranch": "development",
+            "headCommit": "deadbeef1234",
+            "commitSubject": "Deliver the thing",
+            "filesChanged": 2,
+            "insertions": 10,
+            "deletions": 3,
+            "changedFiles": [
+                "gateway/app/api/routes/missions.py",
+                "tests/integration/test_missions.py",
+            ],
+            "pushed": True,
+            "deliveryOutcome": "committed_and_pushed",
+            "tests": {"ran": []},
+        }
+E       AssertionError: assert {'available':...ons.py'], ...} == {'available':...ons.py'], ...}
+E         
+E         Omitting 12 identical items, use -vv to show
+E         Left contains 1 more item:
+E         {'completion': {'evidence': {'artifacts': [],
+E                                      'branch': 'feature/ship-it',
+E                                      'changedFiles': ['gateway/app/api/routes/missions.py',
+E                                                       'tests/integration/test_missions.py'],...
+E         
+E         ...Full output truncated (24 lines hidden), use '-vv' to show
+
+tests/integration/test_missions.py:1174: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-16 07:45:16,089", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/6f8a2e73-283e-4acd-9d3c-e062cbb514c5/delivery \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/6f8a2e73-283e-4acd-9d3c-e062cbb514c5/delivery "HTTP/1.1 200 OK"
+_________ test_delivery_is_unavailable_when_no_delivery_was_requested __________
+
+api = <starlette.testclient.TestClient object at 0x7f1f1381b9d0>
+
+    async def test_delivery_is_unavailable_when_no_delivery_was_requested(api) -> None:
+        task = await make_task(api.factory, "p1", state="completed")
+        body = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).json()
+>       assert body == {"available": False, "reason": "no_delivery_requested"}
+E       AssertionError: assert {'available':...ry_requested'} == {'available':...ry_requested'}
+E         
+E         Omitting 2 identical items, use -vv to show
+E         Left contains 1 more item:
+E         {'completion': {'evidence': {'artifacts': [],
+E                                      'branch': None,
+E                                      'changedFiles': [],
+E                                      'commit': None,...
+E         
+E         ...Full output truncated (23 lines hidden), use '-vv' to show
+
+tests/integration/test_missions.py:1196: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-16 07:45:16,259", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/6c7320e8-42e9-4de4-a672-cf67fe0d1497/delivery \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/6c7320e8-42e9-4de4-a672-cf67fe0d1497/delivery "HTTP/1.1 200 OK"
+_______ test_delivery_is_unavailable_while_the_mission_is_still_running ________
+
+api = <starlette.testclient.TestClient object at 0x7f1f27cd0940>
+
+    async def test_delivery_is_unavailable_while_the_mission_is_still_running(api) -> None:
+        task = await make_task(api.factory, "p1", state="running", delivery=DeliveryRequest(branch="feature/wip"))
+        body = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).json()
+>       assert body == {"available": False, "reason": "mission_not_finished"}
+E       AssertionError: assert {'available':...not_finished'} == {'available':...not_finished'}
+E         
+E         Omitting 2 identical items, use -vv to show
+E         Left contains 1 more item:
+E         {'completion': {'evidence': {'artifacts': [],
+E                                      'branch': None,
+E                                      'changedFiles': [],
+E                                      'commit': None,...
+E         
+E         ...Full output truncated (24 lines hidden), use '-vv' to show
+
+tests/integration/test_missions.py:1202: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-16 07:45:16,355", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/0e516b3b-bdca-4cc8-87cb-26bb71387e39/delivery \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/0e516b3b-bdca-4cc8-87cb-26bb71387e39/delivery "HTTP/1.1 200 OK"
+_____________ test_delivery_is_unavailable_when_the_step_never_ran _____________
+
+api = <starlette.testclient.TestClient object at 0x7f1f14d4f610>
+
+    async def test_delivery_is_unavailable_when_the_step_never_ran(api) -> None:
+        """Delivery was requested and the mission finished, but not by completing
+        successfully — `deliver_changes` only ever runs after `final_state ==
+        COMPLETED`, so a failed run never produces a `delivery_result_json`."""
+        task = await make_task(
+            api.factory, "p1", state="failed", delivery=DeliveryRequest(branch="feature/failed-run")
+        )
+        body = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).json()
+>       assert body == {"available": False, "reason": "delivery_step_did_not_run"}
+E       AssertionError: assert {'available':..._did_not_run'} == {'available':..._did_not_run'}
+E         
+E         Omitting 2 identical items, use -vv to show
+E         Left contains 1 more item:
+E         {'completion': {'evidence': {'artifacts': [],
+E                                      'branch': None,
+E                                      'changedFiles': [],
+E                                      'commit': None,...
+E         
+E         ...Full output truncated (24 lines hidden), use '-vv' to show
+
+tests/integration/test_missions.py:1213: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-16 07:45:16,450", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/4f15e05d-5dcd-49bf-a224-d96c4db6556a/delivery \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/4f15e05d-5dcd-49bf-a224-d96c4db6556a/delivery "HTTP/1.1 200 OK"
+_____________________ test_changed_file_paths_are_redacted _____________________
+
+api = <starlette.testclient.TestClient object at 0x7f1f169b68f0>
+
+    async def test_changed_file_paths_are_redacted(api) -> None:
+        task = await make_task(api.factory, "p1", delivery=DeliveryRequest(branch="feature/x"))
+        await deliver(
+            api.factory, task.id,
+            staged_paths=["gateway/app/api/routes/missions.py", "/home/esteban/secret-notes.txt"],
+        )
+        body = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).json()
+        assert body["changedFiles"] == ["gateway/app/api/routes/missions.py", "[PATH]"]
+>       assert "/home/esteban" not in json.dumps(body)
+E       assert '/home/esteban' not in '{"available...e": false}}}'
+E         
+E         '/home/esteban' is contained here:
+E           ns.py", "/home/esteban/secret-notes.txt"], "branch": "feature/ship-it", "commit": "a1b2c3d4", "diffSummary": {"filesChanged": 2, "insertions": 10, "deletions": 3}, "validations": [], "reviewOutcome": null, "artifacts": [], "deliveryOutcome": "committed_and_pushed", "deliveryMode": "commit_only", "externalLinks": [], "failureEvidence": [], "remains": ["validation", "merge_or_operator_finish"]}, "gate": {"complete": false, "reasons": ["missing_validation:test"]}, "policy": {"requiredValidationKinds": ["test"], "deliveryMode": "commit_only", "requireReview": false, "allowMerge": false}}}
+E         ?           +++++++++++++
+
+tests/integration/test_missions.py:1224: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-16 07:45:16,699", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/add6d682-6622-4b82-b0ac-8f027c63ac36/delivery \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/add6d682-6622-4b82-b0ac-8f027c63ac36/delivery "HTTP/1.1 200 OK"
+________________ test_tests_ran_lines_are_present_and_redacted _________________
+
+api = <starlette.testclient.TestClient object at 0x7f1f16657ee0>
+
+    async def test_tests_ran_lines_are_present_and_redacted(api) -> None:
+        task = await make_task(api.factory, "p1", delivery=DeliveryRequest(branch="feature/x"))
+        await deliver(
+            api.factory, task.id,
+            tests_ran=["pytest tests/unit -q", "ran pytest at /home/esteban/project — 12 passed"],
+        )
+        body = api.get(f"/api/v1/missions/{task.id}/delivery", headers=auth(ALICE_TOKEN)).json()
+        assert body["tests"]["ran"] == ["pytest tests/unit -q", "ran pytest at [PATH] — 12 passed"]
+>       assert "/home/esteban" not in json.dumps(body)
+E       assert '/home/esteban' not in '{"available...e": false}}}'
+E         
+E         '/home/esteban' is contained here:
+E           ytest at /home/esteban/project \u2014 12 passed", "kind": "test", "passed": true, "details": null}], "reviewOutcome": null, "artifacts": [], "deliveryOutcome": "committed_and_pushed", "deliveryMode": "commit_only", "externalLinks": [], "failureEvidence": [], "remains": ["merge_or_operator_finish"]}, "gate": {"complete": true, "reasons": []}, "policy": {"requiredValidationKinds": ["test"], "deliveryMode": "commit_only", "requireReview": false, "allowMerge": false}}}
+E         ?           +++++++++++++
+
+tests/integration/test_missions.py:1235: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"asctime": "2026-09-16 07:45:16,803", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: GET http://testserver/api/v1/missions/17eb88d4-41f9-4d81-b9f0-aa9472c71094/delivery \"HTTP/1.1 200 OK\"", "correlation_id": null, "task_id": null, "executor_id": null}
+------------------------------ Captured log call -------------------------------
+INFO     httpx:_client.py:1025 HTTP Request: GET http://testserver/api/v1/missions/17eb88d4-41f9-4d81-b9f0-aa9472c71094/delivery "HTTP/1.1 200 OK"
+___________ test_restart_clears_delivery_result_but_not_the_request ____________
+
+db_session = <sqlalchemy.ext.asyncio.session.AsyncSession object at 0x7f1f27bc96f0>
+
+    @pytest.mark.asyncio
+    async def test_restart_clears_delivery_result_but_not_the_request(db_session: AsyncSession):
+        task = await store.create_task(
+            db_session,
+            _submit_with_delivery(),
+            executor_online=True,
+            can_approve_push=True,
+        )
+        assert task.state == TaskState.WAITING_EXECUTOR.value
+    
+        await store.update_task_state(db_session, task.id, TaskState.RUNNING)
+        completed = await store.store_result(
+            db_session,
+            task.id,
+            {
+                "final_state": TaskState.COMPLETED.value,
+                "provider_run_ref": "sess-abc",
+                "delivery": {"outcome": "committed_and_pushed", "branch": "feature/uc-1", "commit": "deadbeef"},
+            },
+            TaskState.COMPLETED,
+        )
+        assert completed.delivery_result_json is not None
+        assert "deadbeef" in completed.delivery_result_json
+        assert completed.session_id == "sess-abc"
+    
+>       restarted = await store.restart_finished_task(db_session, task.id, executor_online=True)
+
+tests/integration/test_push_preauthorization.py:175: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+gateway/app/services/store.py:2665: in restart_finished_task
+    await transition_mission_state(
+gateway/app/services/store.py:639: in transition_mission_state
+    assert_legal_transition(mission.state, target_state)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+current = 'reviewing', target = 'queued'
+
+    def assert_legal_transition(current: str, target: str) -> None:
+        if current == target:
+            return
+        if target not in LEGAL_MISSION_TRANSITIONS.get(current, frozenset()):
+>           raise MissionTransitionError(f"illegal_mission_transition:{current}:{target}")
+E           gateway.app.services.mission_types.MissionTransitionError: illegal_mission_transition:reviewing:queued
+
+gateway/app/services/mission_types.py:146: MissionTransitionError
+=============================== warnings summary ===============================
+gateway/app/main.py:353
+  /home/esteban/Sync/Projects/AI/CodexBridge/gateway/app/main.py:353: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../.local/lib/python3.10/site-packages/fastapi/applications.py:4681
+  /home/esteban/.local/lib/python3.10/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/integration/test_missions.py::test_delivery_evidence_is_present_after_a_completed_delivery
+FAILED tests/integration/test_missions.py::test_delivery_is_unavailable_when_no_delivery_was_requested
+FAILED tests/integration/test_missions.py::test_delivery_is_unavailable_while_the_mission_is_still_running
+FAILED tests/integration/test_missions.py::test_delivery_is_unavailable_when_the_step_never_ran
+FAILED tests/integration/test_missions.py::test_changed_file_paths_are_redacted
+FAILED tests/integration/test_missions.py::test_tests_ran_lines_are_present_and_redacted
+FAILED tests/integration/test_push_preauthorization.py::test_restart_clears_delivery_result_but_not_the_request
+7 failed, 1535 passed, 9 skipped, 2 warnings in 123.24s (0:02:03)

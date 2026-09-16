@@ -219,6 +219,55 @@ class CompletionPolicy:
     allow_merge: bool = False
 
 
+def infer_delivery_mode(delivery_json: str | None) -> DeliveryMode:
+    """Infer the safe delivery mode from the Mission's durable request.
+
+    No delivery request means "return the validated work to the operator".
+    A requested delivery is commit-only unless it explicitly authorizes push.
+    PR/artifact modes are never inferred because they require explicit project
+    policy and external evidence.
+    """
+    raw = _json_dict(delivery_json)
+    if not raw:
+        return DeliveryMode.OPERATOR_REVIEW
+    if bool(raw.get("allow_push")):
+        return DeliveryMode.PUSH_BRANCH
+    return DeliveryMode.COMMIT_ONLY
+
+
+def completion_policy_from_project_config(
+    config_json: str | None, delivery_json: str | None
+) -> CompletionPolicy:
+    """Build issue #51's gate from durable project configuration.
+
+    Projects may define ``completion_policy`` in their existing config JSON:
+    ``required_validation_kinds``, ``delivery_mode``, ``require_review`` and
+    ``allow_merge``. Missing or malformed values fail to conservative defaults:
+    tests are required, merge is forbidden, and delivery mode is inferred only
+    from the Mission's already-authorized delivery request.
+    """
+    config = _json_dict(config_json)
+    raw = config.get("completion_policy")
+    raw = raw if isinstance(raw, dict) else {}
+
+    kinds = raw.get("required_validation_kinds", ["test"])
+    if not isinstance(kinds, list) or not all(isinstance(item, str) and item for item in kinds):
+        kinds = ["test"]
+
+    inferred = infer_delivery_mode(delivery_json)
+    try:
+        mode = DeliveryMode(raw.get("delivery_mode", inferred.value))
+    except (TypeError, ValueError):
+        mode = inferred
+
+    return CompletionPolicy(
+        required_validation_kinds=tuple(kinds),
+        delivery_mode=mode,
+        require_review=bool(raw.get("require_review", False)),
+        allow_merge=bool(raw.get("allow_merge", False)),
+    )
+
+
 @dataclass(frozen=True)
 class CompletionDecision:
     complete: bool
@@ -268,8 +317,12 @@ def evaluate_completion_gate(
         if not evidence.artifacts:
             reasons.append("artifact_missing")
     elif mode == DeliveryMode.OPERATOR_REVIEW:
-        if evidence.review_outcome not in {"approved", "accepted"}:
-            reasons.append("operator_review_missing")
+        # Operator-review-only is a delivery mode, not an approval decision.
+        # Reaching this mode means the implementation/validation evidence is
+        # handed back to the operator; explicit approval is required only when
+        # policy.require_review says so.
+        if not evidence.implemented:
+            reasons.append("operator_review_handoff_missing")
 
     if policy.require_review and evidence.review_outcome not in {"approved", "accepted"}:
         reasons.append("review_not_approved")

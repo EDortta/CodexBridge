@@ -288,3 +288,51 @@ async def test_agent_success_does_not_close_source_issue(api) -> None:
         )
         issue = await session.get(IssueModel, issue_id)
         assert issue.status == "open"
+
+
+@pytest.mark.asyncio
+async def test_implement_mission_waits_for_completion_gate_when_validation_is_missing(api) -> None:
+    issue_id = await _issue_id(api.factory)
+    body = _resolve(api, issue_id).json()
+    async with api.factory() as session:
+        await store.update_task_state(session, body["id"], TaskState.RUNNING)
+        await store.store_result(
+            session,
+            body["id"],
+            {"task_id": body["id"], "final_state": "completed"},
+            TaskState.COMPLETED,
+        )
+
+    detail = api.get(f"/api/v1/missions/{body['id']}", headers=auth(ALICE_TOKEN)).json()
+    assert detail["state"] == "reviewing"
+    assert "missing_validation:test" in detail["lastError"]
+
+
+@pytest.mark.asyncio
+async def test_validated_operator_review_mission_completes_and_exposes_evidence(api) -> None:
+    issue_id = await _issue_id(api.factory)
+    body = _resolve(api, issue_id).json()
+    async with api.factory() as session:
+        await store.update_task_state(session, body["id"], TaskState.RUNNING)
+        await store.store_result(
+            session,
+            body["id"],
+            {
+                "task_id": body["id"],
+                "final_state": "completed",
+                "tests_ran": [{"name": "pytest focused", "passed": True}],
+            },
+            TaskState.COMPLETED,
+        )
+
+    detail = api.get(f"/api/v1/missions/{body['id']}", headers=auth(ALICE_TOKEN)).json()
+    assert detail["state"] == "completed"
+    async with api.factory() as session:
+        events = await store.list_mission_events_page(
+            session, body["id"], after=None, limit=100, include_attempt_events=True
+        )
+        completed = [event for event in events if event.event_type == "mission.attempt_completed"][-1]
+        payload = json.loads(completed.payload_json)
+    assert payload["completion_evidence"]["validated"] is True
+    assert payload["completion_evidence"]["delivered"] is True
+    assert payload["completion_gate"] == {"complete": True, "reasons": []}

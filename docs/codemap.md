@@ -1,12 +1,12 @@
 # Code Map · codex-bridge
 
-> Generated: 2026-09-15 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
+> Generated: 2026-09-16 · Root: `/home/esteban/Sync/Projects/AI/CodexBridge`
 > Refresh: `governancekit --root /home/esteban/Sync/Projects/AI/CodexBridge map`
 
 ## Summary
 
-- 204 file(s) · 2232 symbol(s) indexed
-- Languages: config (2), python (188), shell (14)
+- 209 file(s) · 2262 symbol(s) indexed
+- Languages: config (2), python (190), shell (17)
 - Top-level areas: `.`, `agent`, `deploy`, `gateway`, `scripts`, `shared`, `temp-tools`, `tests`
 
 ## Governance
@@ -130,6 +130,7 @@ gateway/
       issue_resolution.py
       issue_types.py  — "Closed vocabularies for epics and issues, and the error they fail with."
       metrics.py
+      mission_completion.py
       mission_types.py
       notify.py  — "Out-of-band completion notification by email."
       store.py
@@ -163,6 +164,9 @@ temp-tools/
   10-devel3-validate-issue44-foundation.sh
   11-devel3-implement-issue44.sh
   12-devel3-implement-mission-worktrees.sh
+  13-devel3-finalize-issue51.sh
+  14-devel3-resume-issue51-after-import-fix.sh
+  15-devel3-fix-issue51-regressions.sh
 tests/
   conftest.py
   contract/
@@ -242,6 +246,7 @@ tests/
     test_issue_materialize.py  — "`materialize_epic` and the shared numbering scanner -- issue #78, Commit 2c."
     test_issue_render.py  — "`render_epic_markdown` -- issue #78, Commit 2a."
     test_main_import.py
+    test_mission_completion.py
     test_mission_types.py
     test_mission_worktree.py
     test_node_enrollment.py  — "`store.create_node_invite` / `store.enroll_node` / `store.revoke_node` —"
@@ -1009,6 +1014,23 @@ tests/
 ### `gateway/app/services/metrics.py`
 
 - `render_metrics()`
+
+### `gateway/app/services/mission_completion.py`
+
+- **`CompletionStage`** *(class)*
+- **`ValidationEvidence`** *(class)*
+  - `to_dict(self)` *(method)*
+- **`MissionCompletionEvidence`** *(class)*
+  - `stage` *(property)*
+  - `to_dict(self)` *(method)*
+- `build_completion_evidence()` — "Build issue #51's operator contract from durable attempt evidence."
+- **`DeliveryMode`** *(class)*
+- **`CompletionPolicy`** *(class)*
+- `infer_delivery_mode(delivery_json)` — "Infer the safe delivery mode from the Mission's durable request."
+- `completion_policy_from_project_config(config_json, delivery_json)` — "Build issue #51's gate from durable project configuration."
+- **`CompletionDecision`** *(class)*
+  - `to_dict(self)` *(method)*
+- `evaluate_completion_gate(evidence, policy)` — "Decide whether a Mission may become completed under project policy."
 
 ### `gateway/app/services/mission_types.py`
 
@@ -2114,6 +2136,8 @@ tests/
 - `test_issue_drift_holds_existing_mission_for_human(api)` *(async function)*
 - `test_resolve_issue_requires_submit_scope_and_visible_project(api)` *(async function)*
 - `test_agent_success_does_not_close_source_issue(api)` *(async function)*
+- `test_implement_mission_waits_for_completion_gate_when_validation_is_missing(api)` *(async function)*
+- `test_validated_operator_review_mission_completes_and_exposes_evidence(api)` *(async function)*
 
 ### `tests/integration/test_mcp_epics_issues.py`
 
@@ -3116,6 +3140,23 @@ tests/
 ### `tests/unit/test_main_import.py`
 
 - `test_main_app_imports()`
+
+### `tests/unit/test_mission_completion.py`
+
+- `test_successful_agent_exit_is_only_implemented_without_validation()`
+- `test_passing_tests_advance_to_validated_but_not_delivered()`
+- `test_failed_validation_is_preserved_as_machine_readable_evidence()`
+- `test_commit_and_push_are_delivery_but_never_imply_merge()`
+- `test_merge_requires_explicit_evidence_and_prior_delivery()`
+- `test_refused_delivery_preserves_reason()`
+- `test_artifact_and_operator_review_modes_are_explicit_delivery_modes()`
+- `test_completion_gate_requires_project_validation_and_delivery_policy()`
+- `test_completion_gate_refuses_missing_required_validation()`
+- `test_completion_gate_never_treats_push_as_merge_permission()`
+- `test_pull_request_mode_requires_explicit_link()`
+- `test_default_policy_requires_tests_and_returns_no_delivery_to_operator()`
+- `test_operator_review_delivery_does_not_fake_operator_approval()`
+- `test_project_policy_can_require_static_checks_and_push()`
 
 ### `tests/unit/test_mission_types.py`
 

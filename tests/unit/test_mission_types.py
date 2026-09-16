@@ -21,6 +21,8 @@ def test_legacy_terminal_task_states_keep_their_public_mission_state() -> None:
             ("completed", "queued"),
             ("expired", "waiting_executor"),
             ("lost", "queued"),
+            ("reviewing", "queued"),
+            ("reviewing", "waiting_executor"),
         ],
 )
 def test_legacy_session_control_paths_can_project_into_mission_state(current: str, target: str) -> None:
