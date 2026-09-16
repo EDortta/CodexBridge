@@ -27,8 +27,42 @@ echo "executor_id=$EXECUTOR_ID"
 echo "ws_url=$WS_URL"
 echo "token_present=yes"
 
+echo "== compute current token hash locally =="
+TOKEN_HASH="$(printf '%s' "$TOKEN" | PYTHONPATH="$REPO_ROOT" python3 -c 'import sys; from shared.security import hash_token; print(hash_token(sys.stdin.read()))')"
+unset TOKEN
+if [[ -z "$TOKEN_HASH" ]]; then
+  echo "ERROR: failed to hash machine token"
+  exit 2
+fi
+
+echo "token_hash_present=yes"
+
 echo "== resync gateway hash with the agent's current machine token =="
-printf '%s' "$TOKEN" | ssh -p "$FRIDA_PORT" "$FRIDA" "EXECUTOR_ID='$EXECUTOR_ID' python3 -c 'import asyncio,sys; sys.path.insert(0,\"/opt/codex-bridge\"); from gateway.app.db.session import SessionLocal; from gateway.app.models.entities import ExecutorModel; from shared.security import hash_token; async def main():\n async with SessionLocal() as s:\n  e=await s.get(ExecutorModel, \"'$EXECUTOR_ID'\")\n  assert e is not None, \"executor_not_found\"\n  token=sys.stdin.read()\n  e.machine_token_hash=hash_token(token)\n  await s.commit()\n  print(\"gateway_token_hash_updated=yes\")\nasyncio.run(main())'" 2>/dev/null
+REMOTE_EXECUTOR_ID="$(printf '%q' "$EXECUTOR_ID")"
+REMOTE_TOKEN_HASH="$(printf '%q' "$TOKEN_HASH")"
+ssh -p "$FRIDA_PORT" "$FRIDA" "EXECUTOR_ID=$REMOTE_EXECUTOR_ID TOKEN_HASH=$REMOTE_TOKEN_HASH python3 -" <<'PY'
+import asyncio
+import os
+import sys
+
+sys.path.insert(0, "/opt/codex-bridge")
+from gateway.app.db.session import SessionLocal
+from gateway.app.models.entities import ExecutorModel
+
+async def main():
+    async with SessionLocal() as session:
+        executor_id = os.environ["EXECUTOR_ID"]
+        token_hash = os.environ["TOKEN_HASH"]
+        executor = await session.get(ExecutorModel, executor_id)
+        if executor is None:
+            raise SystemExit("executor_not_found")
+        executor.machine_token_hash = token_hash
+        await session.commit()
+        print("gateway_token_hash_updated=yes")
+
+asyncio.run(main())
+PY
+unset TOKEN_HASH
 
 echo "== restart agent =="
 sudo systemctl restart codex-bridge-agent.service
