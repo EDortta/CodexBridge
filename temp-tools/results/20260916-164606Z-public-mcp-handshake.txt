@@ -1,0 +1,73 @@
+== public MCP handshake diagnostic ==
+public_base=https://codexbridge.inovacaosistemas.com.br:8443
+
+== public reachability ==
+health_http=200
+HTTP/2 200 
+content-type: application/json
+
+-- initialize unauthenticated --
+status=200
+server: nginx/1.22.1
+content-type: application/json
+{"jsonrpc": "2.0", "id": "diag-init", "result": {"protocolVersion": "2025-06-18", "serverInfo": {"name": "codex-bridge", "version": "0.1.0"}, "instructions": "Nunca envie caminhos de disco. Em start_development_task, use project para o projeto logico e node quando o operador nomear a maquina (por exemplo, 'em devel3'); use mode='analyze' para pedidos somente de leitura. Trate tarefas sensiveis como aprovacao pendente.", "capabilities": {"tools": {}}}}
+
+-- tools/list unauthenticated --
+status=200
+server: nginx/1.22.1
+content-type: application/json
+tool_count=28
+tool_names=executor_status,list_executors,list_projects,submit_codex_task,get_task_status,get_task_logs,get_task_result,continue_codex_session,cancel_codex_task,approve_codex_task,start_development_task,resolve_issue_as_mission,bind_project_forge,create_project_issue,list_project_issues,comment_project_issue,close_project_issue,list_recent_tasks,create_epic,list_epics,update_epic,create_issue,list_issues,update_issue,move_issue_to_epic,publish_epic_to_repo,create_reminder,cancel_reminder
+
+== runtime auth mode on Frida (no secrets) ==
+EnvironmentFiles=/etc/codex-bridge/env (ignore_errors=no)
+CODEX_BRIDGE_PUBLIC_BASE_URL=https://codexbridge.inovacaosistemas.com.br:8443
+CODEX_BRIDGE_MCP_AUTH_MODE=oauth
+
+== gateway status/journal tail ==
+active
+Sep 16 10:45:47 frida uvicorn[31979]: INFO:     Waiting for application startup.
+Sep 16 10:45:48 frida uvicorn[31979]: INFO:     Application startup complete.
+Sep 16 10:45:48 frida uvicorn[31979]: INFO:     Uvicorn running on http://0.0.0.0:18080 (Press CTRL+C to quit)
+Sep 16 10:45:49 frida uvicorn[31979]: INFO:     127.0.0.1:51504 - "GET /health HTTP/1.1" 200 OK
+Sep 16 10:45:52 frida uvicorn[31979]: INFO:     127.0.0.1:0 - "GET /.well-known/oauth-authorization-server HTTP/1.1" 200 OK
+Sep 16 10:45:54 frida uvicorn[31979]: INFO:     127.0.0.1:0 - "GET /.well-known/oauth-protected-resource HTTP/1.1" 200 OK
+Sep 16 10:48:45 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "GET /mcp HTTP/1.1" 405 Method Not Allowed
+Sep 16 10:51:00 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "GET /mcp HTTP/1.1" 405 Method Not Allowed
+Sep 16 10:51:05 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "GET /mcp HTTP/1.1" 405 Method Not Allowed
+Sep 16 10:54:15 frida uvicorn[31979]: INFO:     127.0.0.1:42462 - "GET /health HTTP/1.1" 200 OK
+Sep 16 11:00:32 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "GET /health HTTP/1.1" 200 OK
+Sep 16 11:10:47 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "GET /health HTTP/1.1" 200 OK
+Sep 16 11:10:57 frida uvicorn[31979]: INFO:     127.0.0.1:40992 - "GET /health HTTP/1.1" 200 OK
+Sep 16 11:10:57 frida uvicorn[31979]: INFO:     127.0.0.1:0 - "GET /health HTTP/1.1" 200 OK
+Sep 16 11:24:10 frida uvicorn[31979]: INFO:     127.0.0.1:33668 - "GET /health HTTP/1.1" 200 OK
+Sep 16 12:05:53 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 16 12:05:53 frida uvicorn[31979]: INFO:     connection open
+Sep 16 12:05:55 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 16 12:05:55 frida uvicorn[31979]: INFO:     connection open
+Sep 16 12:06:26 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "GET /health HTTP/1.1" 200 OK
+Sep 16 12:06:26 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "GET /health HTTP/1.1" 200 OK
+Sep 16 12:06:28 frida uvicorn[31979]: INFO:     127.0.0.1:43650 - "GET /health HTTP/1.1" 200 OK
+Sep 16 12:06:28 frida uvicorn[31979]: INFO:     127.0.0.1:0 - "GET /health HTTP/1.1" 200 OK
+Sep 16 12:07:53 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "GET /health HTTP/1.1" 200 OK
+Sep 16 12:07:54 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 16 12:07:54 frida uvicorn[31979]: INFO:     connection open
+Sep 16 12:07:57 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "POST /mcp HTTP/1.1" 200 OK
+Sep 16 12:07:58 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "POST /mcp HTTP/1.1" 200 OK
+Sep 16 12:56:18 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "GET /health HTTP/1.1" 200 OK
+Sep 16 12:56:22 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "WebSocket /agent/ws" 403
+Sep 16 12:56:22 frida uvicorn[31979]: INFO:     connection rejected (403 Forbidden)
+Sep 16 12:56:22 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 16 12:56:22 frida uvicorn[31979]: INFO:     connection open
+Sep 16 13:25:10 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 16 13:25:10 frida uvicorn[31979]: INFO:     connection open
+Sep 16 13:25:49 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "POST /mcp HTTP/1.1" 401 Unauthorized
+Sep 16 13:46:06 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "GET /health HTTP/1.1" 200 OK
+Sep 16 13:46:07 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "GET /.well-known/oauth-protected-resource HTTP/1.1" 200 OK
+Sep 16 13:46:07 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "POST /mcp HTTP/1.1" 200 OK
+Sep 16 13:46:08 frida uvicorn[31979]: INFO:     187.10.45.41:0 - "POST /mcp HTTP/1.1" 200 OK
+
+== interpretation hints ==
+If unauthenticated tools/list is 200 with tool_count>0, public MCP schema is healthy and ChatGPT is likely using cached/old app metadata or a different app endpoint/auth session.
+If tools/list is 401 with OAuth discovery disabled, ChatGPT must complete OAuth before tool discovery, or the server should allow unauthenticated initialize/tools-list discovery.
+If public health works but MCP returns proxy/html/404, inspect nginx/public route rather than project onboarding.
