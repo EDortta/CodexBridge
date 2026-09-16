@@ -9,3 +9,8 @@ CODEX_BRIDGE_PUBLIC_BASE_URL=https://codexbridge.inovacaosistemas.com.br:8443
 NOTE: devel3-to-public-8443 timeout is not authoritative for external reachability when the router lacks NAT loopback/hairpin.
 EXPECTED_CHATGPT_MCP_URL=https://codexbridge.inovacaosistemas.com.br:8443/mcp
 RESTORE_8443_OK
+[development 3279772] results: restore CodexBridge public edge to 8443
+ 1 file changed, 11 insertions(+)
+ create mode 100644 temp-tools/results/20260916-134525Z-restore-public-8443.txt
+To https://github.com/EDortta/CodexBridge.git
+   f260d7b..3279772  development -> development
