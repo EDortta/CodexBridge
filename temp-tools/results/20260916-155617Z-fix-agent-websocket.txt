@@ -1,0 +1,24 @@
+== repair devel3 agent websocket after 8443 recovery ==
+utc=2026-09-16T15:56:17Z
+== verify HTTPS edge ==
+{"status":"ok","time":"2026-09-16T15:56:18.518764Z"}
+== show agent websocket config ==
+CODEX_BRIDGE_AGENT_GATEWAY_WS_URL=wss://codexbridge.inovacaosistemas.com.br:8443/agent/ws
+CODEX_BRIDGE_AGENT_GATEWAY_WS_URL=wss://codexbridge.inovacaosistemas.com.br:8443/agent/ws
+== probe websocket upgrade through public 8443 ==
+HTTP/1.1 403 Forbidden
+Server: nginx/1.22.1
+Date: Wed, 16 Sep 2026 15:56:22 GMT
+Content-Type: text/plain; charset=utf-8
+Content-Length: 0
+Connection: keep-alive
+
+ws_probe_rc=0
+== restart agent ==
+active
+== wait up to 45s for definitive agent outcome ==
+Sep 16 12:56:22 devel3 systemd[1]: Stopping Codex Bridge Agent...
+Sep 16 12:56:22 devel3 systemd[1]: codex-bridge-agent.service: Deactivated successfully.
+Sep 16 12:56:22 devel3 systemd[1]: Stopped Codex Bridge Agent.
+Sep 16 12:56:22 devel3 systemd[1]: Started Codex Bridge Agent.
+AGENT_STILL_NOT_CONNECTED
