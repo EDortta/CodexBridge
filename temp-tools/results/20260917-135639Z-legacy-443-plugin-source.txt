@@ -1,0 +1,373 @@
+== Trace legacy bare-443 CodexBridge plugin source ==
+utc=2026-09-17T13:56:39Z
+marker=cbtrace-20260917-135639Z-746459
+legacy=https://codexbridge.inovacaosistemas.com.br
+current=https://codexbridge.inovacaosistemas.com.br:8443
+
+Purpose:
+- determine whether bare 443 and :8443 reach the same CodexBridge backend;
+- determine whether bare 443 traverses Frida or another ingress (for example T610);
+- check whether a legacy plugin manifest/source is still publicly served on bare 443;
+- establish whether the old ChatGPT plugin can be updated entirely from our infrastructure side.
+
+== DNS ==
+186.194.227.198 STREAM codexbridge.inovacaosistemas.com.br
+186.194.227.198 DGRAM  
+186.194.227.198 RAW    
+
+-- HEAD-ish probe https://codexbridge.inovacaosistemas.com.br --
+HTTP/2 200 
+server: nginx/1.22.1
+date: Thu, 17 Sep 2026 13:56:39 GMT
+content-type: application/json
+content-length: 52
+x-request-id: d7473363-f974-45e2-aec8-7581d9bba073
+
+
+-- HEAD-ish probe https://codexbridge.inovacaosistemas.com.br:8443 --
+HTTP/2 200 
+server: nginx/1.22.1
+date: Thu, 17 Sep 2026 13:56:40 GMT
+content-type: application/json
+content-length: 52
+x-request-id: c1d1133c-2a79-4954-a749-d3d772bbf243
+
+
+== MCP initialize on both public origins ==
+-- https://codexbridge.inovacaosistemas.com.br/mcp --
+{"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18", "serverInfo": {"name": "codex-bridge", "version": "0.2.0"}, "instructions": "Nunca envie caminhos de disco. Em start_development_task, use project para o projeto logico e node quando o operador nomear a maquina (por exemplo, 'em devel3'); use mode='analyze' para pedidos somente de leitura. Trate tarefas sensiveis como aprovacao pendente.", "capabilities": {"tools": {}}}}
+server_name= codex-bridge
+server_version= 0.2.0
+-- https://codexbridge.inovacaosistemas.com.br:8443/mcp --
+{"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18", "serverInfo": {"name": "codex-bridge", "version": "0.2.0"}, "instructions": "Nunca envie caminhos de disco. Em start_development_task, use project para o projeto logico e node quando o operador nomear a maquina (por exemplo, 'em devel3'); use mode='analyze' para pedidos somente de leitura. Trate tarefas sensiveis como aprovacao pendente.", "capabilities": {"tools": {}}}}
+server_name= codex-bridge
+server_version= 0.2.0
+
+== OAuth metadata on both public origins ==
+-- https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-protected-resource/mcp --
+{"resource":"https://codexbridge.inovacaosistemas.com.br:8443/mcp","authorization_servers":["https://codexbridge.inovacaosistemas.com.br:8443"],"bearer_methods_supported":["header"],"scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"]}
+resource=https://codexbridge.inovacaosistemas.com.br:8443/mcp
+authorization_servers=['https://codexbridge.inovacaosistemas.com.br:8443']
+-- https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-protected-resource --
+{"resource":"https://codexbridge.inovacaosistemas.com.br:8443/mcp","authorization_servers":["https://codexbridge.inovacaosistemas.com.br:8443"],"bearer_methods_supported":["header"],"scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"]}
+resource=https://codexbridge.inovacaosistemas.com.br:8443/mcp
+authorization_servers=['https://codexbridge.inovacaosistemas.com.br:8443']
+-- https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-authorization-server --
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+issuer=https://codexbridge.inovacaosistemas.com.br:8443
+authorization_endpoint=https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize
+token_endpoint=https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
+code_challenge_methods_supported=['S256']
+-- https://codexbridge.inovacaosistemas.com.br/.well-known/openid-configuration --
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+issuer=https://codexbridge.inovacaosistemas.com.br:8443
+authorization_endpoint=https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize
+token_endpoint=https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
+code_challenge_methods_supported=['S256']
+-- https://codexbridge.inovacaosistemas.com.br:8443/.well-known/oauth-protected-resource/mcp --
+{"resource":"https://codexbridge.inovacaosistemas.com.br:8443/mcp","authorization_servers":["https://codexbridge.inovacaosistemas.com.br:8443"],"bearer_methods_supported":["header"],"scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"]}
+resource=https://codexbridge.inovacaosistemas.com.br:8443/mcp
+authorization_servers=['https://codexbridge.inovacaosistemas.com.br:8443']
+-- https://codexbridge.inovacaosistemas.com.br:8443/.well-known/oauth-protected-resource --
+{"resource":"https://codexbridge.inovacaosistemas.com.br:8443/mcp","authorization_servers":["https://codexbridge.inovacaosistemas.com.br:8443"],"bearer_methods_supported":["header"],"scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"]}
+resource=https://codexbridge.inovacaosistemas.com.br:8443/mcp
+authorization_servers=['https://codexbridge.inovacaosistemas.com.br:8443']
+-- https://codexbridge.inovacaosistemas.com.br:8443/.well-known/oauth-authorization-server --
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+issuer=https://codexbridge.inovacaosistemas.com.br:8443
+authorization_endpoint=https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize
+token_endpoint=https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
+code_challenge_methods_supported=['S256']
+-- https://codexbridge.inovacaosistemas.com.br:8443/.well-known/openid-configuration --
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+issuer=https://codexbridge.inovacaosistemas.com.br:8443
+authorization_endpoint=https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize
+token_endpoint=https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
+code_challenge_methods_supported=['S256']
+
+== Probe common legacy plugin definition paths ==
+## origin=https://codexbridge.inovacaosistemas.com.br
+/.well-known/ai-plugin.json status=404 bytes=153 content_type=text/html
+/ai-plugin.json status=404 bytes=153 content_type=text/html
+/openapi.json status=404 bytes=153 content_type=text/html
+/openapi.yaml status=404 bytes=153 content_type=text/html
+/openapi.yml status=404 bytes=153 content_type=text/html
+/.well-known/openapi.json status=404 bytes=153 content_type=text/html
+/.well-known/openapi.yaml status=404 bytes=153 content_type=text/html
+## origin=https://codexbridge.inovacaosistemas.com.br:8443
+/.well-known/ai-plugin.json status=404 bytes=153 content_type=text/html
+/ai-plugin.json status=404 bytes=153 content_type=text/html
+/openapi.json status=404 bytes=153 content_type=text/html
+/openapi.yaml status=404 bytes=153 content_type=text/html
+/openapi.yml status=404 bytes=153 content_type=text/html
+/.well-known/openapi.json status=404 bytes=153 content_type=text/html
+/.well-known/openapi.yaml status=404 bytes=153 content_type=text/html
+
+== Send unique trace requests to each ingress ==
+
+== Inspect Frida for trace marker and ingress configuration ==
+-- Frida hostname / addresses --
+frida
+192.168.71.248 10.8.0.1 172.17.0.1 2804:554:28d:5400:b91:8cc7:7410:7857 
+-- listeners relevant to CodexBridge --
+LISTEN 0      2048         0.0.0.0:18080      0.0.0.0:*    users:(("uvicorn",pid=22624,fd=7))                                                                                                       
+LISTEN 0      511          0.0.0.0:443        0.0.0.0:*    users:(("nginx",pid=32333,fd=10),("nginx",pid=21648,fd=10),("nginx",pid=21647,fd=10),("nginx",pid=21646,fd=10),("nginx",pid=21645,fd=10))
+LISTEN 0      511             [::]:443           [::]:*    users:(("nginx",pid=32333,fd=11),("nginx",pid=21648,fd=11),("nginx",pid=21647,fd=11),("nginx",pid=21646,fd=11),("nginx",pid=21645,fd=11))
+-- trace hits in nginx logs --
+### /var/log/nginx/access.log
+187.10.45.41 - - [17/Sep/2026:10:56:47 -0300] "GET /health?cbtrace=cbtrace-20260917-135639Z-746459-legacy HTTP/2.0" 200 52 "-" "curl/7.81.0"
+187.10.45.41 - - [17/Sep/2026:10:56:49 -0300] "GET /health?cbtrace=cbtrace-20260917-135639Z-746459-8443 HTTP/2.0" 200 52 "-" "curl/7.81.0"
+### /var/log/nginx/access.log
+187.10.45.41 - - [17/Sep/2026:10:56:47 -0300] "GET /health?cbtrace=cbtrace-20260917-135639Z-746459-legacy HTTP/2.0" 200 52 "-" "curl/7.81.0"
+187.10.45.41 - - [17/Sep/2026:10:56:49 -0300] "GET /health?cbtrace=cbtrace-20260917-135639Z-746459-8443 HTTP/2.0" 200 52 "-" "curl/7.81.0"
+-- effective nginx CodexBridge server blocks/upstreams --
+25-#    }
+26-
+27-#    server {
+28:#        listen 443;
+29-#        proxy_pass backend_https;
+30-#        proxy_protocol on;
+31-#    }
+--
+202-# configuration file /etc/nginx/sites-enabled/000-main:
+203-# HTTPS server block for w2.inovacaosistemas.com.br
+204-server {
+205:    listen 443 ssl;
+206:#   listen [::]:443 ssl;
+207-    server_name w2.inovacaosistemas.com.br;
+208-    
+209-
+--
+294-
+295-# configuration file /etc/nginx/sites-enabled/000-reject-unknown:
+296-server {
+297:    listen 443 ssl default_server;
+298-    server_name _;
+299-
+300-    ssl_certificate /etc/letsencrypt/live/w2.inovacaosistemas.com.br/fullchain.pem;
+--
+332-# para que a frida possa perceber a requisicao e acordar o dom1 (Wake-on-LAN).
+333-# Ver projeto web-server-trigger.
+334-server {
+335:    listen 443 ssl;
+336:    listen [::]:443 ssl;
+337-    server_name code.inovacaosistemas.com.br
+338-                clara.inovacaosistemas.com.br
+339-                whisper.inovacaosistemas.com.br
+--
+526-# vhost 443 (interno) — a borda pública 8443 do roteador mapeia p/ frida:443 (SNI).
+527-# Proxy para o FastAPI local. Só habilitar DEPOIS que o cert existir.
+528-server {
+529:    listen 443 ssl;
+530-    server_name api.igrejapequena.com.br;
+531-
+532-    ssl_certificate     /etc/letsencrypt/live/api.igrejapequena.com.br/fullchain.pem;
+--
+552-server {
+553-    listen 80;
+554-    listen [::]:80;
+555:    server_name codexbridge.inovacaosistemas.com.br;
+556-
+557-    location /.well-known/acme-challenge/ {
+558-        alias /var/www/html/.well-known/acme-challenge/;
+--
+565-
+566-# configuration file /etc/nginx/sites-enabled/codexbridge-https:
+567-server {
+568:    listen 443 ssl http2;
+569:    server_name codexbridge.inovacaosistemas.com.br;
+570-
+571-    ssl_certificate /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/fullchain.pem;
+572-    ssl_certificate_key /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/privkey.pem;
+--
+576-    client_max_body_size 2m;
+577-
+578-    # CODEXBRIDGE_CHATGPT_PKCE_ALIAS_V3
+579:    location = /.well-known/oauth-authorization-server/codexbridge-v3 {
+580-        default_type application/json;
+581-        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+582-        add_header Pragma "no-cache" always;
+583-        add_header Expires "0" always;
+584:        return 200 '{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443/codexbridge-v3","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}';
+585-    }
+586-
+587-    location /.well-known/oauth-authorization-server {
+588:        proxy_pass http://127.0.0.1:18080/.well-known/oauth-authorization-server;
+589-        proxy_http_version 1.1;
+590-        proxy_set_header Host $host;
+591-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+593-    }
+594-
+595-    location /.well-known/openid-configuration {
+596:        proxy_pass http://127.0.0.1:18080/.well-known/openid-configuration;
+597-        proxy_http_version 1.1;
+598-        proxy_set_header Host $host;
+599-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+601-    }
+602-
+603-    location = /.well-known/oauth-protected-resource/mcp {
+604:        proxy_pass http://127.0.0.1:18080/.well-known/oauth-protected-resource;
+605-        proxy_http_version 1.1;
+606-        proxy_set_header Host $host;
+607-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+609-    }
+610-
+611-    location /.well-known/oauth-protected-resource {
+612:        proxy_pass http://127.0.0.1:18080/.well-known/oauth-protected-resource;
+613-        proxy_http_version 1.1;
+614-        proxy_set_header Host $host;
+615-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+617-    }
+618-
+619-    location /oauth/authorize {
+620:        proxy_pass http://127.0.0.1:18080/oauth/authorize;
+621-        proxy_http_version 1.1;
+622-        proxy_set_header Host $host;
+623-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+625-    }
+626-
+627-    location /oauth/token {
+628:        proxy_pass http://127.0.0.1:18080/oauth/token;
+629-        proxy_http_version 1.1;
+630-        proxy_set_header Host $host;
+631-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+633-    }
+634-
+635-    location /mcp {
+636:        proxy_pass http://127.0.0.1:18080/mcp;
+637-        proxy_http_version 1.1;
+638-        proxy_set_header Host $host;
+639-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+641-    }
+642-
+643-    location /agent/ws {
+644:        proxy_pass http://127.0.0.1:18080/agent/ws;
+645-        proxy_http_version 1.1;
+646-        proxy_set_header Upgrade $http_upgrade;
+647-        proxy_set_header Connection "upgrade";
+--
+651-    }
+652-
+653-    location /healthz {
+654:        proxy_pass http://127.0.0.1:18080/healthz;
+655-    }
+656-
+657-    # --- Mobile contract surface (epic #1) ------------------------------------
+--
+662-
+663-    # Liveness. Cheap, touches no dependency, safe to poll.
+664-    location = /health {
+665:        proxy_pass http://127.0.0.1:18080/health;
+666-        proxy_http_version 1.1;
+667-        proxy_set_header Host $host;
+668-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+673-    # protection is a cached result (CODEX_BRIDGE_READY_CACHE_SECONDS), so a
+674-    # flood costs one database query per interval rather than one per request.
+675-    location = /ready {
+676:        proxy_pass http://127.0.0.1:18080/ready;
+677-        proxy_http_version 1.1;
+678-        proxy_set_header Host $host;
+679-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+685-    # addresses of the proxies in front of it — this one included. Unset, the
+686-    # header is ignored and every caller shares one bucket.
+687-    location /api/ {
+688:        proxy_pass http://127.0.0.1:18080/api/;
+689-        proxy_http_version 1.1;
+690-        proxy_set_header Host $host;
+691-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+--
+695-    location /metrics {
+696-        allow 127.0.0.1;
+697-        deny all;
+698:        proxy_pass http://127.0.0.1:18080/metrics;
+699-    }
+700-
+701-    # CODEXBRIDGE_CHATGPT_PKCE_ALIAS_V2
+702:    location = /.well-known/oauth-authorization-server/codexbridge-v2 {
+703-        default_type application/json;
+704-        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+705-        add_header Pragma "no-cache" always;
+706-        add_header Expires "0" always;
+707:        return 200 '{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443/codexbridge-v2","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}';
+708-    }
+709-
+710:    location = /codexbridge-v2/.well-known/oauth-authorization-server {
+711-        default_type application/json;
+712-        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+713-        add_header Pragma "no-cache" always;
+714-        add_header Expires "0" always;
+715:        return 200 '{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443/codexbridge-v2","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}';
+716-    }
+717-
+718:    location = /codexbridge-v2/.well-known/openid-configuration {
+719-        default_type application/json;
+720-        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+721-        add_header Pragma "no-cache" always;
+722-        add_header Expires "0" always;
+723:        return 200 '{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443/codexbridge-v2","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}';
+724-    }
+725-
+726:    location = /.well-known/openid-configuration/codexbridge-v2 {
+727-        default_type application/json;
+728-        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+729-        add_header Pragma "no-cache" always;
+730-        add_header Expires "0" always;
+731:        return 200 '{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443/codexbridge-v2","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}';
+732-    }
+733-
+734-}
+--
+740-# ACME/webroot chega por 80 (roteador 8080 -> frida:80); adicionar este
+741-# server_name ao 000-certbot antes de emitir o cert.
+742-server {
+743:    listen 443 ssl;
+744-    server_name vgaspar-monitor.inovacaosistemas.com.br;
+745-
+746-    ssl_certificate     /etc/letsencrypt/live/vgaspar-monitor.inovacaosistemas.com.br/fullchain.pem;
+--
+782-# Criado em 2026-08-04. Aditivo: antes disto, frida.inovacaosistemas.com.br caia no default_server (444).
+783-# Removivel com:  sudo rm /etc/nginx/sites-enabled/zeecred-webhook-devel3 && sudo nginx -s reload
+784-server {
+785:    listen 443 ssl;
+786:    listen [::]:443 ssl;
+787-    server_name frida.inovacaosistemas.com.br;
+788-
+789-    ssl_certificate     /etc/nginx/ssl-zeecred-webhook/devel3.crt;
+-- local gateway identity --
+{"status":"ok","time":"2026-09-17T13:56:53.575812Z"}
+{"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18", "serverInfo": {"name": "codex-bridge", "version": "0.2.0"}, "instructions": "Nunca envie caminhos de disco. Em start_development_task, use project para o projeto logico e node quando o operador nomear a maquina (por exemplo, 'em devel3'); use mode='analyze' para pedidos somente de leitura. Trate tarefas sensiveis como aprovacao pendente.", "capabilities": {"tools": {}}}}
+-- names that may identify the work-hours/T610 path (diagnostic only) --
+t610: unresolved
+T610: unresolved
+dom1: unresolved
+
+== Automated comparison ==
+legacy_serverInfo= {'name': 'codex-bridge', 'version': '0.2.0'}
+current_serverInfo= {'name': 'codex-bridge', 'version': '0.2.0'}
+same_server_identity= True
+
+== How to interpret ==
+1) If bare 443 and :8443 both announce codex-bridge 0.2.0, the old URL is already
+   reaching the new application code; the question becomes ingress/OAuth metadata,
+   not application deployment.
+2) If only the :8443 trace appears in Frida nginx logs, bare 443 is taking another
+   ingress path. That is strong evidence we can update that path ourselves once we
+   identify its proxy (potentially the T610/work-hours path).
+3) If both traces appear in Frida logs, bare 443 ultimately traverses Frida too,
+   even if another proxy exists before it.
+4) A 200 ai-plugin/openapi probe would support the 'directory refreshes from source'
+   hypothesis. 404s do NOT prove the ChatGPT registration cannot be updated from our
+   side; this CodexBridge integration was registered as an MCP app, so its durable
+   definition may live in ChatGPT rather than in a legacy ai-plugin manifest.
+5) Do not modify routing yet. This script is read-only apart from writing its result.
+
+CODEXBRIDGE_LEGACY_443_TRACE_COMPLETE
