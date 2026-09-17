@@ -1,0 +1,419 @@
+== Trace live CodexBridge 502 path ==
+utc=2026-09-17T21:08:24Z
+trace=cb60-20260917-210824Z
+
+Known-good fact to preserve:
+- T610 local https://codexbridge.inovacaosistemas.com.br/health already returned status=ok after nginx -s reload.
+
+Goal:
+- identify which machine answers external :443 and :8443;
+- capture exact nginx upstream error on T610 and Frida;
+- make NO configuration changes.
+== baseline process/config state ==
+-- T610 --
+dom1-inovacao
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+LISTEN 0      511          0.0.0.0:443        0.0.0.0:*    users:(("nginx",pid=2852497,fd=8),("nginx",pid=2852496,fd=8),("nginx",pid=2852495,fd=8),("nginx",pid=2852494,fd=8),("nginx",pid=2852493,fd=8),("nginx",pid=2852492,fd=8),("nginx",pid=2852491,fd=8),("nginx",pid=2852490,fd=8),("nginx",pid=2852489,fd=8),("nginx",pid=2852488,fd=8),("nginx",pid=2852487,fd=8),("nginx",pid=2852486,fd=8),("nginx",pid=2852485,fd=8),("nginx",pid=2852484,fd=8),("nginx",pid=2852483,fd=8),("nginx",pid=2852482,fd=8),("nginx",pid=1552,fd=8))                 
+LISTEN 0      4096       127.0.0.1:18081      0.0.0.0:*    users:(("incusd",pid=3728,fd=7),("incusd",pid=3728,fd=3))                                                                                                                                                                                                                                                                                                                                                                                                                                       
+LISTEN 0      511             [::]:443           [::]:*    users:(("nginx",pid=2852497,fd=9),("nginx",pid=2852496,fd=9),("nginx",pid=2852495,fd=9),("nginx",pid=2852494,fd=9),("nginx",pid=2852493,fd=9),("nginx",pid=2852492,fd=9),("nginx",pid=2852491,fd=9),("nginx",pid=2852490,fd=9),("nginx",pid=2852489,fd=9),("nginx",pid=2852488,fd=9),("nginx",pid=2852487,fd=9),("nginx",pid=2852486,fd=9),("nginx",pid=2852485,fd=9),("nginx",pid=2852484,fd=9),("nginx",pid=2852483,fd=9),("nginx",pid=2852482,fd=9),("nginx",pid=1552,fd=9))                 
+4:    server_name codexbridge.inovacaosistemas.com.br;
+9:    listen 443 ssl http2;
+11:    server_name codexbridge.inovacaosistemas.com.br;
+17:        proxy_pass http://192.168.71.248:18082/agent/ws;
+30:        proxy_pass http://192.168.71.248:18082;
+-- Frida --
+frida
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+LISTEN 0      2048          0.0.0.0:18080      0.0.0.0:*    users:(("uvicorn",pid=32456,fd=7))                                                                                                       
+LISTEN 0      511    192.168.71.248:18082      0.0.0.0:*    users:(("nginx",pid=32333,fd=33),("nginx",pid=14813,fd=33),("nginx",pid=14812,fd=33),("nginx",pid=14811,fd=33),("nginx",pid=14810,fd=33))
+LISTEN 0      511           0.0.0.0:443        0.0.0.0:*    users:(("nginx",pid=32333,fd=10),("nginx",pid=14813,fd=10),("nginx",pid=14812,fd=10),("nginx",pid=14811,fd=10),("nginx",pid=14810,fd=10))
+LISTEN 0      511              [::]:443           [::]:*    users:(("nginx",pid=32333,fd=11),("nginx",pid=14813,fd=11),("nginx",pid=14812,fd=11),("nginx",pid=14811,fd=11),("nginx",pid=14810,fd=11))
+2:    listen 443 ssl http2;
+3:    server_name codexbridge.inovacaosistemas.com.br;
+11:        proxy_pass https://192.168.71.50/agent/ws;
+19:        proxy_ssl_server_name on;
+29:        proxy_pass https://192.168.71.50;
+35:        proxy_ssl_server_name on;
+3:    listen 192.168.71.248:18082;
+6:    allow 192.168.71.50;
+7:    allow 127.0.0.1;
+8:    deny all;
+13:        proxy_pass http://127.0.0.1:18080/agent/ws;
+27:        proxy_pass http://127.0.0.1:18080;
+== prove private hop and T610 local canonical path immediately before external probes ==
+-- private hop --
+HTTP/1.1 200 OK
+Server: nginx/1.22.1
+Date: Thu, 17 Sep 2026 21:08:29 GMT
+Content-Type: application/json
+Content-Length: 52
+Connection: keep-alive
+x-request-id: fcfe390f-96f4-4d73-b38d-96b50daaed9e
+
+{"status":"ok","time":"2026-09-17T21:08:29.965520Z"}
+-- local 443 --
+HTTP/1.1 200 OK
+Server: nginx/1.22.1
+Date: Thu, 17 Sep 2026 21:08:30 GMT
+Content-Type: application/json
+Content-Length: 52
+Connection: keep-alive
+x-request-id: a781dba0-c473-4958-aea1-5fe21b465f14
+
+{"status":"ok","time":"2026-09-17T21:08:30.070256Z"}== snapshot log sizes before probes ==
+bash: line 1: /var/log/nginx/access.log: Permission denied
+bash: line 1: /var/log/nginx/error.log: Permission denied
+t610_access_before=0
+t610_error_before=0
+frida_access_before=11274
+frida_error_before=100
+== external probes from devel3 ==
+-- https://codexbridge.inovacaosistemas.com.br/health?trace=cb60-20260917-210824Z-443
+HTTP/1.1 502 Bad Gateway
+Server: nginx/1.22.1
+Date: Thu, 17 Sep 2026 21:08:34 GMT
+Content-Type: text/html
+Content-Length: 157
+Connection: keep-alive
+
+<html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx/1.22.1</center>
+</body>
+</html>
+
+-- https://codexbridge.inovacaosistemas.com.br:8443/health?trace=cb60-20260917-210824Z-8443
+HTTP/1.1 502 Bad Gateway
+Server: nginx/1.22.1
+Date: Thu, 17 Sep 2026 21:08:35 GMT
+Content-Type: text/html
+Content-Length: 157
+Connection: keep-alive
+
+<html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx/1.22.1</center>
+</body>
+</html>
+
+== T610 nginx log delta ==
+--- access delta ---
+127.0.0.1 - - [17/Sep/2026:16:18:37 -0300] "GET / HTTP/1.1" 500 21 "-" "cb54" "-"
+127.0.0.1 - - [17/Sep/2026:16:18:38 -0300] "GET /health HTTP/1.1" 500 21 "-" "cb54" "-"
+127.0.0.1 - - [17/Sep/2026:16:18:38 -0300] "GET /.well-known/oauth-authorization-server HTTP/1.1" 500 21 "-" "cb54" "-"
+192.168.71.248 - - [17/Sep/2026:16:18:38 -0300] "GET /robots.txt HTTP/1.1" 200 648 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36; compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot" "51.8.102.109"
+127.0.0.1 - - [17/Sep/2026:16:18:39 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/1.1" 500 21 "-" "cb54" "-"
+127.0.0.1 - - [17/Sep/2026:16:18:40 -0300] "GET /health HTTP/2.0" 500 21 "-" "cb54" "-"
+127.0.0.1 - - [17/Sep/2026:16:18:40 -0300] "" 400 0 "-" "-" "-"
+192.168.71.248 - - [17/Sep/2026:16:18:43 -0300] "GET /health HTTP/1.1" 500 21 "-" "cb54" "-"
+192.168.71.248 - - [17/Sep/2026:16:19:39 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:20:01 -0300] "GET /wp-admin/install.php?step=1 HTTP/1.1" 502 157 "-" "http://jkx.app/wp-admin/install.php?step=1" "2a06:98c0:3600::103, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:16:20:44 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:21:49 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:22:54 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:23:59 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:25:05 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:26:10 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:27:15 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:28:20 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:29:10 -0300] "GET / HTTP/1.1" 200 986 "-" "Mozilla/5.0 (compatible; CensysInspect/1.1; +https://about.censys.io/)" "199.45.154.78, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:16:29:13 -0300] "GET /favicon.ico HTTP/1.1" 404 129 "-" "Mozilla/5.0 (compatible; CensysInspect/1.1; +https://about.censys.io/)" "2602:80d:1003::3e, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:16:29:26 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:30:31 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:31:46 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:32:52 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:33:57 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:35:02 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:36:07 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:37:13 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:38:18 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:39:23 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:40:28 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:41:33 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:42:39 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:43:21 -0300] "POST /xmlrpc.php HTTP/1.1" 502 157 "-" "Mozilla/5.0 (Windows NT 10.0; x86) AppleWebKit/537.36 (KHTML, like Gecko) Opera/62.0.0.0 Safari/537.36" "149.50.220.166, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:16:43:44 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:44:49 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:45:55 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:47:00 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:48:05 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:49:10 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:50:15 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:51:21 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:52:26 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:53:31 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:54:36 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:55:42 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:56:47 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:57:52 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:58:57 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:00:02 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:01:08 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:02:13 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:03:18 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:04:24 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:05:29 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:06:34 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:07:39 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:08:44 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:09:50 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:10:55 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:12:00 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:13:05 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:14:11 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:15:16 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:16:21 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:17:27 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:18:32 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:19:37 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:20:42 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:21:47 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:22:53 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:23:58 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:25:03 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:26:08 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:27:13 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:28:19 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:29:24 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:30:29 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:31:34 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:32:39 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:33:45 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:34:50 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:35:55 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:37:00 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:38:05 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:39:11 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:39:43 -0300] "GET /robots.txt HTTP/1.1" 200 790 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36; compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot" "51.8.102.237, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:17:40:16 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:41:21 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+127.0.0.1 - - [17/Sep/2026:17:41:30 -0300] "GET /health HTTP/1.1" 200 52 "-" "curl/8.14.1" "-"
+192.168.71.248 - - [17/Sep/2026:17:42:26 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:43:32 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:44:37 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:45:42 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:46:47 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+127.0.0.1 - - [17/Sep/2026:17:47:08 -0300] "GET /health HTTP/1.1" 200 52 "-" "curl/8.14.1" "-"
+192.168.71.248 - - [17/Sep/2026:17:47:52 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:48:58 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:50:03 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:51:08 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:52:13 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:53:19 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:54:24 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:55:29 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:56:34 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:57:39 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+127.0.0.1 - - [17/Sep/2026:17:58:34 -0300] "GET /health HTTP/1.1" 200 52 "-" "curl/8.14.1" "-"
+192.168.71.248 - - [17/Sep/2026:17:58:45 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:17:59:50 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:18:00:55 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:18:02:00 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:18:03:05 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:18:04:11 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:18:05:00 -0300] "GET /robots.txt HTTP/1.1" 502 157 "https://jkx.app/robots.txt" "Mozilla/5.0 (compatible;PetalBot;+https://webmaster.petalsearch.com/site/petalbot)" "114.119.152.139, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:18:05:16 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:18:05:35 -0300] "GET /wp-admin/install.php?step=1 HTTP/1.1" 502 157 "-" "http://jkx.app/wp-admin/install.php?step=1" "2a06:98c0:3600::103, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:18:06:21 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:18:07:26 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+127.0.0.1 - - [17/Sep/2026:18:08:30 -0300] "GET /health HTTP/1.1" 200 52 "-" "curl/8.14.1" "-"
+192.168.71.248 - - [17/Sep/2026:18:08:32 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+--- error delta ---
+2026/09/17 06:57:02 [error] 1557#1557: *402 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 08:08:16 [error] 1563#1563: *1096 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 08:14:24 [error] 1564#1564: *1113 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 08:23:19 [error] 1565#1565: *1133 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /robots.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/robots.txt", host: "jkx.app"
+2026/09/17 08:23:19 [error] 1565#1565: *1135 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /llms.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/llms.txt", host: "jkx.app"
+2026/09/17 08:23:20 [error] 1565#1565: *1137 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 09:22:00 [error] 1569#1569: *1253 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 09:22:01 [error] 1570#1570: *1255 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /favicon.ico HTTP/1.1", upstream: "http://127.0.0.1:8192/favicon.ico", host: "jkx.app"
+2026/09/17 09:57:29 [error] 1554#1554: *1324 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 10:59:17 [error] 1558#1558: *1718 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 11:13:30 [error] 1558#1558: *1746 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "management.zeecred.dev.br"
+2026/09/17 11:26:57 [error] 1561#1561: *1772 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /phpinfo.php HTTP/1.1", upstream: "http://127.0.0.1:8192/phpinfo.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/phpinfo.php"
+2026/09/17 11:26:59 [error] 1561#1561: *1774 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /test.php HTTP/1.1", upstream: "http://127.0.0.1:8192/test.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/test.php"
+2026/09/17 11:27:04 [error] 1561#1561: *1776 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /_profiler/phpinfo HTTP/1.1", upstream: "http://127.0.0.1:8192/_profiler/phpinfo", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/_profiler/phpinfo"
+2026/09/17 11:27:10 [error] 1562#1562: *1780 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /info.php HTTP/1.1", upstream: "http://127.0.0.1:8192/info.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/info.php"
+2026/09/17 11:27:14 [error] 1562#1562: *1782 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /php.php HTTP/1.1", upstream: "http://127.0.0.1:8192/php.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/php.php"
+2026/09/17 11:27:17 [error] 1562#1562: *1784 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /php_info.php HTTP/1.1", upstream: "http://127.0.0.1:8192/php_info.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/php_info.php"
+2026/09/17 11:27:21 [error] 1562#1562: *1786 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /i.php HTTP/1.1", upstream: "http://127.0.0.1:8192/i.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/i.php"
+2026/09/17 11:27:24 [error] 1562#1562: *1788 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /pi.php HTTP/1.1", upstream: "http://127.0.0.1:8192/pi.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/pi.php"
+2026/09/17 11:27:28 [error] 1562#1562: *1790 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/"
+2026/09/17 11:27:31 [error] 1562#1562: *1792 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /admin/phpinfo.php HTTP/1.1", upstream: "http://127.0.0.1:8192/admin/phpinfo.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/admin/phpinfo.php"
+2026/09/17 11:27:34 [error] 1562#1562: *1794 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /pinfo.php HTTP/1.1", upstream: "http://127.0.0.1:8192/pinfo.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/pinfo.php"
+2026/09/17 11:27:34 [error] 1562#1562: *1796 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /php_version.php HTTP/1.1", upstream: "http://127.0.0.1:8192/php_version.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/php_version.php"
+2026/09/17 11:27:38 [error] 1562#1562: *1798 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.aws/credentials HTTP/1.1", upstream: "http://127.0.0.1:8192/.aws/credentials", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.aws/credentials"
+2026/09/17 11:27:41 [error] 1562#1562: *1800 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env HTTP/1.1", upstream: "http://127.0.0.1:8192/.env", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env"
+2026/09/17 11:27:43 [error] 1562#1562: *1802 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env.example HTTP/1.1", upstream: "http://127.0.0.1:8192/.env.example", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env.example"
+2026/09/17 11:27:46 [error] 1562#1562: *1804 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env.local HTTP/1.1", upstream: "http://127.0.0.1:8192/.env.local", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env.local"
+2026/09/17 11:27:49 [error] 1562#1562: *1806 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env.backup HTTP/1.1", upstream: "http://127.0.0.1:8192/.env.backup", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env.backup"
+2026/09/17 11:27:53 [error] 1562#1562: *1808 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /config/.env HTTP/1.1", upstream: "http://127.0.0.1:8192/config/.env", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/config/.env"
+2026/09/17 12:36:10 [error] 1568#1568: *1941 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 13:22:26 [error] 1570#1570: *2031 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 13:22:27 [error] 1553#1553: *2033 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-includes/ID3/license.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-includes/ID3/license.txt", host: "jkx.app"
+2026/09/17 13:22:27 [error] 1553#1553: *2035 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /feed/ HTTP/1.1", upstream: "http://127.0.0.1:8192/feed/", host: "jkx.app"
+2026/09/17 13:22:27 [error] 1553#1553: *2037 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php?rsd HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php?rsd", host: "jkx.app"
+2026/09/17 13:22:28 [error] 1553#1553: *2039 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /blog/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/blog/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:28 [error] 1553#1553: *2041 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /web/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/web/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:28 [error] 1553#1553: *2043 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wordpress/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/wordpress/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2045 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/wp/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2047 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /2020/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/2020/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2049 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /2019/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/2019/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2051 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /2021/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/2021/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:30 [error] 1553#1553: *2053 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /shop/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/shop/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:30 [error] 1553#1553: *2055 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp1/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/wp1/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:30 [error] 1553#1553: *2057 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /test/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/test/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:31 [error] 1553#1553: *2059 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /site/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/site/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:31 [error] 1553#1553: *2061 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /cms/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/cms/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:47:31 [error] 1556#1556: *2112 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 13:47:31 [error] 1556#1556: *2114 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "jkx.app"
+2026/09/17 13:47:31 [error] 1556#1556: *2116 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:31 [error] 1556#1556: *2118 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:32 [error] 1556#1556: *2120 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 13:47:32 [error] 1556#1556: *2122 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "jkx.app"
+2026/09/17 13:47:32 [error] 1556#1556: *2124 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:32 [error] 1556#1556: *2126 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:33 [error] 1555#1555: *2128 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 13:47:33 [error] 1555#1555: *2130 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:33 [error] 1555#1555: *2131 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "jkx.app"
+2026/09/17 13:47:33 [error] 1555#1555: *2134 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "management.zeecred.dev.br"
+2026/09/17 14:25:20 [error] 1559#1559: *2204 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 15:58:58 [error] 1570#1570: *2519 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /old/ HTTP/1.1", upstream: "http://127.0.0.1:8192/old/", host: "jkx.app"
+2026/09/17 15:58:58 [error] 1570#1570: *2521 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /wordpress/ HTTP/1.1", upstream: "http://127.0.0.1:8192/wordpress/", host: "jkx.app"
+2026/09/17 15:58:58 [error] 1570#1570: *2523 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /wp/ HTTP/1.1", upstream: "http://127.0.0.1:8192/wp/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2525 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /backup/ HTTP/1.1", upstream: "http://127.0.0.1:8192/backup/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2527 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2529 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /new/ HTTP/1.1", upstream: "http://127.0.0.1:8192/new/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2531 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /blog/ HTTP/1.1", upstream: "http://127.0.0.1:8192/blog/", host: "jkx.app"
+2026/09/17 16:13:50 [error] 1554#1554: *2569 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 16:20:01 [error] 1556#1556: *2599 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 16:43:21 [error] 1555#1555: *2647 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "POST /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 18:05:00 [error] 2852482#2852482: *2824 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /robots.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/robots.txt", host: "jkx.app", referrer: "https://jkx.app/robots.txt"
+2026/09/17 18:05:35 [error] 2852482#2852482: *2828 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+== Frida nginx log delta ==
+--- access delta ---
+187.10.45.41 - - [17/Sep/2026:18:08:34 -0300] "GET /health?trace=cb60-20260917-210824Z-443 HTTP/1.1" 502 157 "-" "cb60-20260917-210824Z"
+187.10.45.41 - - [17/Sep/2026:18:08:35 -0300] "GET /health?trace=cb60-20260917-210824Z-8443 HTTP/1.1" 502 157 "-" "cb60-20260917-210824Z"
+--- error delta ---
+2026/09/17 18:08:34 [error] 14811#14811: *38328 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /health?trace=cb60-20260917-210824Z-443 HTTP/1.1", upstream: "https://192.168.71.50:443/health?trace=cb60-20260917-210824Z-443", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 18:08:35 [error] 14811#14811: *38330 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /health?trace=cb60-20260917-210824Z-8443 HTTP/1.1", upstream: "https://192.168.71.50:443/health?trace=cb60-20260917-210824Z-8443", host: "codexbridge.inovacaosistemas.com.br:8443"
+== targeted recent errors mentioning CodexBridge upstreams ==
+-- T610 errors --
+2026/09/17 06:57:02 [error] 1557#1557: *402 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 08:08:16 [error] 1563#1563: *1096 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 08:14:24 [error] 1564#1564: *1113 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 08:23:19 [error] 1565#1565: *1133 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /robots.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/robots.txt", host: "jkx.app"
+2026/09/17 08:23:19 [error] 1565#1565: *1135 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /llms.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/llms.txt", host: "jkx.app"
+2026/09/17 08:23:20 [error] 1565#1565: *1137 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 09:22:00 [error] 1569#1569: *1253 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 09:22:01 [error] 1570#1570: *1255 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /favicon.ico HTTP/1.1", upstream: "http://127.0.0.1:8192/favicon.ico", host: "jkx.app"
+2026/09/17 09:57:29 [error] 1554#1554: *1324 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 10:59:17 [error] 1558#1558: *1718 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 11:13:30 [error] 1558#1558: *1746 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "management.zeecred.dev.br"
+2026/09/17 11:26:57 [error] 1561#1561: *1772 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /phpinfo.php HTTP/1.1", upstream: "http://127.0.0.1:8192/phpinfo.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/phpinfo.php"
+2026/09/17 11:26:59 [error] 1561#1561: *1774 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /test.php HTTP/1.1", upstream: "http://127.0.0.1:8192/test.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/test.php"
+2026/09/17 11:27:04 [error] 1561#1561: *1776 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /_profiler/phpinfo HTTP/1.1", upstream: "http://127.0.0.1:8192/_profiler/phpinfo", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/_profiler/phpinfo"
+2026/09/17 11:27:10 [error] 1562#1562: *1780 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /info.php HTTP/1.1", upstream: "http://127.0.0.1:8192/info.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/info.php"
+2026/09/17 11:27:14 [error] 1562#1562: *1782 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /php.php HTTP/1.1", upstream: "http://127.0.0.1:8192/php.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/php.php"
+2026/09/17 11:27:17 [error] 1562#1562: *1784 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /php_info.php HTTP/1.1", upstream: "http://127.0.0.1:8192/php_info.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/php_info.php"
+2026/09/17 11:27:21 [error] 1562#1562: *1786 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /i.php HTTP/1.1", upstream: "http://127.0.0.1:8192/i.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/i.php"
+2026/09/17 11:27:24 [error] 1562#1562: *1788 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /pi.php HTTP/1.1", upstream: "http://127.0.0.1:8192/pi.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/pi.php"
+2026/09/17 11:27:28 [error] 1562#1562: *1790 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/"
+2026/09/17 11:27:31 [error] 1562#1562: *1792 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /admin/phpinfo.php HTTP/1.1", upstream: "http://127.0.0.1:8192/admin/phpinfo.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/admin/phpinfo.php"
+2026/09/17 11:27:34 [error] 1562#1562: *1794 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /pinfo.php HTTP/1.1", upstream: "http://127.0.0.1:8192/pinfo.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/pinfo.php"
+2026/09/17 11:27:34 [error] 1562#1562: *1796 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /php_version.php HTTP/1.1", upstream: "http://127.0.0.1:8192/php_version.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/php_version.php"
+2026/09/17 11:27:38 [error] 1562#1562: *1798 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.aws/credentials HTTP/1.1", upstream: "http://127.0.0.1:8192/.aws/credentials", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.aws/credentials"
+2026/09/17 11:27:41 [error] 1562#1562: *1800 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env HTTP/1.1", upstream: "http://127.0.0.1:8192/.env", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env"
+2026/09/17 11:27:43 [error] 1562#1562: *1802 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env.example HTTP/1.1", upstream: "http://127.0.0.1:8192/.env.example", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env.example"
+2026/09/17 11:27:46 [error] 1562#1562: *1804 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env.local HTTP/1.1", upstream: "http://127.0.0.1:8192/.env.local", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env.local"
+2026/09/17 11:27:49 [error] 1562#1562: *1806 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env.backup HTTP/1.1", upstream: "http://127.0.0.1:8192/.env.backup", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env.backup"
+2026/09/17 11:27:53 [error] 1562#1562: *1808 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /config/.env HTTP/1.1", upstream: "http://127.0.0.1:8192/config/.env", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/config/.env"
+2026/09/17 12:36:10 [error] 1568#1568: *1941 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 13:22:26 [error] 1570#1570: *2031 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 13:22:27 [error] 1553#1553: *2033 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-includes/ID3/license.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-includes/ID3/license.txt", host: "jkx.app"
+2026/09/17 13:22:27 [error] 1553#1553: *2035 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /feed/ HTTP/1.1", upstream: "http://127.0.0.1:8192/feed/", host: "jkx.app"
+2026/09/17 13:22:27 [error] 1553#1553: *2037 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php?rsd HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php?rsd", host: "jkx.app"
+2026/09/17 13:22:28 [error] 1553#1553: *2039 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /blog/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/blog/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:28 [error] 1553#1553: *2041 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /web/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/web/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:28 [error] 1553#1553: *2043 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wordpress/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/wordpress/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2045 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/wp/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2047 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /2020/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/2020/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2049 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /2019/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/2019/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2051 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /2021/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/2021/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:30 [error] 1553#1553: *2053 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /shop/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/shop/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:30 [error] 1553#1553: *2055 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp1/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/wp1/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:30 [error] 1553#1553: *2057 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /test/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/test/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:31 [error] 1553#1553: *2059 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /site/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/site/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:31 [error] 1553#1553: *2061 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /cms/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/cms/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:47:31 [error] 1556#1556: *2112 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 13:47:31 [error] 1556#1556: *2114 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "jkx.app"
+2026/09/17 13:47:31 [error] 1556#1556: *2116 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:31 [error] 1556#1556: *2118 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:32 [error] 1556#1556: *2120 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 13:47:32 [error] 1556#1556: *2122 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "jkx.app"
+2026/09/17 13:47:32 [error] 1556#1556: *2124 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:32 [error] 1556#1556: *2126 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:33 [error] 1555#1555: *2128 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 13:47:33 [error] 1555#1555: *2130 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:33 [error] 1555#1555: *2131 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "jkx.app"
+2026/09/17 13:47:33 [error] 1555#1555: *2134 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "management.zeecred.dev.br"
+2026/09/17 14:25:20 [error] 1559#1559: *2204 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 15:58:58 [error] 1570#1570: *2519 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /old/ HTTP/1.1", upstream: "http://127.0.0.1:8192/old/", host: "jkx.app"
+2026/09/17 15:58:58 [error] 1570#1570: *2521 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /wordpress/ HTTP/1.1", upstream: "http://127.0.0.1:8192/wordpress/", host: "jkx.app"
+2026/09/17 15:58:58 [error] 1570#1570: *2523 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /wp/ HTTP/1.1", upstream: "http://127.0.0.1:8192/wp/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2525 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /backup/ HTTP/1.1", upstream: "http://127.0.0.1:8192/backup/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2527 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2529 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /new/ HTTP/1.1", upstream: "http://127.0.0.1:8192/new/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2531 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /blog/ HTTP/1.1", upstream: "http://127.0.0.1:8192/blog/", host: "jkx.app"
+2026/09/17 16:13:50 [error] 1554#1554: *2569 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 16:20:01 [error] 1556#1556: *2599 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 16:43:21 [error] 1555#1555: *2647 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "POST /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 18:05:00 [error] 2852482#2852482: *2824 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /robots.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/robots.txt", host: "jkx.app", referrer: "https://jkx.app/robots.txt"
+2026/09/17 18:05:35 [error] 2852482#2852482: *2828 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+-- Frida errors --
+2026/09/17 04:31:35 [crit] 25898#25898: *12367 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 87.236.176.43, server: 0.0.0.0:443
+2026/09/17 05:03:27 [crit] 25898#25898: *12887 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 159.223.207.187, server: 0.0.0.0:443
+2026/09/17 05:09:50 [crit] 25898#25898: *13008 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 152.32.200.213, server: 0.0.0.0:443
+2026/09/17 05:18:21 [crit] 25897#25897: *13159 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 123.58.205.100, server: 0.0.0.0:443
+2026/09/17 05:21:55 [crit] 25896#25896: *13252 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 152.32.135.48, server: 0.0.0.0:443
+2026/09/17 05:50:50 [crit] 25898#25898: *13849 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 62.210.198.226, server: 0.0.0.0:443
+2026/09/17 05:50:50 [crit] 25898#25898: *13851 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 51.158.37.20, server: 0.0.0.0:443
+2026/09/17 05:50:50 [crit] 25898#25898: *13853 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 51.159.109.198, server: 0.0.0.0:443
+2026/09/17 05:50:53 [crit] 25897#25897: *13887 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 62.210.198.226, server: 0.0.0.0:443
+2026/09/17 05:50:53 [crit] 25897#25897: *13888 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 51.158.37.20, server: 0.0.0.0:443
+2026/09/17 05:50:53 [crit] 25897#25897: *13890 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 51.159.109.198, server: 0.0.0.0:443
+2026/09/17 07:33:29 [crit] 25898#25898: *14738 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 5.181.27.147, server: 0.0.0.0:443
+2026/09/17 07:34:29 [crit] 25896#25896: *14748 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 5.181.27.147, server: 0.0.0.0:443
+2026/09/17 07:52:57 [crit] 25899#25899: *14806 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 164.90.148.138, server: 0.0.0.0:443
+2026/09/17 08:08:24 [crit] 25896#25896: *15141 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 20.169.50.187, server: 0.0.0.0:443
+2026/09/17 11:48:11 [error] 21648#21648: *16385 connect() failed (111: Connection refused) while connecting to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /agent/ws?executor_id=devel3 HTTP/1.1", upstream: "http://127.0.0.1:18080/agent/ws?executor_id=devel3", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 11:48:16 [error] 21648#21648: *16387 connect() failed (111: Connection refused) while connecting to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /agent/ws?executor_id=devel3 HTTP/1.1", upstream: "http://127.0.0.1:18080/agent/ws?executor_id=devel3", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 11:48:25 [error] 21648#21648: *16389 connect() failed (111: Connection refused) while connecting to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /agent/ws?executor_id=devel3 HTTP/1.1", upstream: "http://127.0.0.1:18080/agent/ws?executor_id=devel3", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 13:43:22 [crit] 21646#21646: *16805 SSL_do_handshake() failed (SSL: error:0A00006C:SSL routines::bad key share) while SSL handshaking, client: 216.180.246.152, server: 0.0.0.0:443
+2026/09/17 17:41:38 [error] 14072#14072: *38219 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /health HTTP/1.1", upstream: "https://192.168.71.50:443/health", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 17:41:39 [error] 14073#14073: *38221 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /health HTTP/1.1", upstream: "https://192.168.71.50:443/health", host: "codexbridge.inovacaosistemas.com.br:8443"
+2026/09/17 17:41:39 [error] 14074#14074: *38223 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /.well-known/oauth-authorization-server HTTP/1.1", upstream: "https://192.168.71.50:443/.well-known/oauth-authorization-server", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 17:41:40 [error] 14075#14075: *38225 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /.well-known/oauth-protected-resource/mcp HTTP/1.1", upstream: "https://192.168.71.50:443/.well-known/oauth-protected-resource/mcp", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 17:41:40 [error] 14072#14072: *38227 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /.well-known/oauth-authorization-server HTTP/1.1", upstream: "https://192.168.71.50:443/.well-known/oauth-authorization-server", host: "codexbridge.inovacaosistemas.com.br:8443"
+2026/09/17 17:41:40 [error] 14072#14072: *38229 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /.well-known/oauth-protected-resource/mcp HTTP/1.1", upstream: "https://192.168.71.50:443/.well-known/oauth-protected-resource/mcp", host: "codexbridge.inovacaosistemas.com.br:8443"
+2026/09/17 17:41:41 [error] 14072#14072: *38231 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /.well-known/oauth-authorization-server HTTP/1.1", upstream: "https://192.168.71.50:443/.well-known/oauth-authorization-server", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 17:41:41 [error] 14072#14072: *38233 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /.well-known/oauth-authorization-server HTTP/1.1", upstream: "https://192.168.71.50:443/.well-known/oauth-authorization-server", host: "codexbridge.inovacaosistemas.com.br:8443"
+2026/09/17 17:47:17 [error] 14810#14810: *38252 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /health HTTP/1.1", upstream: "https://192.168.71.50:443/health", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 17:47:17 [error] 14811#14811: *38254 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /health HTTP/1.1", upstream: "https://192.168.71.50:443/health", host: "codexbridge.inovacaosistemas.com.br:8443"
+2026/09/17 17:47:18 [error] 14812#14812: *38256 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /.well-known/oauth-authorization-server HTTP/1.1", upstream: "https://192.168.71.50:443/.well-known/oauth-authorization-server", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 17:47:18 [error] 14813#14813: *38258 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /.well-known/oauth-protected-resource/mcp HTTP/1.1", upstream: "https://192.168.71.50:443/.well-known/oauth-protected-resource/mcp", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 17:47:18 [error] 14810#14810: *38260 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /.well-known/oauth-authorization-server HTTP/1.1", upstream: "https://192.168.71.50:443/.well-known/oauth-authorization-server", host: "codexbridge.inovacaosistemas.com.br:8443"
+2026/09/17 17:47:19 [error] 14810#14810: *38262 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /.well-known/oauth-protected-resource/mcp HTTP/1.1", upstream: "https://192.168.71.50:443/.well-known/oauth-protected-resource/mcp", host: "codexbridge.inovacaosistemas.com.br:8443"
+2026/09/17 17:47:19 [error] 14810#14810: *38264 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /.well-known/oauth-authorization-server HTTP/1.1", upstream: "https://192.168.71.50:443/.well-known/oauth-authorization-server", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 17:47:19 [error] 14810#14810: *38266 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /.well-known/oauth-authorization-server HTTP/1.1", upstream: "https://192.168.71.50:443/.well-known/oauth-authorization-server", host: "codexbridge.inovacaosistemas.com.br:8443"
+2026/09/17 17:58:39 [error] 14810#14810: *38297 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /health?trace=cb60-20260917-205829Z-443 HTTP/1.1", upstream: "https://192.168.71.50:443/health?trace=cb60-20260917-205829Z-443", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 17:58:40 [error] 14811#14811: *38299 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /health?trace=cb60-20260917-205829Z-8443 HTTP/1.1", upstream: "https://192.168.71.50:443/health?trace=cb60-20260917-205829Z-8443", host: "codexbridge.inovacaosistemas.com.br:8443"
+2026/09/17 18:08:34 [error] 14811#14811: *38328 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /health?trace=cb60-20260917-210824Z-443 HTTP/1.1", upstream: "https://192.168.71.50:443/health?trace=cb60-20260917-210824Z-443", host: "codexbridge.inovacaosistemas.com.br"
+2026/09/17 18:08:35 [error] 14811#14811: *38330 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /health?trace=cb60-20260917-210824Z-8443 HTTP/1.1", upstream: "https://192.168.71.50:443/health?trace=cb60-20260917-210824Z-8443", host: "codexbridge.inovacaosistemas.com.br:8443"
+CODEXBRIDGE_LIVE_502_TRACE_COMPLETE
