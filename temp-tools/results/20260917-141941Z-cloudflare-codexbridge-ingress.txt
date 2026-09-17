@@ -1,0 +1,92 @@
+== Audit Cloudflare / CodexBridge ingress ==
+utc=2026-09-17T14:19:41Z
+host=codexbridge.inovacaosistemas.com.br
+zone=inovacaosistemas.com.br
+
+Purpose:
+- determine whether codexbridge.inovacaosistemas.com.br is proxied by Cloudflare or served as DNS-only;
+- detect any Cloudflare Tunnel route for codexbridge.inovacaosistemas.com.br;
+- inspect whether cloudflared is running/configured on devel3, Frida, or T610;
+- compare public 443 and 8443 behavior without changing any routing.
+
+No Cloudflare credential values are printed.
+
+== Public DNS and HTTP edge fingerprints ==
+-- DNS A/AAAA/CNAME --
+[A]
+186.194.227.198
+[AAAA]
+[CNAME]
+-- who answers 443/8443 --
+[https://codexbridge.inovacaosistemas.com.br]
+HTTP/2 200 
+server: nginx/1.22.1
+date: Thu, 17 Sep 2026 14:19:42 GMT
+content-type: application/json
+content-length: 52
+x-request-id: 73117c70-73f3-4fd8-8ece-65956f6a3f65
+
+
+[https://codexbridge.inovacaosistemas.com.br:8443]
+HTTP/2 200 
+server: nginx/1.22.1
+date: Thu, 17 Sep 2026 14:19:42 GMT
+content-type: application/json
+content-length: 52
+x-request-id: 40e29235-bdad-4dff-b441-594c2e24b4e8
+
+
+edge_fingerprint https://codexbridge.inovacaosistemas.com.br=not_cloudflare_http_proxy
+edge_fingerprint https://codexbridge.inovacaosistemas.com.br:8443=not_cloudflare_http_proxy
+
+== Locate Cloudflare credentials ==
+credentials_found=4
+credential_file=cloudflare-edortta.json
+credential_file=cloudflare-lumina.json
+credential_file=cloudflare-edortta.json
+credential_file=cloudflare-lumina.json
+
+== Cloudflare API: zone and DNS record ==
+-- trying cloudflare-edortta.json --
+auth_mode=bearer
+zone_query=failed_or_not_permitted
+-- trying cloudflare-lumina.json --
+auth_mode=bearer
+zone_query=failed_or_not_permitted
+-- trying cloudflare-edortta.json --
+auth_mode=bearer
+zone_query=failed_or_not_permitted
+-- trying cloudflare-lumina.json --
+auth_mode=bearer
+zone_query=failed_or_not_permitted
+cloudflare_api_audit=inconclusive_no_working_credentials
+
+== devel3 cloudflared state ==
+-- devel3: cloudflared process/service/config --
+cloudflared version 2026.8.1 (built 2026-08-13-13:51 UTC)
+inactive
+
+== Frida cloudflared state ==
+frida_ssh=ok
+cloudflared version 2026.8.2 (built 2026-08-14-12:17 UTC)
+729 /usr/local/bin/cloudflared --no-autoupdate tunnel run --token-file /etc/cloudflared/dom1-zeecred.token
+28606 bash -c echo frida_ssh=ok; command -v cloudflared >/dev/null 2>&1 && cloudflared --version || echo cloudflared_binary=absent; pgrep -af cloudflared 2>/dev/null | sed -E "s/(--token[= ]+)[^ ]+/\1[REDACTED]/g" || true; systemctl is-active cloudflared 2>/dev/null || true; for c in /etc/cloudflared/config.yml /etc/cloudflared/config.yaml ~/.cloudflared/config.yml ~/.cloudflared/config.yaml; do if [ -r "$c" ]; then echo config_file=$c; grep -E "^[[:space:]]*(tunnel:|hostname:|service:|url:)" "$c" || true; fi; done
+inactive
+
+== T610 cloudflared state via public :22 ==
+Host key verification failed.
+t610_ssh=failed_or_offline
+
+== Reachability summary ==
+tcp codexbridge.inovacaosistemas.com.br:22=open
+tcp codexbridge.inovacaosistemas.com.br:2200=open
+tcp codexbridge.inovacaosistemas.com.br:443=open
+tcp codexbridge.inovacaosistemas.com.br:8443=open
+
+Interpretation hints:
+- `proxied=true` or HTTP headers such as `cf-ray` => Cloudflare reverse proxy is in the request path.
+- CNAME to `*.cfargotunnel.com` or `TUNNEL_MATCH` => Cloudflare Tunnel is configured for this hostname.
+- DNS-only A record plus no tunnel match => traffic is going directly to the public origin/NAT, not being healed by Cloudflare.
+- If 443 depends on T610 while 8443 reaches Frida, moving the canonical public CodexBridge ingress to Frida is architecturally reasonable because Frida hosts the gateway and Bridge Nodes connect outbound by WebSocket.
+
+CODEXBRIDGE_CLOUDFLARE_INGRESS_AUDIT_COMPLETE
