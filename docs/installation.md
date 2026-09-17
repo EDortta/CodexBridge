@@ -9,7 +9,7 @@
    `python3 -m venv /opt/codex-bridge/.venv && /opt/codex-bridge/.venv/bin/pip install /opt/codex-bridge`
 4. Criar `/etc/codex-bridge/env` a partir de `.env.example`.
    No `frida`, prefira `CODEX_BRIDGE_BIND_HOST=127.0.0.1` e `CODEX_BRIDGE_BIND_PORT=18080`, porque `*:8080` já está ocupado por `mosquitto`.
-   Para uso com ChatGPT, defina `CODEX_BRIDGE_MCP_AUTH_MODE=oauth`, `CODEX_BRIDGE_PUBLIC_BASE_URL=https://codexbridge.inovacaosistemas.com.br:8443` e `CODEX_BRIDGE_USER_REGISTRY_FILE=/etc/codex-bridge/users.json`.
+   Para uso com ChatGPT, defina `CODEX_BRIDGE_MCP_AUTH_MODE=oauth`, `CODEX_BRIDGE_PUBLIC_BASE_URL=https://codexbridge.inovacaosistemas.com.br` e `CODEX_BRIDGE_USER_REGISTRY_FILE=/etc/codex-bridge/users.json`.
    Defina também `CODEX_BRIDGE_API_TRUSTED_PROXIES` com os endereços dos proxies
    à frente do gateway — é o que permite ao rate limiting distinguir um chamador
    do outro. **No `frida` o valor é `127.0.0.1`**, medido em 2026-08-10: o
@@ -127,4 +127,4 @@
 
 Prefira um subdomínio dedicado para o gateway, por exemplo `codexbridge.inovacaosistemas.com.br`, apontando para o mesmo IP público já usado pelo `frida`.
 
-No ambiente atual, o endpoint público do bridge é `https://codexbridge.inovacaosistemas.com.br:8443`. O agente deve usar `wss://codexbridge.inovacaosistemas.com.br:8443/agent/ws`.
+No ambiente atual, o endpoint público do bridge é `https://codexbridge.inovacaosistemas.com.br`. O agente deve usar `wss://codexbridge.inovacaosistemas.com.br:8443/agent/ws`.

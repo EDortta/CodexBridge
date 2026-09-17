@@ -1,0 +1,21 @@
+== Canonicalize CodexBridge on 443 ==
+canonical=https://codexbridge.inovacaosistemas.com.br
+== preflight ==
+{"status":"ok","time":"2026-09-17T14:34:54.380917Z"}
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+backup=/var/backups/codex-bridge/canonical-443-20260917-143456Z
+gateway_restart=ok
+public_base_url=https://codexbridge.inovacaosistemas.com.br
+== point devel3 agent WebSocket to 443 ==
+devel3_agent=active
+== update repository defaults ==
+updated=.env.example
+updated=gateway/app/core/config.py
+updated=docs/installation.md
+== validate ChatGPT-facing OAuth metadata ==
+/.well-known/oauth-authorization-server => {"issuer":"https://codexbridge.inovacaosistemas.com.br","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+/.well-known/openid-configuration => {"issuer":"https://codexbridge.inovacaosistemas.com.br","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+/.well-known/oauth-protected-resource => {"resource":"https://codexbridge.inovacaosistemas.com.br/mcp","authorization_servers":["https://codexbridge.inovacaosistemas.com.br"],"bearer_methods_supported":["header"],"scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"]}
+/.well-known/oauth-protected-resource/mcp => {"resource":"https://codexbridge.inovacaosistemas.com.br/mcp","authorization_servers":["https://codexbridge.inovacaosistemas.com.br"],"bearer_methods_supported":["header"],"scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"]}
+oauth_443=ok
+CODEXBRIDGE_CANONICAL_443_READY

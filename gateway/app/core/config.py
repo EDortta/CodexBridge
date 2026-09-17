@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # the same cost as any other. Fail-closed, per `design-standards.md` §6.
     # Development sets `CODEX_BRIDGE_USER_REGISTRY_FILE` like production does.
     user_registry_file: str = "/etc/codex-bridge/users.json"
-    public_base_url: str = "https://codexbridge.inovacaosistemas.com.br:8443"
+    public_base_url: str = "https://codexbridge.inovacaosistemas.com.br"
     mcp_auth_mode: str = "bearer"
     mcp_bearer_token: str = Field(default="change-me")
     mcp_bearer_tokens: str | None = None
