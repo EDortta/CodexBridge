@@ -1,0 +1,1325 @@
+== Inspect T610 CodexBridge vhost and 400 response (fixed) ==
+utc=2026-09-17T19:18:33Z
+host=codexbridge.inovacaosistemas.com.br
+
+Purpose:
+- inspect the real T610 nginx vhost for CodexBridge;
+- explain the HTTP 400 from local/public/Frida access;
+- make NO configuration changes.
+== T610 identity and nginx binary ==
+hostname=dom1-inovacao
+nginx_bin=
+nginx_usr_sbin=yes
+nginx version: nginx/1.22.1
+== T610 effective nginx config: CodexBridge server block context ==
+226-    }
+227-
+228-    error_page 403 /403.html;
+229-    location = /403.html {
+230-        root /var/www/deny;
+231-        internal;
+232-    }
+233-
+234-    access_log /var/log/nginx/default-deny.access.log;
+235-}
+236-
+237-server {
+238:    listen 443 ssl default_server;
+239:    listen [::]:443 ssl default_server;
+240-    server_name _;
+241-
+242-    # Certificado valido do proprio host. O nome nao casa quando o acesso e por
+243-    # IP — inevitavel —, mas ao menos nao entrega mais um certificado VENCIDO.
+244:    ssl_certificate     /etc/letsencrypt/live/frida.inovacaosistemas.com.br/fullchain.pem;
+245:    ssl_certificate_key /etc/letsencrypt/live/frida.inovacaosistemas.com.br/privkey.pem;
+246-    ssl_protocols TLSv1.2 TLSv1.3;
+247-    ssl_prefer_server_ciphers on;
+248-
+249-    location / {
+250-        return 403;
+251-    }
+252-
+253-    error_page 403 /403.html;
+254-    location = /403.html {
+255-        root /var/www/deny;
+256-        internal;
+257-    }
+258-
+259-    access_log /var/log/nginx/default-deny.access.log;
+260-}
+261-
+262-# configuration file /etc/nginx/sites-enabled/001-main.conf:
+263-server {
+264:    listen 443 ssl;
+265:    listen [::]:443 ssl;
+266-    server_name w2.inovacaosistemas.com.br;
+267-    
+268-
+269:    ssl_certificate /etc/letsencrypt/live/w2.inovacaosistemas.com.br/fullchain.pem;
+270:    ssl_certificate_key /etc/letsencrypt/live/w2.inovacaosistemas.com.br/privkey.pem;
+271-    ssl_protocols TLSv1.2 TLSv1.3;
+272-    ssl_prefer_server_ciphers on;
+273-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+274-
+275-    root /var/www/html;
+276-    index index.html index.php;
+277-
+278-    location /monitor {
+279:        proxy_pass http://127.0.0.1:9001;
+280-        proxy_http_version 1.1;
+281-        proxy_set_header Upgrade $http_upgrade;
+282-        proxy_set_header Connection "upgrade";
+283-        proxy_set_header Host $host;
+284-        proxy_set_header X-Real-IP $remote_addr;
+285-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+286-    } 
+287-
+288-    location /admin {        
+289-        try_files $uri $uri/ /admin/index.php?path=$uri&$args;
+290-    }
+291-
+--
+361-    server_name demo.lumina.blog.br;
+362-
+363-    location /.well-known/acme-challenge/ {
+364-        alias /var/www/html/.well-known/acme-challenge/;
+365-    }
+366-
+367-    location / {
+368-        return 301 https://$host$request_uri;
+369-    }
+370-}
+371-
+372-server {
+373:    listen 443 ssl;
+374:    listen [::]:443 ssl;
+375-    server_name demo.lumina.blog.br;
+376-
+377:    ssl_certificate     /etc/letsencrypt/live/demo.lumina.blog.br/fullchain.pem;
+378:    ssl_certificate_key /etc/letsencrypt/live/demo.lumina.blog.br/privkey.pem;
+379-    ssl_protocols       TLSv1.2 TLSv1.3;
+380-    ssl_prefer_server_ciphers on;
+381-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+382-
+383-    location / {
+384-        proxy_http_version 1.1;
+385-        proxy_set_header Host $http_host;
+386-        proxy_set_header X-Real-IP $remote_addr;
+387-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+388-        proxy_set_header X-Forwarded-Proto https;
+389:        proxy_pass http://127.0.0.1:8181;
+390-    }
+391-}
+392-
+393-# configuration file /etc/nginx/sites-enabled/003-code-inovacao.conf:
+394-server {
+395-    listen 80;
+396-    listen [::]:80;
+397-    server_name code.inovacaosistemas.com.br;
+398-
+399-    location /.well-known/acme-challenge/ {
+400-        alias /var/www/html/.well-known/acme-challenge/;
+401-    }
+402-
+403-    location / {
+404-        return 301 https://$host$request_uri;
+405-    }
+406-}
+407-
+408-server {
+409:    listen 443 ssl;
+410:    listen [::]:443 ssl;
+411-    server_name code.inovacaosistemas.com.br;
+412-
+413:    ssl_certificate     /etc/letsencrypt/live/code.inovacaosistemas.com.br/fullchain.pem;
+414:    ssl_certificate_key /etc/letsencrypt/live/code.inovacaosistemas.com.br/privkey.pem;
+415-    ssl_protocols       TLSv1.2 TLSv1.3;
+416-    ssl_prefer_server_ciphers on;
+417-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+418-
+419-    location / {
+420-        proxy_http_version 1.1;
+421-        proxy_set_header Host $http_host;
+422-        proxy_set_header Upgrade $http_upgrade;
+423-        proxy_set_header Connection upgrade;
+424-        proxy_set_header Accept-Encoding gzip;
+425-        proxy_set_header X-Real-IP $remote_addr;
+426-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+427-        proxy_set_header X-Forwarded-Proto https;
+428-        proxy_read_timeout 86400;
+429:        proxy_pass http://127.0.0.1:8080/;
+430-    }
+431-}
+432-
+433-# configuration file /etc/nginx/sites-enabled/004-testes-igrejapequena.conf:
+434-server {
+435-    listen 80;
+436-    listen [::]:80;
+437-    server_name testes.igrejapequena.com.br;
+438-
+439-    location /.well-known/acme-challenge/ {
+440-        alias /var/www/html/.well-known/acme-challenge/;
+441-    }
+442-
+443-    location / {
+444-        return 301 https://$host$request_uri;
+445-    }
+446-}
+447-
+448-server {
+449:    listen 443 ssl;
+450:    listen [::]:443 ssl;
+451-    server_name testes.igrejapequena.com.br;
+452-
+453:    ssl_certificate     /etc/letsencrypt/live/testes.igrejapequena.com.br/fullchain.pem;
+454:    ssl_certificate_key /etc/letsencrypt/live/testes.igrejapequena.com.br/privkey.pem;
+455-    ssl_protocols       TLSv1.2 TLSv1.3;
+456-    ssl_prefer_server_ciphers on;
+457-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+458-
+459-    root /var/www/testes.igrejapequena.com.br;
+460-    index index.html;
+461-
+462-    location /api/ {
+463-        gzip on;
+464-        gzip_proxied any;
+465-        gzip_types application/json text/plain;
+466-        gzip_comp_level 6;
+467-        proxy_buffer_size 16k;
+468-        proxy_buffers 8 32k;
+469-        proxy_busy_buffers_size 64k;
+470:        proxy_pass http://127.0.0.1:9080;
+471-        proxy_set_header Host $host;
+472-        proxy_set_header X-Real-IP $remote_addr;
+473-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+474-        proxy_set_header X-Forwarded-Proto https;
+475-        proxy_http_version 1.1;
+476-    }
+477-
+478-    location ^~ /media/ {
+479-        alias /srv/igrejapequena/media/;
+480-        expires 30d;
+481-        add_header Cache-Control "public, max-age=2592000";
+482-    }
+--
+498-    server_name clara.inovacaosistemas.com.br;
+499-
+500-    location /.well-known/acme-challenge/ {
+501-        alias /var/www/html/.well-known/acme-challenge/;
+502-    }
+503-
+504-    location / {
+505-        return 301 https://$host$request_uri;
+506-    }
+507-}
+508-
+509-server {
+510:    listen 443 ssl;
+511:    listen [::]:443 ssl;
+512-    server_name clara.inovacaosistemas.com.br;
+513-
+514:    ssl_certificate     /etc/letsencrypt/live/clara.inovacaosistemas.com.br/fullchain.pem;
+515:    ssl_certificate_key /etc/letsencrypt/live/clara.inovacaosistemas.com.br/privkey.pem;
+516-    ssl_protocols       TLSv1.2 TLSv1.3;
+517-    ssl_prefer_server_ciphers on;
+518-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+519-
+520-    # Tudo vai para o Node.js (porta 3000) — frontend + API + auth + WS
+521-    location / {
+522:        proxy_pass         http://127.0.0.1:3000;
+523-        proxy_set_header   Host $host;
+524-        proxy_set_header   X-Real-IP $remote_addr;
+525-        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+526-    }
+527-
+528-    location /ws {
+529:        proxy_pass             http://127.0.0.1:3000;
+530-        proxy_http_version     1.1;
+531-        proxy_set_header       Upgrade $http_upgrade;
+532-        proxy_set_header       Connection "upgrade";
+533-        proxy_set_header       Host $host;
+534-        proxy_read_timeout     86400;
+535-    }
+536-
+537-    location /ws-agent {
+538:        proxy_pass             http://127.0.0.1:3000;
+539-        proxy_http_version     1.1;
+540-        proxy_set_header       Upgrade $http_upgrade;
+541-        proxy_set_header       Connection "upgrade";
+542-        proxy_set_header       Host $host;
+543-        proxy_read_timeout     86400;
+544-    }
+545-
+546-    location ~ /\.ht { deny all; }
+547-}
+548-
+549-# configuration file /etc/nginx/sites-enabled/006-whisper.conf:
+550-server {
+--
+556-    location /.well-known/acme-challenge/ {
+557-        alias /var/www/html/.well-known/acme-challenge/;
+558-    }
+559-
+560-    # 308 e nao 301: preserva metodo e corpo. Os clientes (AI-Gateway, wa-hub)
+561-    # mandam POST com audio — um 301/302 viraria GET e perderia o corpo.
+562-    location / {
+563-        return 308 https://$host$request_uri;
+564-    }
+565-}
+566-
+567-server {
+568:    listen 443 ssl;
+569:    listen [::]:443 ssl;
+570-    server_name whisper.inovacaosistemas.com.br;
+571-
+572:    ssl_certificate     /etc/letsencrypt/live/whisper.inovacaosistemas.com.br/fullchain.pem;
+573:    ssl_certificate_key /etc/letsencrypt/live/whisper.inovacaosistemas.com.br/privkey.pem;
+574-    ssl_protocols TLSv1.2 TLSv1.3;
+575-    ssl_prefer_server_ciphers on;
+576-
+577-    location / {
+578:        proxy_pass http://127.0.0.1:8093;
+579-        proxy_http_version 1.1;
+580-        proxy_set_header Host $host;
+581-        proxy_set_header X-Real-IP $remote_addr;
+582-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+583-        proxy_set_header X-Forwarded-Proto $scheme;
+584-        client_max_body_size 50M;
+585-        proxy_read_timeout 120s;
+586-        proxy_send_timeout 120s;
+587-    }
+588-
+589-    location /tts/ {
+590:        proxy_pass http://127.0.0.1:8881/;
+591-        proxy_http_version 1.1;
+592-        proxy_set_header Host $host;
+593-        proxy_set_header X-Real-IP $remote_addr;
+594-        proxy_set_header X-Forwarded-Proto $scheme;
+595-        client_max_body_size 1M;
+596-        proxy_read_timeout 60s;
+597-        proxy_send_timeout 60s;
+598-    }
+599-}
+600-
+601-# configuration file /etc/nginx/sites-enabled/007-fw-monitor.conf:
+602-server {
+603-    listen 80;
+604-    listen [::]:80;
+605-    server_name fw-monitor.inovacaosistemas.com.br;
+606-
+607-    location /.well-known/acme-challenge/ {
+608-        alias /var/www/html/.well-known/acme-challenge/;
+609-    }
+610-
+611-    location / { return 301 https://$host$request_uri; }
+612-}
+613-
+614-server {
+615:    listen 443 ssl;
+616:    listen [::]:443 ssl;
+617-    server_name fw-monitor.inovacaosistemas.com.br;
+618-
+619:    ssl_certificate     /etc/letsencrypt/live/fw-monitor.inovacaosistemas.com.br/fullchain.pem;
+620:    ssl_certificate_key /etc/letsencrypt/live/fw-monitor.inovacaosistemas.com.br/privkey.pem;
+621-    ssl_protocols       TLSv1.2 TLSv1.3;
+622-    ssl_prefer_server_ciphers on;
+623-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
+624-
+625-    root /var/www/fw-monitor;
+626-    index index.html;
+627-
+628-    # API authmon — Bearer injetado no servidor
+629-    location /api/ {
+630:        proxy_pass         http://127.0.0.1:8741/;
+631-        proxy_set_header   Authorization "Bearer 2162ec294afef4a9bf141495a578ed608c7b6b63870041eb3042641f2b616540";
+632-        proxy_set_header   Host $host;
+633-        proxy_set_header   X-Real-IP $remote_addr;
+634-        proxy_read_timeout 30s;
+635-    }
+636-
+637-    # Proxy ip-api.com (free tier só aceita HTTP; evita mixed content)
+638-    location /geo/ {
+639:        proxy_pass         http://ip-api.com/;
+640-        proxy_set_header   Host ip-api.com;
+641-        proxy_set_header   X-Real-IP $remote_addr;
+642-        proxy_read_timeout 15s;
+643-    }
+644-
+645-    location / {
+646-        try_files $uri $uri/ /index.html;
+647-    }
+648-
+649-    location ~ /\.ht { deny all; }
+650-}
+651-
+--
+655-    listen [::]:80;
+656-    server_name felipe.zeecred.dev.br;
+657-
+658-    location /.well-known/acme-challenge/ {
+659-        alias /var/www/html/.well-known/acme-challenge/;
+660-    }
+661-    location / {
+662-        return 301 https://$host$request_uri;
+663-    }
+664-}
+665-
+666-server {
+667:    listen 443 ssl;
+668:    listen [::]:443 ssl;
+669-    server_name felipe.zeecred.dev.br;
+670-
+671:    ssl_certificate     /etc/letsencrypt/live/felipe.zeecred.dev.br/fullchain.pem;
+672:    ssl_certificate_key /etc/letsencrypt/live/felipe.zeecred.dev.br/privkey.pem;
+673-    ssl_protocols       TLSv1.2 TLSv1.3;
+674-    ssl_prefer_server_ciphers on;
+675-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+676-
+677-    client_max_body_size 50m;
+678-
+679-    # Homepage do Felipe = jk-dashboard (SPA estatica). /v1,/swagger,/docs,/monitor -> gateway local.
+680-    root /var/www/felipe.zeecred.dev.br/zeecred-web/dist;
+681-    index index.html;
+682-
+683-    # API e afins -> gateway jk-structure local (porta 8189)
+684:    location ^~ /v1/      { proxy_pass http://127.0.0.1:8189; include /etc/nginx/snippets/felipe-proxy.conf; }
+685:    location ^~ /swagger/ { proxy_pass http://127.0.0.1:8189; include /etc/nginx/snippets/felipe-proxy.conf; }
+686:    location ^~ /docs/    { proxy_pass http://127.0.0.1:8189; include /etc/nginx/snippets/felipe-proxy.conf; }
+687:    location ^~ /monitor  { proxy_pass http://127.0.0.1:8189; include /etc/nginx/snippets/felipe-proxy.conf; }
+688-
+689-    # config.json e index.html: sem cache (SPA entry + runtime config)
+690-    location = /config.json { add_header Cache-Control "no-store" always; try_files $uri =404; }
+691-    location ~* \.html?$    { add_header Cache-Control "no-store" always; try_files $uri /index.html; }
+692-
+693-    # assets versionados (hash no nome): cache longo
+694-    location ~* \.(?:js|mjs|css|woff2?|ttf|png|jpe?g|gif|svg|ico|webp|map)$ {
+695-        add_header Cache-Control "public, max-age=31536000, immutable" always;
+696-        try_files $uri =404;
+697-    }
+698-
+699-    # Autocontratacao (jk-clt-self-contracting): SPA estatica sob /autocontratacao/.
+--
+727-proxy_intercept_errors on;
+728-error_page 502 503 504 = @felipe_offline;
+729-
+730-# configuration file /etc/nginx/sites-enabled/009-flowlab-zeecred.conf:
+731-server {
+732-    listen 80;
+733-    listen [::]:80;
+734-    server_name flowlab.zeecred.dev.br;
+735-    location /.well-known/acme-challenge/ { alias /var/www/html/.well-known/acme-challenge/; }
+736-    location / { return 301 https://$host$request_uri; }
+737-}
+738-server {
+739:    listen 443 ssl;
+740:    listen [::]:443 ssl;
+741-    server_name flowlab.zeecred.dev.br;
+742-
+743:    ssl_certificate     /etc/letsencrypt/live/flowlab.zeecred.dev.br/fullchain.pem;
+744:    ssl_certificate_key /etc/letsencrypt/live/flowlab.zeecred.dev.br/privkey.pem;
+745-    ssl_protocols       TLSv1.2 TLSv1.3;
+746-    ssl_prefer_server_ciphers on;
+747-
+748-    client_max_body_size 50m;
+749-    root /var/www/flowlab.zeecred.dev.br/zeecred-web/dist;
+750-    index index.html;
+751-
+752:    location ^~ /v1/      { proxy_pass http://127.0.0.1:8190; include /etc/nginx/snippets/flowlab-proxy.conf; }
+753:    location ^~ /swagger/ { proxy_pass http://127.0.0.1:8190; include /etc/nginx/snippets/flowlab-proxy.conf; }
+754:    location ^~ /docs/    { proxy_pass http://127.0.0.1:8190; include /etc/nginx/snippets/flowlab-proxy.conf; }
+755:    location ^~ /monitor  { proxy_pass http://127.0.0.1:8190; include /etc/nginx/snippets/flowlab-proxy.conf; }
+756-
+757-    location = /config.json { add_header Cache-Control "no-store" always; try_files $uri =404; }
+758-    location ~* \.html?$   { add_header Cache-Control "no-store" always; try_files $uri /index.html; }
+759-    location ~* \.(?:js|mjs|css|woff2?|ttf|png|jpe?g|gif|svg|ico|webp|map)$ {
+760-        add_header Cache-Control "public, max-age=31536000, immutable" always;
+761-        try_files $uri =404;
+762-    }
+763-    location = /autocontratacao/config.json { alias /var/www/flowlab.zeecred.dev.br/self-contracting/dist/config.json; add_header Cache-Control "no-store" always; }
+764-    location ^~ /autocontratacao/ { alias /var/www/flowlab.zeecred.dev.br/self-contracting/dist/; try_files $uri $uri/ /autocontratacao/index.html; }
+765-    location / { try_files $uri /index.html; }
+766-
+767-    location @flowlab_offline {
+--
+791-#         + nginx -t + reload (ver docs/incidents/ops-20260715-incus-felipe.md).
+792-#
+793-# jkctl fala com estes caminhos via config_http_port=8183 + config_http_path
+794-# + config_agent_via=management/dom1 nas entradas api/felipe e api/flowlab.
+795-
+796-server {
+797-    listen 8183;
+798-    listen [::]:8183;
+799-    server_name _;
+800-
+801-    # config-agent do ambiente felipe (container Incus, IP fixo — WK-20260716)
+802-    location /felipe/ {
+803:        proxy_pass http://10.114.81.32:8183/;
+804-        proxy_http_version 1.1;
+805-        proxy_set_header Host $host;
+806-        proxy_set_header X-Real-IP $remote_addr;
+807-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+808-    }
+809-
+810-    # config-agent do ambiente flowlab (container Incus, IP fixo)
+811-    location /flowlab/ {
+812:        proxy_pass http://10.114.81.67:8183/;
+813-        proxy_http_version 1.1;
+814-        proxy_set_header Host $host;
+815-        proxy_set_header X-Real-IP $remote_addr;
+816-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+817-    }
+818-
+819-    # config-agent do ambiente dom1-stg (container Incus, IP fixo — WK-20260827)
+820-    location /dom1-stg/ {
+821:        proxy_pass http://10.114.81.50:8183/;
+822-        proxy_http_version 1.1;
+823-        proxy_set_header Host $host;
+824-        proxy_set_header X-Real-IP $remote_addr;
+825-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+826-    }
+827-    location /apresentacao/ {
+828:        proxy_pass http://10.114.81.25:8183/;
+829-        proxy_http_version 1.1;
+830-        proxy_set_header Host $host;
+831-        proxy_set_header X-Real-IP $remote_addr;
+832-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+833-    }
+834-}
+835-
+836-# configuration file /etc/nginx/sites-enabled/011-dom1-stg-zeecred.conf:
+837-# Vhost público do staging autônomo (api.zeecred.dev.br) no HOST dom1.
+838-# WK-20260827-dom1-autonomous · entrada só via Cloudflare Tunnel dom1-zeecred
+839-# (roteador upstream filtra tudo exceto 80/22): ingress -> https://localhost:443
+840-# com originServerName api.zeecred.dev.br + noTLSVerify, por isso o cert de
+--
+851-    listen [::]:80;
+852-    server_name api.zeecred.dev.br;
+853-
+854-    location /.well-known/acme-challenge/ {
+855-        alias /var/www/html/.well-known/acme-challenge/;
+856-    }
+857-    location / {
+858-        return 301 https://$host$request_uri;
+859-    }
+860-}
+861-
+862-server {
+863:    listen 443 ssl;
+864:    listen [::]:443 ssl;
+865-    server_name api.zeecred.dev.br;
+866-
+867:    ssl_certificate     /etc/nginx/ssl/api.zeecred.dev.br.crt;
+868:    ssl_certificate_key /etc/nginx/ssl/api.zeecred.dev.br.key;
+869-    ssl_protocols       TLSv1.2 TLSv1.3;
+870-
+871-    client_max_body_size 50m;
+872-
+873-    location / {
+874:        proxy_pass http://127.0.0.1:8191;
+875-        proxy_http_version 1.1;
+876-        proxy_set_header Host              $host;
+877-        proxy_set_header X-Real-IP         $remote_addr;
+878-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+879-        proxy_set_header X-Forwarded-Proto $scheme;
+880-        proxy_connect_timeout 5s;
+881-        proxy_read_timeout 120s;
+882-    }
+883-}
+884-
+885-# configuration file /etc/nginx/sites-enabled/012-dom1-apresentacao-zeecred.conf:
+886-# Vhost público do ambiente de apresentação (apresentacao.zeecred.dev.br) no HOST dom1.
+--
+902-    listen [::]:80;
+903-    server_name apresentacao.zeecred.dev.br;
+904-
+905-    location /.well-known/acme-challenge/ {
+906-        alias /var/www/html/.well-known/acme-challenge/;
+907-    }
+908-    location / {
+909-        return 301 https://$host$request_uri;
+910-    }
+911-}
+912-
+913-server {
+914:    listen 443 ssl;
+915:    listen [::]:443 ssl;
+916-    server_name apresentacao.zeecred.dev.br;
+917-
+918:    ssl_certificate     /etc/nginx/ssl/apresentacao.zeecred.dev.br.crt;
+919:    ssl_certificate_key /etc/nginx/ssl/apresentacao.zeecred.dev.br.key;
+920-    ssl_protocols       TLSv1.2 TLSv1.3;
+921-
+922-    client_max_body_size 50m;
+923-    root /var/www/apresentacao.zeecred.dev.br/zeecred-web/dist;
+924-    index index.html;
+925-
+926:    location ^~ /v1/      { proxy_pass http://127.0.0.1:8194; include /etc/nginx/snippets/apresentacao-proxy.conf; }
+927:    location ^~ /swagger/ { proxy_pass http://127.0.0.1:8194; include /etc/nginx/snippets/apresentacao-proxy.conf; }
+928:    location ^~ /docs/    { proxy_pass http://127.0.0.1:8194; include /etc/nginx/snippets/apresentacao-proxy.conf; }
+929:    location ^~ /monitor  { proxy_pass http://127.0.0.1:8194; include /etc/nginx/snippets/apresentacao-proxy.conf; }
+930-
+931-    # WK-20260829-apk-download-luis: listagem estática de APKs para distribuição pontual.
+932-    location ^~ /apk/ {
+933-        alias /var/www/apresentacao.zeecred.dev.br/apk/;
+934-        autoindex on;
+935-        add_header Cache-Control "no-store" always;
+936-    }
+937-
+938-    location = /config.json { add_header Cache-Control "no-store" always; try_files $uri =404; }
+939-    location ~* \.html?$   { add_header Cache-Control "no-store" always; try_files $uri /index.html; }
+940-    location ~* \.(?:js|mjs|css|woff2?|ttf|png|jpe?g|gif|svg|ico|webp|map)$ {
+941-        add_header Cache-Control "public, max-age=31536000, immutable" always;
+--
+980-    listen [::]:80;
+981-    server_name management.zeecred.dev.br;
+982-
+983-    location /.well-known/acme-challenge/ {
+984-        alias /var/www/html/.well-known/acme-challenge/;
+985-    }
+986-    location / {
+987-        return 301 https://$host$request_uri;
+988-    }
+989-}
+990-
+991-server {
+992:    listen 443 ssl;
+993:    listen [::]:443 ssl;
+994-    server_name management.zeecred.dev.br;
+995-
+996:    ssl_certificate     /etc/nginx/ssl/management.zeecred.dev.br.crt;
+997:    ssl_certificate_key /etc/nginx/ssl/management.zeecred.dev.br.key;
+998-    ssl_protocols       TLSv1.2 TLSv1.3;
+999-
+1000-    client_max_body_size 50m;
+1001-
+1002-    location / {
+1003:        proxy_pass http://127.0.0.1:8192;
+1004-        proxy_http_version 1.1;
+1005-        # WebSocket (socket.io do monitor, /ws do jkx): $http_upgrade vazio em
+1006-        # HTTP comum, "upgrade" quando o cliente pede — não interfere no resto.
+1007-        proxy_set_header Upgrade           $http_upgrade;
+1008-        proxy_set_header Connection        $http_upgrade;
+1009-        proxy_set_header Host              $host;
+1010-        proxy_set_header X-Real-IP         $remote_addr;
+1011-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+1012-        proxy_set_header X-Forwarded-Proto $scheme;
+1013-        proxy_connect_timeout 5s;
+1014-        proxy_read_timeout 3600s;
+1015-        proxy_send_timeout 3600s;
+--
+1035-    listen [::]:80;
+1036-    server_name jkx.app app.jkx.app;
+1037-
+1038-    location /.well-known/acme-challenge/ {
+1039-        alias /var/www/html/.well-known/acme-challenge/;
+1040-    }
+1041-    location / {
+1042-        return 301 https://$host$request_uri;
+1043-    }
+1044-}
+1045-
+1046-server {
+1047:    listen 443 ssl;
+1048:    listen [::]:443 ssl;
+1049-    server_name jkx.app app.jkx.app;
+1050-
+1051:    ssl_certificate     /etc/nginx/ssl/jkx.app.crt;
+1052:    ssl_certificate_key /etc/nginx/ssl/jkx.app.key;
+1053-    ssl_protocols       TLSv1.2 TLSv1.3;
+1054-
+1055-    location / {
+1056:        proxy_pass http://127.0.0.1:8192;
+1057-        proxy_http_version 1.1;
+1058-        proxy_set_header Upgrade           $http_upgrade;
+1059-        proxy_set_header Connection        $http_upgrade;
+1060-        proxy_set_header Host              $host;
+1061-        proxy_set_header X-Real-IP         $remote_addr;
+1062-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+1063-        proxy_set_header X-Forwarded-Proto $scheme;
+1064-        proxy_connect_timeout 5s;
+1065-        proxy_read_timeout 3600s;
+1066-        proxy_send_timeout 3600s;
+1067-        proxy_buffering off;
+1068-    }
+1069-}
+1070-
+1071-# configuration file /etc/nginx/sites-enabled/020-codexbridge.conf:
+1072-server {
+1073-    listen 80;
+1074-    listen [::]:80;
+1075:    server_name codexbridge.inovacaosistemas.com.br;
+1076-
+1077-    location /.well-known/acme-challenge/ {
+1078-        root /var/www/html;
+1079-    }
+1080-
+1081-    location / {
+1082-        return 301 https://$host$request_uri;
+1083-    }
+1084-}
+1085-
+1086-server {
+1087:    listen 443 ssl http2;
+1088:    listen [::]:443 ssl http2;
+1089:    server_name codexbridge.inovacaosistemas.com.br;
+1090-
+1091:    ssl_certificate /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/fullchain.pem;
+1092:    ssl_certificate_key /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/privkey.pem;
+1093-    ssl_protocols TLSv1.2 TLSv1.3;
+1094-    ssl_prefer_server_ciphers on;
+1095-
+1096-    client_max_body_size 2m;
+1097-
+1098-    location / {
+1099:        proxy_pass http://127.0.0.1:18081;
+1100-        proxy_http_version 1.1;
+1101-        proxy_set_header Host $host;
+1102-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+1103-        proxy_set_header X-Forwarded-Proto https;
+1104-    }
+1105-}
+1106-
+1107-# configuration file /etc/nginx/sites-enabled/099-tunnel-entry.conf:
+1108-# Ponto de entrada do túnel Cloudflare no dom1, espelhando o :8098 da frida.
+1109-#
+1110-# Existe para que o conector do túnel possa ser movido para a frida sem derrubar
+1111-# nada: durante a transição os dois hosts atendem o mesmo endereço de ingress
+1112-# (http://localhost:8098). Depois que o conector estiver na frida, este vhost fica
+1113-# inerte — mas vale mantê-lo, porque é o que permite voltar atrás sem downtime.
+1114-server {
+1115-    listen 127.0.0.1:8098;
+1116-    server_name _;
+1117-    client_max_body_size 512m;
+1118-
+1119-    location / {
+1120:        proxy_pass https://127.0.0.1:443;
+1121-        proxy_ssl_server_name on;
+1122-        proxy_ssl_name        $host;
+1123-        proxy_ssl_verify      off;
+1124-
+1125-        proxy_set_header Host              $host;
+1126-        proxy_set_header X-Real-IP         $remote_addr;
+1127-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+1128-        proxy_set_header X-Forwarded-Proto https;
+1129-
+1130-        proxy_http_version 1.1;
+1131-        proxy_set_header Upgrade    $http_upgrade;
+1132-        proxy_set_header Connection $http_connection;
+--
+1137-# /etc/nginx/sites-available/vgaspar-monitor-acme — WK-20260716-painel-frida
+1138-# A porta 80 publica deste IP (186.194.227.198) chega NESTE host (dom1), nao na frida.
+1139-# O Let's Encrypt so valida HTTP-01 na porta 80, entao o desafio precisa ser
+1140-# encaminhado daqui para a frida (192.168.71.248), que e quem roda o certbot e
+1141-# guarda o certificado. Sem isto, o certbot --webroot na frida falha a validacao.
+1142-server {
+1143-    listen 80;
+1144-    listen [::]:80;
+1145-    server_name vgaspar-monitor.inovacaosistemas.com.br;
+1146-
+1147-    # Unico caminho encaminhado: o desafio ACME.
+1148-    location /.well-known/acme-challenge/ {
+1149:        proxy_pass http://192.168.71.248:80;
+1150-        proxy_set_header Host $host;
+1151-        proxy_set_header X-Real-IP $remote_addr;
+1152-    }
+1153-
+1154-    # O painel nao e servido por aqui: a borda publica dele e a 8443 (-> frida:443).
+1155-    location / {
+1156-        return 301 https://$host:8443$request_uri;
+1157-    }
+1158-}
+1159-
+== T610 sites-enabled entries (including symlinks) ==
+total 8
+lrwxrwxrwx 1 root root   35 Jul  7  2025 000-certbot.conf -> ../sites-available/000-certbot.conf
+lrwxrwxrwx 1 root root   48 Aug  7 11:54 000-default-deny.conf -> /etc/nginx/sites-available/000-default-deny.conf
+lrwxrwxrwx 1 root root   32 Jul  7  2025 001-main.conf -> ../sites-available/001-main.conf
+lrwxrwxrwx 1 root root   43 May 17 16:49 002-demo-lumina.conf -> /etc/nginx/sites-available/demo-lumina.conf
+lrwxrwxrwx 1 root root   49 May 18 21:44 003-code-inovacao.conf -> /etc/nginx/sites-available/003-code-inovacao.conf
+lrwxrwxrwx 1 root root   56 May 23 16:06 004-testes-igrejapequena.conf -> /etc/nginx/sites-available/004-testes-igrejapequena.conf
+lrwxrwxrwx 1 root root   41 Jun 14 13:45 005-clara.conf -> /etc/nginx/sites-available/005-clara.conf
+lrwxrwxrwx 1 root root   43 Jun 24 16:39 006-whisper.conf -> /etc/nginx/sites-available/006-whisper.conf
+-rw-r--r-- 1 root root 1628 Jun 24 18:26 007-fw-monitor.conf
+lrwxrwxrwx 1 root root   50 Jun 25 17:20 008-felipe-zeecred.conf -> /etc/nginx/sites-available/008-felipe-zeecred.conf
+lrwxrwxrwx 1 root root   51 Jul 14 14:21 009-flowlab-zeecred.conf -> /etc/nginx/sites-available/009-flowlab-zeecred.conf
+lrwxrwxrwx 1 root root   56 Aug 27 12:51 010-zeecred-config-front.conf -> /etc/nginx/sites-available/010-zeecred-config-front.conf
+lrwxrwxrwx 1 root root   52 Aug 27 12:53 011-dom1-stg-zeecred.conf -> /etc/nginx/sites-available/011-dom1-stg-zeecred.conf
+lrwxrwxrwx 1 root root   61 Aug 28 17:17 012-dom1-apresentacao-zeecred.conf -> /etc/nginx/sites-available/012-dom1-apresentacao-zeecred.conf
+lrwxrwxrwx 1 root root   54 Aug 28 14:02 012-management-zeecred.conf -> /etc/nginx/sites-available/012-management-zeecred.conf
+lrwxrwxrwx 1 root root   43 Aug 28 14:02 013-jkx-app.conf -> /etc/nginx/sites-available/013-jkx-app.conf
+lrwxrwxrwx 1 root root   47 Jul 28 17:18 020-codexbridge.conf -> /etc/nginx/sites-available/020-codexbridge.conf
+lrwxrwxrwx 1 root root   48 Aug 30 19:07 099-tunnel-entry.conf -> /etc/nginx/sites-available/099-tunnel-entry.conf
+lrwxrwxrwx 1 root root   39 Jul 16 18:24 vgaspar-monitor-acme -> ../sites-available/vgaspar-monitor-acme
+/etc/nginx/sites-enabled/000-certbot.conf
+/etc/nginx/sites-enabled/000-default-deny.conf
+/etc/nginx/sites-enabled/001-main.conf
+/etc/nginx/sites-enabled/002-demo-lumina.conf
+/etc/nginx/sites-enabled/003-code-inovacao.conf
+/etc/nginx/sites-enabled/004-testes-igrejapequena.conf
+/etc/nginx/sites-enabled/005-clara.conf
+/etc/nginx/sites-enabled/006-whisper.conf
+/etc/nginx/sites-enabled/007-fw-monitor.conf
+/etc/nginx/sites-enabled/008-felipe-zeecred.conf
+/etc/nginx/sites-enabled/009-flowlab-zeecred.conf
+/etc/nginx/sites-enabled/010-zeecred-config-front.conf
+/etc/nginx/sites-enabled/011-dom1-stg-zeecred.conf
+/etc/nginx/sites-enabled/012-dom1-apresentacao-zeecred.conf
+/etc/nginx/sites-enabled/012-management-zeecred.conf
+/etc/nginx/sites-enabled/013-jkx-app.conf
+/etc/nginx/sites-enabled/020-codexbridge.conf
+/etc/nginx/sites-enabled/099-tunnel-entry.conf
+/etc/nginx/sites-enabled/vgaspar-monitor-acme
+== T610 CodexBridge vhost source ==
+### /etc/nginx/sites-available/020-codexbridge.conf
+server {
+    listen 80;
+    listen [::]:80;
+    server_name codexbridge.inovacaosistemas.com.br;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name codexbridge.inovacaosistemas.com.br;
+
+    ssl_certificate /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    client_max_body_size 2m;
+
+    location / {
+        proxy_pass http://127.0.0.1:18081;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+### /etc/nginx/sites-enabled/020-codexbridge.conf
+server {
+    listen 80;
+    listen [::]:80;
+    server_name codexbridge.inovacaosistemas.com.br;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name codexbridge.inovacaosistemas.com.br;
+
+    ssl_certificate /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    client_max_body_size 2m;
+
+    location / {
+        proxy_pass http://127.0.0.1:18081;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+== T610 local HTTPS probes with forced SNI/name -> 127.0.0.1 ==
+--- /
+curl_rc=0
+HTTP/1.1 500 Internal Server Error
+Server: nginx/1.22.1
+Date: Thu, 17 Sep 2026 19:18:37 GMT
+Content-Type: text/plain; charset=utf-8
+Content-Length: 21
+Connection: keep-alive
+
+Internal Server Error
+--- /health
+curl_rc=0
+HTTP/1.1 500 Internal Server Error
+Server: nginx/1.22.1
+Date: Thu, 17 Sep 2026 19:18:38 GMT
+Content-Type: text/plain; charset=utf-8
+Content-Length: 21
+Connection: keep-alive
+
+Internal Server Error
+--- /.well-known/oauth-authorization-server
+curl_rc=0
+HTTP/1.1 500 Internal Server Error
+Server: nginx/1.22.1
+Date: Thu, 17 Sep 2026 19:18:38 GMT
+Content-Type: text/plain; charset=utf-8
+Content-Length: 21
+Connection: keep-alive
+
+Internal Server Error
+--- /.well-known/oauth-protected-resource/mcp
+curl_rc=0
+HTTP/1.1 500 Internal Server Error
+Server: nginx/1.22.1
+Date: Thu, 17 Sep 2026 19:18:39 GMT
+Content-Type: text/plain; charset=utf-8
+Content-Length: 21
+Connection: keep-alive
+
+Internal Server Error
+== T610 local HTTP/2 /health probe ==
+curl_rc=0
+HTTP/2 500 
+server: nginx/1.22.1
+date: Thu, 17 Sep 2026 19:18:40 GMT
+content-type: text/plain; charset=utf-8
+content-length: 21
+
+Internal Server Error
+== certificate/SNI served by T610 local 443 ==
+subject=CN = codexbridge.inovacaosistemas.com.br
+issuer=C = US, O = Let's Encrypt, CN = YE2
+X509v3 Subject Alternative Name: 
+    DNS:codexbridge.inovacaosistemas.com.br
+== T610 recent nginx access/error logs ==
+### /var/log/nginx/access.log
+192.168.71.248 - - [17/Sep/2026:14:57:33 -0300] "POST /login?from=%2Fdashboard HTTP/1.1" 404 24 "https://demo.lumina.blog.br/dashboard" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:33 -0300] "POST /dashboard HTTP/1.1" 307 35 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:34 -0300] "POST /login?from=%2Fdashboard HTTP/1.1" 404 24 "https://demo.lumina.blog.br/dashboard" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:34 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:34 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:34 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:35 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:35 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:35 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:35 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:36 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:36 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:36 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:36 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:37 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:37 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:37 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:37 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:38 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:43 -0300] "POST / HTTP/1.1" 404 24 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:58 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:14:59:03 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:00:08 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:01:14 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:02:19 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:03:24 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:04:29 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:05:35 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:06:40 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:07:45 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:08:50 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:09:55 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:11:00 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:12:06 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:13:11 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:14:16 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:15:21 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:16:27 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:17:32 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:18:38 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:19:43 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:20:48 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:21:53 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:22:58 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:24:04 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:25:09 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:26:14 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:27:19 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:28:25 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:29:30 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:30:25 -0300] "GET / HTTP/1.1" 200 986 "-" "Mozilla/5.0 (compatible; ctem-feeds/1.0)" "163.176.35.177, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:30:35 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:31:27 -0300] "GET / HTTP/1.1" 200 648 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36" "45.138.12.9"
+192.168.71.248 - - [17/Sep/2026:15:31:27 -0300] "GET /.git/HEAD HTTP/1.1" 200 648 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36" "45.138.12.9"
+192.168.71.248 - - [17/Sep/2026:15:31:28 -0300] "GET /.svn/wc.db HTTP/1.1" 200 648 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36" "45.138.12.9"
+192.168.71.248 - - [17/Sep/2026:15:31:28 -0300] "GET /.svn/entries HTTP/1.1" 200 648 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36" "45.138.12.9"
+192.168.71.248 - - [17/Sep/2026:15:31:40 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:32:45 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:33:51 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:34:56 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:36:01 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:37:06 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:38:12 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:39:17 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:40:23 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:41:28 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:42:33 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:43:38 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:44:44 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:45:49 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:46:54 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:47:59 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:49:05 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:50:10 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:51:16 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:51:51 -0300] "GET /health HTTP/2.0" 400 233 "-" "curl/7.88.1" "-"
+192.168.71.248 - - [17/Sep/2026:15:52:22 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:53:28 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:54:33 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:55:38 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:56:44 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:57:49 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:58:54 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:58:58 -0300] "HEAD /old/ HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Linux; Android 14; RMX3842) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.44 Mobile Safari/537.36" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:58:58 -0300] "HEAD /wordpress/ HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6534.42 Safari/537.36" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:58:58 -0300] "HEAD /wp/ HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Linux; Android 14; Xiaomi 14 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.33 Mobile Safari/537.36" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:58:59 -0300] "HEAD /backup/ HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Linux; Android 12; TECNO CK6n) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.50 Mobile Safari/537.36" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:58:59 -0300] "HEAD / HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:58:59 -0300] "HEAD /new/ HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:58:59 -0300] "HEAD /blog/ HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Linux; Android 10; vivo 1904) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.60 Mobile Safari/537.36" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:59:59 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:00:30 -0300] "GET /health HTTP/2.0" 400 233 "-" "curl/7.88.1" "-"
+192.168.71.248 - - [17/Sep/2026:16:01:05 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:02:10 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:03:15 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:04:20 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:05:26 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:06:31 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:07:36 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:08:46 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:09:51 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:10:45 -0300] "GET /health HTTP/2.0" 400 233 "-" "curl/7.88.1" "-"
+192.168.71.248 - - [17/Sep/2026:16:10:57 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:12:02 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:13:07 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:13:50 -0300] "GET / HTTP/1.1" 502 157 "-" "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1" "43.164.192.151, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:16:14:12 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:15:18 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:16:23 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:17:28 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:18:33 -0300] "GET / HTTP/1.1" 200 790 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" "178.16.54.246, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:16:18:33 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:18:34 -0300] "GET / HTTP/1.1" 200 790 "http://flowlab.zeecred.dev.br" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" "178.16.54.246, 127.0.0.1"
+127.0.0.1 - - [17/Sep/2026:16:18:37 -0300] "GET / HTTP/1.1" 500 21 "-" "cb54" "-"
+127.0.0.1 - - [17/Sep/2026:16:18:38 -0300] "GET /health HTTP/1.1" 500 21 "-" "cb54" "-"
+127.0.0.1 - - [17/Sep/2026:16:18:38 -0300] "GET /.well-known/oauth-authorization-server HTTP/1.1" 500 21 "-" "cb54" "-"
+192.168.71.248 - - [17/Sep/2026:16:18:38 -0300] "GET /robots.txt HTTP/1.1" 200 648 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36; compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot" "51.8.102.109"
+127.0.0.1 - - [17/Sep/2026:16:18:39 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/1.1" 500 21 "-" "cb54" "-"
+127.0.0.1 - - [17/Sep/2026:16:18:40 -0300] "GET /health HTTP/2.0" 500 21 "-" "cb54" "-"
+127.0.0.1 - - [17/Sep/2026:16:18:40 -0300] "" 400 0 "-" "-" "-"
+### /var/log/nginx/error.log
+2026/09/17 06:57:02 [error] 1557#1557: *402 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 08:08:16 [error] 1563#1563: *1096 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 08:14:24 [error] 1564#1564: *1113 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 08:23:19 [error] 1565#1565: *1133 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /robots.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/robots.txt", host: "jkx.app"
+2026/09/17 08:23:19 [error] 1565#1565: *1135 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /llms.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/llms.txt", host: "jkx.app"
+2026/09/17 08:23:20 [error] 1565#1565: *1137 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 09:22:00 [error] 1569#1569: *1253 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 09:22:01 [error] 1570#1570: *1255 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /favicon.ico HTTP/1.1", upstream: "http://127.0.0.1:8192/favicon.ico", host: "jkx.app"
+2026/09/17 09:57:29 [error] 1554#1554: *1324 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 10:59:17 [error] 1558#1558: *1718 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 11:13:30 [error] 1558#1558: *1746 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "management.zeecred.dev.br"
+2026/09/17 11:26:57 [error] 1561#1561: *1772 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /phpinfo.php HTTP/1.1", upstream: "http://127.0.0.1:8192/phpinfo.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/phpinfo.php"
+2026/09/17 11:26:59 [error] 1561#1561: *1774 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /test.php HTTP/1.1", upstream: "http://127.0.0.1:8192/test.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/test.php"
+2026/09/17 11:27:04 [error] 1561#1561: *1776 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /_profiler/phpinfo HTTP/1.1", upstream: "http://127.0.0.1:8192/_profiler/phpinfo", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/_profiler/phpinfo"
+2026/09/17 11:27:10 [error] 1562#1562: *1780 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /info.php HTTP/1.1", upstream: "http://127.0.0.1:8192/info.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/info.php"
+2026/09/17 11:27:14 [error] 1562#1562: *1782 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /php.php HTTP/1.1", upstream: "http://127.0.0.1:8192/php.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/php.php"
+2026/09/17 11:27:17 [error] 1562#1562: *1784 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /php_info.php HTTP/1.1", upstream: "http://127.0.0.1:8192/php_info.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/php_info.php"
+2026/09/17 11:27:21 [error] 1562#1562: *1786 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /i.php HTTP/1.1", upstream: "http://127.0.0.1:8192/i.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/i.php"
+2026/09/17 11:27:24 [error] 1562#1562: *1788 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /pi.php HTTP/1.1", upstream: "http://127.0.0.1:8192/pi.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/pi.php"
+2026/09/17 11:27:28 [error] 1562#1562: *1790 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/"
+2026/09/17 11:27:31 [error] 1562#1562: *1792 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /admin/phpinfo.php HTTP/1.1", upstream: "http://127.0.0.1:8192/admin/phpinfo.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/admin/phpinfo.php"
+2026/09/17 11:27:34 [error] 1562#1562: *1794 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /pinfo.php HTTP/1.1", upstream: "http://127.0.0.1:8192/pinfo.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/pinfo.php"
+2026/09/17 11:27:34 [error] 1562#1562: *1796 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /php_version.php HTTP/1.1", upstream: "http://127.0.0.1:8192/php_version.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/php_version.php"
+2026/09/17 11:27:38 [error] 1562#1562: *1798 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.aws/credentials HTTP/1.1", upstream: "http://127.0.0.1:8192/.aws/credentials", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.aws/credentials"
+2026/09/17 11:27:41 [error] 1562#1562: *1800 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env HTTP/1.1", upstream: "http://127.0.0.1:8192/.env", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env"
+2026/09/17 11:27:43 [error] 1562#1562: *1802 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env.example HTTP/1.1", upstream: "http://127.0.0.1:8192/.env.example", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env.example"
+2026/09/17 11:27:46 [error] 1562#1562: *1804 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env.local HTTP/1.1", upstream: "http://127.0.0.1:8192/.env.local", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env.local"
+2026/09/17 11:27:49 [error] 1562#1562: *1806 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env.backup HTTP/1.1", upstream: "http://127.0.0.1:8192/.env.backup", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env.backup"
+2026/09/17 11:27:53 [error] 1562#1562: *1808 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /config/.env HTTP/1.1", upstream: "http://127.0.0.1:8192/config/.env", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/config/.env"
+2026/09/17 12:36:10 [error] 1568#1568: *1941 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 13:22:26 [error] 1570#1570: *2031 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 13:22:27 [error] 1553#1553: *2033 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-includes/ID3/license.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-includes/ID3/license.txt", host: "jkx.app"
+2026/09/17 13:22:27 [error] 1553#1553: *2035 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /feed/ HTTP/1.1", upstream: "http://127.0.0.1:8192/feed/", host: "jkx.app"
+2026/09/17 13:22:27 [error] 1553#1553: *2037 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php?rsd HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php?rsd", host: "jkx.app"
+2026/09/17 13:22:28 [error] 1553#1553: *2039 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /blog/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/blog/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:28 [error] 1553#1553: *2041 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /web/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/web/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:28 [error] 1553#1553: *2043 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wordpress/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/wordpress/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2045 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/wp/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2047 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /2020/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/2020/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2049 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /2019/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/2019/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2051 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /2021/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/2021/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:30 [error] 1553#1553: *2053 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /shop/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/shop/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:30 [error] 1553#1553: *2055 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp1/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/wp1/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:30 [error] 1553#1553: *2057 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /test/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/test/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:31 [error] 1553#1553: *2059 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /site/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/site/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:31 [error] 1553#1553: *2061 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /cms/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/cms/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:47:31 [error] 1556#1556: *2112 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 13:47:31 [error] 1556#1556: *2114 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "jkx.app"
+2026/09/17 13:47:31 [error] 1556#1556: *2116 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:31 [error] 1556#1556: *2118 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:32 [error] 1556#1556: *2120 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 13:47:32 [error] 1556#1556: *2122 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "jkx.app"
+2026/09/17 13:47:32 [error] 1556#1556: *2124 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:32 [error] 1556#1556: *2126 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:33 [error] 1555#1555: *2128 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 13:47:33 [error] 1555#1555: *2130 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:33 [error] 1555#1555: *2131 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "jkx.app"
+2026/09/17 13:47:33 [error] 1555#1555: *2134 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "management.zeecred.dev.br"
+2026/09/17 14:25:20 [error] 1559#1559: *2204 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 15:58:58 [error] 1570#1570: *2519 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /old/ HTTP/1.1", upstream: "http://127.0.0.1:8192/old/", host: "jkx.app"
+2026/09/17 15:58:58 [error] 1570#1570: *2521 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /wordpress/ HTTP/1.1", upstream: "http://127.0.0.1:8192/wordpress/", host: "jkx.app"
+2026/09/17 15:58:58 [error] 1570#1570: *2523 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /wp/ HTTP/1.1", upstream: "http://127.0.0.1:8192/wp/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2525 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /backup/ HTTP/1.1", upstream: "http://127.0.0.1:8192/backup/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2527 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2529 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /new/ HTTP/1.1", upstream: "http://127.0.0.1:8192/new/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2531 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /blog/ HTTP/1.1", upstream: "http://127.0.0.1:8192/blog/", host: "jkx.app"
+2026/09/17 16:13:50 [error] 1554#1554: *2569 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+### /var/log/nginx/access.log
+192.168.71.248 - - [17/Sep/2026:14:57:33 -0300] "POST /login?from=%2Fdashboard HTTP/1.1" 404 24 "https://demo.lumina.blog.br/dashboard" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:33 -0300] "POST /dashboard HTTP/1.1" 307 35 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:34 -0300] "POST /login?from=%2Fdashboard HTTP/1.1" 404 24 "https://demo.lumina.blog.br/dashboard" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:34 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:34 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:34 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:35 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:35 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:35 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:35 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:36 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:36 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:36 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:36 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:37 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:37 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:37 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:37 -0300] "POST /admin HTTP/1.1" 307 37 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:38 -0300] "POST /admin/login?from=%2Fadmin HTTP/1.1" 404 24 "https://demo.lumina.blog.br/admin" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:43 -0300] "POST / HTTP/1.1" 404 24 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" "178.16.54.246"
+192.168.71.248 - - [17/Sep/2026:14:57:58 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:14:59:03 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:00:08 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:01:14 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:02:19 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:03:24 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:04:29 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:05:35 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:06:40 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:07:45 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:08:50 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:09:55 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:11:00 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:12:06 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:13:11 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:14:16 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:15:21 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:16:27 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:17:32 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:18:38 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:19:43 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:20:48 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:21:53 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:22:58 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:24:04 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:25:09 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:26:14 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:27:19 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:28:25 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:29:30 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:30:25 -0300] "GET / HTTP/1.1" 200 986 "-" "Mozilla/5.0 (compatible; ctem-feeds/1.0)" "163.176.35.177, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:30:35 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:31:27 -0300] "GET / HTTP/1.1" 200 648 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36" "45.138.12.9"
+192.168.71.248 - - [17/Sep/2026:15:31:27 -0300] "GET /.git/HEAD HTTP/1.1" 200 648 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36" "45.138.12.9"
+192.168.71.248 - - [17/Sep/2026:15:31:28 -0300] "GET /.svn/wc.db HTTP/1.1" 200 648 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36" "45.138.12.9"
+192.168.71.248 - - [17/Sep/2026:15:31:28 -0300] "GET /.svn/entries HTTP/1.1" 200 648 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36" "45.138.12.9"
+192.168.71.248 - - [17/Sep/2026:15:31:40 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:32:45 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:33:51 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:34:56 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:36:01 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:37:06 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:38:12 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:39:17 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:40:23 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:41:28 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:42:33 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:43:38 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:44:44 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:45:49 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:46:54 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:47:59 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:49:05 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:50:10 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:51:16 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:51:51 -0300] "GET /health HTTP/2.0" 400 233 "-" "curl/7.88.1" "-"
+192.168.71.248 - - [17/Sep/2026:15:52:22 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:53:28 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:54:33 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:55:38 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:56:44 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:57:49 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:58:54 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:15:58:58 -0300] "HEAD /old/ HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Linux; Android 14; RMX3842) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.44 Mobile Safari/537.36" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:58:58 -0300] "HEAD /wordpress/ HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6534.42 Safari/537.36" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:58:58 -0300] "HEAD /wp/ HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Linux; Android 14; Xiaomi 14 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.33 Mobile Safari/537.36" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:58:59 -0300] "HEAD /backup/ HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Linux; Android 12; TECNO CK6n) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.50 Mobile Safari/537.36" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:58:59 -0300] "HEAD / HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:58:59 -0300] "HEAD /new/ HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:58:59 -0300] "HEAD /blog/ HTTP/1.1" 502 0 "-" "Mozilla/5.0 (Linux; Android 10; vivo 1904) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.60 Mobile Safari/537.36" "192.241.166.94, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:15:59:59 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:00:30 -0300] "GET /health HTTP/2.0" 400 233 "-" "curl/7.88.1" "-"
+192.168.71.248 - - [17/Sep/2026:16:01:05 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:02:10 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:03:15 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:04:20 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:05:26 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:06:31 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:07:36 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:08:46 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:09:51 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:10:45 -0300] "GET /health HTTP/2.0" 400 233 "-" "curl/7.88.1" "-"
+192.168.71.248 - - [17/Sep/2026:16:10:57 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:12:02 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:13:07 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:13:50 -0300] "GET / HTTP/1.1" 502 157 "-" "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1" "43.164.192.151, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:16:14:12 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:15:18 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:16:23 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:17:28 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:18:33 -0300] "GET / HTTP/1.1" 200 790 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" "178.16.54.246, 127.0.0.1"
+192.168.71.248 - - [17/Sep/2026:16:18:33 -0300] "GET /ws-agent HTTP/1.1" 101 26 "-" "-" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:16:18:34 -0300] "GET / HTTP/1.1" 200 790 "http://flowlab.zeecred.dev.br" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" "178.16.54.246, 127.0.0.1"
+127.0.0.1 - - [17/Sep/2026:16:18:37 -0300] "GET / HTTP/1.1" 500 21 "-" "cb54" "-"
+127.0.0.1 - - [17/Sep/2026:16:18:38 -0300] "GET /health HTTP/1.1" 500 21 "-" "cb54" "-"
+127.0.0.1 - - [17/Sep/2026:16:18:38 -0300] "GET /.well-known/oauth-authorization-server HTTP/1.1" 500 21 "-" "cb54" "-"
+192.168.71.248 - - [17/Sep/2026:16:18:38 -0300] "GET /robots.txt HTTP/1.1" 200 648 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36; compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot" "51.8.102.109"
+127.0.0.1 - - [17/Sep/2026:16:18:39 -0300] "GET /.well-known/oauth-protected-resource/mcp HTTP/1.1" 500 21 "-" "cb54" "-"
+127.0.0.1 - - [17/Sep/2026:16:18:40 -0300] "GET /health HTTP/2.0" 500 21 "-" "cb54" "-"
+127.0.0.1 - - [17/Sep/2026:16:18:40 -0300] "" 400 0 "-" "-" "-"
+### /var/log/nginx/default-deny.access.log
+### /var/log/nginx/error.log
+2026/09/17 06:57:02 [error] 1557#1557: *402 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 08:08:16 [error] 1563#1563: *1096 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 08:14:24 [error] 1564#1564: *1113 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 08:23:19 [error] 1565#1565: *1133 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /robots.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/robots.txt", host: "jkx.app"
+2026/09/17 08:23:19 [error] 1565#1565: *1135 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /llms.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/llms.txt", host: "jkx.app"
+2026/09/17 08:23:20 [error] 1565#1565: *1137 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 09:22:00 [error] 1569#1569: *1253 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 09:22:01 [error] 1570#1570: *1255 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /favicon.ico HTTP/1.1", upstream: "http://127.0.0.1:8192/favicon.ico", host: "jkx.app"
+2026/09/17 09:57:29 [error] 1554#1554: *1324 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 10:59:17 [error] 1558#1558: *1718 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 11:13:30 [error] 1558#1558: *1746 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "management.zeecred.dev.br"
+2026/09/17 11:26:57 [error] 1561#1561: *1772 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /phpinfo.php HTTP/1.1", upstream: "http://127.0.0.1:8192/phpinfo.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/phpinfo.php"
+2026/09/17 11:26:59 [error] 1561#1561: *1774 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /test.php HTTP/1.1", upstream: "http://127.0.0.1:8192/test.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/test.php"
+2026/09/17 11:27:04 [error] 1561#1561: *1776 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /_profiler/phpinfo HTTP/1.1", upstream: "http://127.0.0.1:8192/_profiler/phpinfo", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/_profiler/phpinfo"
+2026/09/17 11:27:10 [error] 1562#1562: *1780 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /info.php HTTP/1.1", upstream: "http://127.0.0.1:8192/info.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/info.php"
+2026/09/17 11:27:14 [error] 1562#1562: *1782 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /php.php HTTP/1.1", upstream: "http://127.0.0.1:8192/php.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/php.php"
+2026/09/17 11:27:17 [error] 1562#1562: *1784 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /php_info.php HTTP/1.1", upstream: "http://127.0.0.1:8192/php_info.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/php_info.php"
+2026/09/17 11:27:21 [error] 1562#1562: *1786 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /i.php HTTP/1.1", upstream: "http://127.0.0.1:8192/i.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/i.php"
+2026/09/17 11:27:24 [error] 1562#1562: *1788 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /pi.php HTTP/1.1", upstream: "http://127.0.0.1:8192/pi.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/pi.php"
+2026/09/17 11:27:28 [error] 1562#1562: *1790 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/"
+2026/09/17 11:27:31 [error] 1562#1562: *1792 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /admin/phpinfo.php HTTP/1.1", upstream: "http://127.0.0.1:8192/admin/phpinfo.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/admin/phpinfo.php"
+2026/09/17 11:27:34 [error] 1562#1562: *1794 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /pinfo.php HTTP/1.1", upstream: "http://127.0.0.1:8192/pinfo.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/pinfo.php"
+2026/09/17 11:27:34 [error] 1562#1562: *1796 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /php_version.php HTTP/1.1", upstream: "http://127.0.0.1:8192/php_version.php", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/php_version.php"
+2026/09/17 11:27:38 [error] 1562#1562: *1798 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.aws/credentials HTTP/1.1", upstream: "http://127.0.0.1:8192/.aws/credentials", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.aws/credentials"
+2026/09/17 11:27:41 [error] 1562#1562: *1800 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env HTTP/1.1", upstream: "http://127.0.0.1:8192/.env", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env"
+2026/09/17 11:27:43 [error] 1562#1562: *1802 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env.example HTTP/1.1", upstream: "http://127.0.0.1:8192/.env.example", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env.example"
+2026/09/17 11:27:46 [error] 1562#1562: *1804 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env.local HTTP/1.1", upstream: "http://127.0.0.1:8192/.env.local", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env.local"
+2026/09/17 11:27:49 [error] 1562#1562: *1806 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /.env.backup HTTP/1.1", upstream: "http://127.0.0.1:8192/.env.backup", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/.env.backup"
+2026/09/17 11:27:53 [error] 1562#1562: *1808 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /config/.env HTTP/1.1", upstream: "http://127.0.0.1:8192/config/.env", host: "management.zeecred.dev.br", referrer: "http://management.zeecred.dev.br/config/.env"
+2026/09/17 12:36:10 [error] 1568#1568: *1941 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 13:22:26 [error] 1570#1570: *2031 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 13:22:27 [error] 1553#1553: *2033 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-includes/ID3/license.txt HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-includes/ID3/license.txt", host: "jkx.app"
+2026/09/17 13:22:27 [error] 1553#1553: *2035 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /feed/ HTTP/1.1", upstream: "http://127.0.0.1:8192/feed/", host: "jkx.app"
+2026/09/17 13:22:27 [error] 1553#1553: *2037 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php?rsd HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php?rsd", host: "jkx.app"
+2026/09/17 13:22:28 [error] 1553#1553: *2039 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /blog/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/blog/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:28 [error] 1553#1553: *2041 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /web/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/web/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:28 [error] 1553#1553: *2043 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wordpress/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/wordpress/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2045 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/wp/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2047 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /2020/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/2020/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2049 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /2019/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/2019/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:29 [error] 1553#1553: *2051 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /2021/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/2021/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:30 [error] 1553#1553: *2053 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /shop/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/shop/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:30 [error] 1553#1553: *2055 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp1/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/wp1/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:30 [error] 1553#1553: *2057 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /test/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/test/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:31 [error] 1553#1553: *2059 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /site/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/site/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:22:31 [error] 1553#1553: *2061 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /cms/wp-includes/wlwmanifest.xml HTTP/1.1", upstream: "http://127.0.0.1:8192/cms/wp-includes/wlwmanifest.xml", host: "jkx.app"
+2026/09/17 13:47:31 [error] 1556#1556: *2112 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 13:47:31 [error] 1556#1556: *2114 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "jkx.app"
+2026/09/17 13:47:31 [error] 1556#1556: *2116 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:31 [error] 1556#1556: *2118 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:32 [error] 1556#1556: *2120 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 13:47:32 [error] 1556#1556: *2122 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "jkx.app"
+2026/09/17 13:47:32 [error] 1556#1556: *2124 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:32 [error] 1556#1556: *2126 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:33 [error] 1555#1555: *2128 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "jkx.app"
+2026/09/17 13:47:33 [error] 1555#1555: *2130 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "management.zeecred.dev.br"
+2026/09/17 13:47:33 [error] 1555#1555: *2131 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-login.php HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-login.php", host: "jkx.app"
+2026/09/17 13:47:33 [error] 1555#1555: *2134 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: management.zeecred.dev.br, request: "GET /xmlrpc.php HTTP/1.1", upstream: "http://127.0.0.1:8192/xmlrpc.php", host: "management.zeecred.dev.br"
+2026/09/17 14:25:20 [error] 1559#1559: *2204 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET /wp-admin/install.php?step=1 HTTP/1.1", upstream: "http://127.0.0.1:8192/wp-admin/install.php?step=1", host: "jkx.app"
+2026/09/17 15:58:58 [error] 1570#1570: *2519 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /old/ HTTP/1.1", upstream: "http://127.0.0.1:8192/old/", host: "jkx.app"
+2026/09/17 15:58:58 [error] 1570#1570: *2521 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /wordpress/ HTTP/1.1", upstream: "http://127.0.0.1:8192/wordpress/", host: "jkx.app"
+2026/09/17 15:58:58 [error] 1570#1570: *2523 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /wp/ HTTP/1.1", upstream: "http://127.0.0.1:8192/wp/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2525 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /backup/ HTTP/1.1", upstream: "http://127.0.0.1:8192/backup/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2527 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2529 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /new/ HTTP/1.1", upstream: "http://127.0.0.1:8192/new/", host: "jkx.app"
+2026/09/17 15:58:59 [error] 1570#1570: *2531 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "HEAD /blog/ HTTP/1.1", upstream: "http://127.0.0.1:8192/blog/", host: "jkx.app"
+2026/09/17 16:13:50 [error] 1554#1554: *2569 connect() failed (111: Connection refused) while connecting to upstream, client: 192.168.71.248, server: jkx.app, request: "GET / HTTP/1.1", upstream: "http://127.0.0.1:8192/", host: "jkx.app"
+== Frida -> T610 192.168.71.50 with exact SNI/Host ==
+curl_rc=0
+HTTP/1.1 500 Internal Server Error
+Server: nginx/1.22.1
+Date: Thu, 17 Sep 2026 19:18:43 GMT
+Content-Type: text/plain; charset=utf-8
+Content-Length: 21
+Connection: keep-alive
+
+Internal Server Error
+== public 443 and 8443 /health from devel3 ==
+--- https://codexbridge.inovacaosistemas.com.br/health
+HTTP/1.1 400 Bad Request
+Server: nginx/1.22.1
+Date: Thu, 17 Sep 2026 19:18:50 GMT
+Content-Type: text/html
+Content-Length: 233
+Connection: keep-alive
+
+curl_rc=0
+<html>
+<head><title>400 Request Header Or Cookie Too Large</title></head>
+<body>
+<center><h1>400 Bad Request</h1></center>
+<center>Request Header Or Cookie Too Large</center>
+<hr><center>nginx/1.22.1</center>
+</body>
+</html>
+
+--- https://codexbridge.inovacaosistemas.com.br:8443/health
+HTTP/1.1 400 Bad Request
+Server: nginx/1.22.1
+Date: Thu, 17 Sep 2026 19:18:57 GMT
+Content-Type: text/html
+Content-Length: 233
+Connection: keep-alive
+
+curl_rc=0
+<html>
+<head><title>400 Request Header Or Cookie Too Large</title></head>
+<body>
+<center><h1>400 Bad Request</h1></center>
+<center>Request Header Or Cookie Too Large</center>
+<hr><center>nginx/1.22.1</center>
+</body>
+</html>
+
+CODEXBRIDGE_T610_VHOST_DIAGNOSTIC_COMPLETE
