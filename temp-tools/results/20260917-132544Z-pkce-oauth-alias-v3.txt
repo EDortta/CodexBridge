@@ -1,0 +1,25 @@
+== Publish ChatGPT PKCE OAuth alias v3 ==
+utc=2026-09-17T13:25:44Z
+fresh_issuer=https://codexbridge.inovacaosistemas.com.br:8443/codexbridge-v3
+discovery=/.well-known/oauth-authorization-server/codexbridge-v3
+backup=/var/backups/codex-bridge/nginx-pkce-v3-20260917-132546Z
+nginx_alias_v3=installed
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+effective_nginx_route=present
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443/codexbridge-v3","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+local_tls_alias=ok
+== validate public fresh discovery ==
+{"issuer":"https://codexbridge.inovacaosistemas.com.br:8443/codexbridge-v3","authorization_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize","token_endpoint":"https://codexbridge.inovacaosistemas.com.br:8443/oauth/token","scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"],"response_types_supported":["code"],"grant_types_supported":["authorization_code"],"token_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"]}
+public_pkce_alias_v3=ok
+== verify original surfaces remain healthy ==
+{"status":"ok","time":"2026-09-17T13:25:50.211152Z"}
+original_oauth=ok
+CHATGPT_PKCE_ALIAS_V3_READY
+Use in ChatGPT:
+Authorization server base: https://codexbridge.inovacaosistemas.com.br:8443/codexbridge-v3
+Auth URL: https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize
+Token URL: https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
+Resource: https://codexbridge.inovacaosistemas.com.br:8443/mcp
+Client ID: chatgpt-codexbridge
+Token endpoint auth method: none
