@@ -1,0 +1,57 @@
+== Repair Frida after OAuth discovery 502 ==
+utc=2026-09-16T16:59:19Z
+== gateway state before repair ==
+● codex-bridge-gateway.service - Codex Bridge Gateway
+     Loaded: loaded (/etc/systemd/system/codex-bridge-gateway.service; enabled; preset: enabled)
+     Active: active (running) since Wed 2026-09-16 13:57:24 -03; 1min 57s ago
+   Main PID: 24868 (uvicorn)
+      Tasks: 3 (limit: 256)
+        CPU: 24.022s
+     CGroup: /system.slice/codex-bridge-gateway.service
+             └─24868 /opt/codex-bridge/.venv/bin/python3 /opt/codex-bridge/.venv/bin/uvicorn gateway.app.main:app --host 0.0.0.0 --port 18080
+
+Sep 16 13:57:24 frida systemd[1]: Started codex-bridge-gateway.service - Codex Bridge Gateway.
+Sep 16 13:57:42 frida uvicorn[24868]: INFO:     Started server process [24868]
+Sep 16 13:57:42 frida uvicorn[24868]: INFO:     Waiting for application startup.
+Sep 16 13:57:44 frida uvicorn[24868]: INFO:     Application startup complete.
+Sep 16 13:57:44 frida uvicorn[24868]: INFO:     Uvicorn running on http://0.0.0.0:18080 (Press CTRL+C to quit)
+Sep 16 13:57:56 frida uvicorn[24868]: INFO:     187.10.45.41:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 16 13:57:56 frida uvicorn[24868]: INFO:     connection open
+Sep 16 13:57:56 frida uvicorn[24868]: INFO:     187.10.45.41:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 16 13:57:56 frida uvicorn[24868]: INFO:     connection open
+Sep 16 13:49:45 frida systemd[1]: Stopping codex-bridge-gateway.service - Codex Bridge Gateway...
+Sep 16 13:49:45 frida uvicorn[31979]: INFO:     Shutting down
+Sep 16 13:49:45 frida uvicorn[31979]: INFO:     Waiting for background tasks to complete. (CTRL+C to force quit)
+Sep 16 13:49:45 frida uvicorn[31979]: INFO:     Waiting for application shutdown.
+Sep 16 13:49:45 frida uvicorn[31979]: INFO:     Application shutdown complete.
+Sep 16 13:49:45 frida uvicorn[31979]: INFO:     Finished server process [31979]
+Sep 16 13:49:45 frida systemd[1]: codex-bridge-gateway.service: Deactivated successfully.
+Sep 16 13:49:45 frida systemd[1]: Stopped codex-bridge-gateway.service - Codex Bridge Gateway.
+Sep 16 13:49:45 frida systemd[1]: codex-bridge-gateway.service: Consumed 2min 28.851s CPU time.
+Sep 16 13:49:45 frida systemd[1]: Started codex-bridge-gateway.service - Codex Bridge Gateway.
+Sep 16 13:50:06 frida uvicorn[23863]: INFO:     Started server process [23863]
+Sep 16 13:50:06 frida uvicorn[23863]: INFO:     Waiting for application startup.
+Sep 16 13:50:07 frida uvicorn[23863]: INFO:     Application startup complete.
+Sep 16 13:50:07 frida uvicorn[23863]: INFO:     Uvicorn running on http://0.0.0.0:18080 (Press CTRL+C to quit)
+Sep 16 13:50:17 frida uvicorn[23863]: INFO:     187.10.45.41:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 16 13:50:17 frida uvicorn[23863]: INFO:     connection open
+Sep 16 13:50:18 frida uvicorn[23863]: INFO:     187.10.45.41:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 16 13:50:18 frida uvicorn[23863]: INFO:     connection open
+Sep 16 13:57:23 frida systemd[1]: Stopping codex-bridge-gateway.service - Codex Bridge Gateway...
+Sep 16 13:57:23 frida uvicorn[23863]: INFO:     Shutting down
+Sep 16 13:57:23 frida uvicorn[23863]: INFO:     Waiting for application shutdown.
+Sep 16 13:57:23 frida uvicorn[23863]: INFO:     Application shutdown complete.
+Sep 16 13:57:23 frida uvicorn[23863]: INFO:     Finished server process [23863]
+Sep 16 13:57:23 frida systemd[1]: codex-bridge-gateway.service: Deactivated successfully.
+Sep 16 13:57:23 frida systemd[1]: Stopped codex-bridge-gateway.service - Codex Bridge Gateway.
+Sep 16 13:57:23 frida systemd[1]: codex-bridge-gateway.service: Consumed 30.186s CPU time.
+Sep 16 13:57:24 frida systemd[1]: Started codex-bridge-gateway.service - Codex Bridge Gateway.
+Sep 16 13:57:42 frida uvicorn[24868]: INFO:     Started server process [24868]
+Sep 16 13:57:42 frida uvicorn[24868]: INFO:     Waiting for application startup.
+Sep 16 13:57:44 frida uvicorn[24868]: INFO:     Application startup complete.
+Sep 16 13:57:44 frida uvicorn[24868]: INFO:     Uvicorn running on http://0.0.0.0:18080 (Press CTRL+C to quit)
+Sep 16 13:57:56 frida uvicorn[24868]: INFO:     187.10.45.41:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 16 13:57:56 frida uvicorn[24868]: INFO:     connection open
+Sep 16 13:57:56 frida uvicorn[24868]: INFO:     187.10.45.41:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 16 13:57:56 frida uvicorn[24868]: INFO:     connection open
+ERROR: /opt/codex-bridge is not a git checkout; refusing blind overwrite

@@ -1,0 +1,34 @@
+== Fix ChatGPT OAuth discovery ==
+utc=2026-09-16T16:57:17Z
+patched_main=already
+== commit canonical source change ==
+On branch development
+Your branch is up to date with 'origin/development'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   temp-tools/results/20260916-162458Z-resync-agent-token.txt
+	modified:   temp-tools/results/20260916-163333Z-authoritative-agent-status.txt
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.claude-flow/
+	.swarm/
+	claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+	coordination-status-20260911.txt
+	ruvector.db
+	temp-tools/results/20260916-160045Z-resync-agent-token.txt
+	temp-tools/results/20260916-160719Z-resync-agent-token.txt
+	temp-tools/results/20260916-161904Z-resync-agent-token.txt
+	temp-tools/results/20260916-162841Z-authoritative-agent-status.txt
+	temp-tools/results/20260916-164939Z-chatgpt-oauth-discovery.txt
+	temp-tools/results/20260916-165717Z-chatgpt-oauth-discovery.txt
+
+no changes added to commit (use "git add" and/or "git commit -a")
+Everything up-to-date
+== deploy gateway main.py to Frida ==
+active
+== validate OAuth metadata through permanent public endpoint ==
+-- /.well-known/oauth-protected-resource/mcp --
+curl: (22) The requested URL returned error: 502

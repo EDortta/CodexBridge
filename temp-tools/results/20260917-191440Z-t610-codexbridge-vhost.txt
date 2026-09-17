@@ -1,0 +1,513 @@
+== Inspect T610 CodexBridge vhost and 400 response ==
+utc=2026-09-17T19:14:40Z
+host=codexbridge.inovacaosistemas.com.br
+
+Purpose:
+- prove which nginx vhost on T610 answers codexbridge.inovacaosistemas.com.br:443;
+- explain the HTTP 400 seen on both public 443 and Frida->T610 LAN access;
+- make NO configuration changes.
+== T610 identity and nginx binary ==
+hostname=dom1-inovacao
+nginx_bin=
+nginx_usr_sbin=yes
+nginx version: nginx/1.22.1
+== T610 effective nginx config: relevant directives ==
+233-
+234-    access_log /var/log/nginx/default-deny.access.log;
+235-}
+236-
+237-server {
+238:    listen 443 ssl default_server;
+239:    listen [::]:443 ssl default_server;
+240-    server_name _;
+241-
+242-    # Certificado valido do proprio host. O nome nao casa quando o acesso e por
+243-    # IP — inevitavel —, mas ao menos nao entrega mais um certificado VENCIDO.
+244:    ssl_certificate     /etc/letsencrypt/live/frida.inovacaosistemas.com.br/fullchain.pem;
+245:    ssl_certificate_key /etc/letsencrypt/live/frida.inovacaosistemas.com.br/privkey.pem;
+246-    ssl_protocols TLSv1.2 TLSv1.3;
+247-    ssl_prefer_server_ciphers on;
+248-
+249-    location / {
+250-        return 403;
+--
+259-    access_log /var/log/nginx/default-deny.access.log;
+260-}
+261-
+262-# configuration file /etc/nginx/sites-enabled/001-main.conf:
+263-server {
+264:    listen 443 ssl;
+265:    listen [::]:443 ssl;
+266-    server_name w2.inovacaosistemas.com.br;
+267-    
+268-
+269:    ssl_certificate /etc/letsencrypt/live/w2.inovacaosistemas.com.br/fullchain.pem;
+270:    ssl_certificate_key /etc/letsencrypt/live/w2.inovacaosistemas.com.br/privkey.pem;
+271-    ssl_protocols TLSv1.2 TLSv1.3;
+272-    ssl_prefer_server_ciphers on;
+273-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+274-
+275-    root /var/www/html;
+276-    index index.html index.php;
+277-
+278-    location /monitor {
+279:        proxy_pass http://127.0.0.1:9001;
+280-        proxy_http_version 1.1;
+281-        proxy_set_header Upgrade $http_upgrade;
+282-        proxy_set_header Connection "upgrade";
+283-        proxy_set_header Host $host;
+284-        proxy_set_header X-Real-IP $remote_addr;
+--
+368-        return 301 https://$host$request_uri;
+369-    }
+370-}
+371-
+372-server {
+373:    listen 443 ssl;
+374:    listen [::]:443 ssl;
+375-    server_name demo.lumina.blog.br;
+376-
+377:    ssl_certificate     /etc/letsencrypt/live/demo.lumina.blog.br/fullchain.pem;
+378:    ssl_certificate_key /etc/letsencrypt/live/demo.lumina.blog.br/privkey.pem;
+379-    ssl_protocols       TLSv1.2 TLSv1.3;
+380-    ssl_prefer_server_ciphers on;
+381-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+382-
+383-    location / {
+384-        proxy_http_version 1.1;
+385-        proxy_set_header Host $http_host;
+386-        proxy_set_header X-Real-IP $remote_addr;
+387-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+388-        proxy_set_header X-Forwarded-Proto https;
+389:        proxy_pass http://127.0.0.1:8181;
+390-    }
+391-}
+392-
+393-# configuration file /etc/nginx/sites-enabled/003-code-inovacao.conf:
+394-server {
+--
+404-        return 301 https://$host$request_uri;
+405-    }
+406-}
+407-
+408-server {
+409:    listen 443 ssl;
+410:    listen [::]:443 ssl;
+411-    server_name code.inovacaosistemas.com.br;
+412-
+413:    ssl_certificate     /etc/letsencrypt/live/code.inovacaosistemas.com.br/fullchain.pem;
+414:    ssl_certificate_key /etc/letsencrypt/live/code.inovacaosistemas.com.br/privkey.pem;
+415-    ssl_protocols       TLSv1.2 TLSv1.3;
+416-    ssl_prefer_server_ciphers on;
+417-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+418-
+419-    location / {
+--
+424-        proxy_set_header Accept-Encoding gzip;
+425-        proxy_set_header X-Real-IP $remote_addr;
+426-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+427-        proxy_set_header X-Forwarded-Proto https;
+428-        proxy_read_timeout 86400;
+429:        proxy_pass http://127.0.0.1:8080/;
+430-    }
+431-}
+432-
+433-# configuration file /etc/nginx/sites-enabled/004-testes-igrejapequena.conf:
+434-server {
+--
+444-        return 301 https://$host$request_uri;
+445-    }
+446-}
+447-
+448-server {
+449:    listen 443 ssl;
+450:    listen [::]:443 ssl;
+451-    server_name testes.igrejapequena.com.br;
+452-
+453:    ssl_certificate     /etc/letsencrypt/live/testes.igrejapequena.com.br/fullchain.pem;
+454:    ssl_certificate_key /etc/letsencrypt/live/testes.igrejapequena.com.br/privkey.pem;
+455-    ssl_protocols       TLSv1.2 TLSv1.3;
+456-    ssl_prefer_server_ciphers on;
+457-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+458-
+459-    root /var/www/testes.igrejapequena.com.br;
+--
+465-        gzip_types application/json text/plain;
+466-        gzip_comp_level 6;
+467-        proxy_buffer_size 16k;
+468-        proxy_buffers 8 32k;
+469-        proxy_busy_buffers_size 64k;
+470:        proxy_pass http://127.0.0.1:9080;
+471-        proxy_set_header Host $host;
+472-        proxy_set_header X-Real-IP $remote_addr;
+473-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+474-        proxy_set_header X-Forwarded-Proto https;
+475-        proxy_http_version 1.1;
+--
+505-        return 301 https://$host$request_uri;
+506-    }
+507-}
+508-
+509-server {
+510:    listen 443 ssl;
+511:    listen [::]:443 ssl;
+512-    server_name clara.inovacaosistemas.com.br;
+513-
+514:    ssl_certificate     /etc/letsencrypt/live/clara.inovacaosistemas.com.br/fullchain.pem;
+515:    ssl_certificate_key /etc/letsencrypt/live/clara.inovacaosistemas.com.br/privkey.pem;
+516-    ssl_protocols       TLSv1.2 TLSv1.3;
+517-    ssl_prefer_server_ciphers on;
+518-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+519-
+520-    # Tudo vai para o Node.js (porta 3000) — frontend + API + auth + WS
+521-    location / {
+522:        proxy_pass         http://127.0.0.1:3000;
+523-        proxy_set_header   Host $host;
+524-        proxy_set_header   X-Real-IP $remote_addr;
+525-        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+526-    }
+527-
+528-    location /ws {
+529:        proxy_pass             http://127.0.0.1:3000;
+530-        proxy_http_version     1.1;
+531-        proxy_set_header       Upgrade $http_upgrade;
+532-        proxy_set_header       Connection "upgrade";
+533-        proxy_set_header       Host $host;
+534-        proxy_read_timeout     86400;
+535-    }
+536-
+537-    location /ws-agent {
+538:        proxy_pass             http://127.0.0.1:3000;
+539-        proxy_http_version     1.1;
+540-        proxy_set_header       Upgrade $http_upgrade;
+541-        proxy_set_header       Connection "upgrade";
+542-        proxy_set_header       Host $host;
+543-        proxy_read_timeout     86400;
+--
+563-        return 308 https://$host$request_uri;
+564-    }
+565-}
+566-
+567-server {
+568:    listen 443 ssl;
+569:    listen [::]:443 ssl;
+570-    server_name whisper.inovacaosistemas.com.br;
+571-
+572:    ssl_certificate     /etc/letsencrypt/live/whisper.inovacaosistemas.com.br/fullchain.pem;
+573:    ssl_certificate_key /etc/letsencrypt/live/whisper.inovacaosistemas.com.br/privkey.pem;
+574-    ssl_protocols TLSv1.2 TLSv1.3;
+575-    ssl_prefer_server_ciphers on;
+576-
+577-    location / {
+578:        proxy_pass http://127.0.0.1:8093;
+579-        proxy_http_version 1.1;
+580-        proxy_set_header Host $host;
+581-        proxy_set_header X-Real-IP $remote_addr;
+582-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+583-        proxy_set_header X-Forwarded-Proto $scheme;
+--
+585-        proxy_read_timeout 120s;
+586-        proxy_send_timeout 120s;
+587-    }
+588-
+589-    location /tts/ {
+590:        proxy_pass http://127.0.0.1:8881/;
+591-        proxy_http_version 1.1;
+592-        proxy_set_header Host $host;
+593-        proxy_set_header X-Real-IP $remote_addr;
+594-        proxy_set_header X-Forwarded-Proto $scheme;
+595-        client_max_body_size 1M;
+--
+610-
+611-    location / { return 301 https://$host$request_uri; }
+612-}
+613-
+614-server {
+615:    listen 443 ssl;
+616:    listen [::]:443 ssl;
+617-    server_name fw-monitor.inovacaosistemas.com.br;
+618-
+619:    ssl_certificate     /etc/letsencrypt/live/fw-monitor.inovacaosistemas.com.br/fullchain.pem;
+620:    ssl_certificate_key /etc/letsencrypt/live/fw-monitor.inovacaosistemas.com.br/privkey.pem;
+621-    ssl_protocols       TLSv1.2 TLSv1.3;
+622-    ssl_prefer_server_ciphers on;
+623-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
+624-
+625-    root /var/www/fw-monitor;
+626-    index index.html;
+627-
+628-    # API authmon — Bearer injetado no servidor
+629-    location /api/ {
+630:        proxy_pass         http://127.0.0.1:8741/;
+631-        proxy_set_header   Authorization "Bearer 2162ec294afef4a9bf141495a578ed608c7b6b63870041eb3042641f2b616540";
+632-        proxy_set_header   Host $host;
+633-        proxy_set_header   X-Real-IP $remote_addr;
+634-        proxy_read_timeout 30s;
+635-    }
+636-
+637-    # Proxy ip-api.com (free tier só aceita HTTP; evita mixed content)
+638-    location /geo/ {
+639:        proxy_pass         http://ip-api.com/;
+640-        proxy_set_header   Host ip-api.com;
+641-        proxy_set_header   X-Real-IP $remote_addr;
+642-        proxy_read_timeout 15s;
+643-    }
+644-
+--
+662-        return 301 https://$host$request_uri;
+663-    }
+664-}
+665-
+666-server {
+667:    listen 443 ssl;
+668:    listen [::]:443 ssl;
+669-    server_name felipe.zeecred.dev.br;
+670-
+671:    ssl_certificate     /etc/letsencrypt/live/felipe.zeecred.dev.br/fullchain.pem;
+672:    ssl_certificate_key /etc/letsencrypt/live/felipe.zeecred.dev.br/privkey.pem;
+673-    ssl_protocols       TLSv1.2 TLSv1.3;
+674-    ssl_prefer_server_ciphers on;
+675-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384';
+676-
+677-    client_max_body_size 50m;
+--
+679-    # Homepage do Felipe = jk-dashboard (SPA estatica). /v1,/swagger,/docs,/monitor -> gateway local.
+680-    root /var/www/felipe.zeecred.dev.br/zeecred-web/dist;
+681-    index index.html;
+682-
+683-    # API e afins -> gateway jk-structure local (porta 8189)
+684:    location ^~ /v1/      { proxy_pass http://127.0.0.1:8189; include /etc/nginx/snippets/felipe-proxy.conf; }
+685:    location ^~ /swagger/ { proxy_pass http://127.0.0.1:8189; include /etc/nginx/snippets/felipe-proxy.conf; }
+686:    location ^~ /docs/    { proxy_pass http://127.0.0.1:8189; include /etc/nginx/snippets/felipe-proxy.conf; }
+687:    location ^~ /monitor  { proxy_pass http://127.0.0.1:8189; include /etc/nginx/snippets/felipe-proxy.conf; }
+688-
+689-    # config.json e index.html: sem cache (SPA entry + runtime config)
+690-    location = /config.json { add_header Cache-Control "no-store" always; try_files $uri =404; }
+691-    location ~* \.html?$    { add_header Cache-Control "no-store" always; try_files $uri /index.html; }
+692-
+--
+734-    server_name flowlab.zeecred.dev.br;
+735-    location /.well-known/acme-challenge/ { alias /var/www/html/.well-known/acme-challenge/; }
+736-    location / { return 301 https://$host$request_uri; }
+737-}
+738-server {
+739:    listen 443 ssl;
+740:    listen [::]:443 ssl;
+741-    server_name flowlab.zeecred.dev.br;
+742-
+743:    ssl_certificate     /etc/letsencrypt/live/flowlab.zeecred.dev.br/fullchain.pem;
+744:    ssl_certificate_key /etc/letsencrypt/live/flowlab.zeecred.dev.br/privkey.pem;
+745-    ssl_protocols       TLSv1.2 TLSv1.3;
+746-    ssl_prefer_server_ciphers on;
+747-
+748-    client_max_body_size 50m;
+749-    root /var/www/flowlab.zeecred.dev.br/zeecred-web/dist;
+750-    index index.html;
+751-
+752:    location ^~ /v1/      { proxy_pass http://127.0.0.1:8190; include /etc/nginx/snippets/flowlab-proxy.conf; }
+753:    location ^~ /swagger/ { proxy_pass http://127.0.0.1:8190; include /etc/nginx/snippets/flowlab-proxy.conf; }
+754:    location ^~ /docs/    { proxy_pass http://127.0.0.1:8190; include /etc/nginx/snippets/flowlab-proxy.conf; }
+755:    location ^~ /monitor  { proxy_pass http://127.0.0.1:8190; include /etc/nginx/snippets/flowlab-proxy.conf; }
+756-
+757-    location = /config.json { add_header Cache-Control "no-store" always; try_files $uri =404; }
+758-    location ~* \.html?$   { add_header Cache-Control "no-store" always; try_files $uri /index.html; }
+759-    location ~* \.(?:js|mjs|css|woff2?|ttf|png|jpe?g|gif|svg|ico|webp|map)$ {
+760-        add_header Cache-Control "public, max-age=31536000, immutable" always;
+--
+798-    listen [::]:8183;
+799-    server_name _;
+800-
+801-    # config-agent do ambiente felipe (container Incus, IP fixo — WK-20260716)
+802-    location /felipe/ {
+803:        proxy_pass http://10.114.81.32:8183/;
+804-        proxy_http_version 1.1;
+805-        proxy_set_header Host $host;
+806-        proxy_set_header X-Real-IP $remote_addr;
+807-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+808-    }
+809-
+810-    # config-agent do ambiente flowlab (container Incus, IP fixo)
+811-    location /flowlab/ {
+812:        proxy_pass http://10.114.81.67:8183/;
+813-        proxy_http_version 1.1;
+814-        proxy_set_header Host $host;
+815-        proxy_set_header X-Real-IP $remote_addr;
+816-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+817-    }
+818-
+819-    # config-agent do ambiente dom1-stg (container Incus, IP fixo — WK-20260827)
+820-    location /dom1-stg/ {
+821:        proxy_pass http://10.114.81.50:8183/;
+822-        proxy_http_version 1.1;
+823-        proxy_set_header Host $host;
+824-        proxy_set_header X-Real-IP $remote_addr;
+825-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+826-    }
+827-    location /apresentacao/ {
+828:        proxy_pass http://10.114.81.25:8183/;
+829-        proxy_http_version 1.1;
+830-        proxy_set_header Host $host;
+831-        proxy_set_header X-Real-IP $remote_addr;
+832-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+833-    }
+--
+858-        return 301 https://$host$request_uri;
+859-    }
+860-}
+861-
+862-server {
+863:    listen 443 ssl;
+864:    listen [::]:443 ssl;
+865-    server_name api.zeecred.dev.br;
+866-
+867:    ssl_certificate     /etc/nginx/ssl/api.zeecred.dev.br.crt;
+868:    ssl_certificate_key /etc/nginx/ssl/api.zeecred.dev.br.key;
+869-    ssl_protocols       TLSv1.2 TLSv1.3;
+870-
+871-    client_max_body_size 50m;
+872-
+873-    location / {
+874:        proxy_pass http://127.0.0.1:8191;
+875-        proxy_http_version 1.1;
+876-        proxy_set_header Host              $host;
+877-        proxy_set_header X-Real-IP         $remote_addr;
+878-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+879-        proxy_set_header X-Forwarded-Proto $scheme;
+--
+909-        return 301 https://$host$request_uri;
+910-    }
+911-}
+912-
+913-server {
+914:    listen 443 ssl;
+915:    listen [::]:443 ssl;
+916-    server_name apresentacao.zeecred.dev.br;
+917-
+918:    ssl_certificate     /etc/nginx/ssl/apresentacao.zeecred.dev.br.crt;
+919:    ssl_certificate_key /etc/nginx/ssl/apresentacao.zeecred.dev.br.key;
+920-    ssl_protocols       TLSv1.2 TLSv1.3;
+921-
+922-    client_max_body_size 50m;
+923-    root /var/www/apresentacao.zeecred.dev.br/zeecred-web/dist;
+924-    index index.html;
+925-
+926:    location ^~ /v1/      { proxy_pass http://127.0.0.1:8194; include /etc/nginx/snippets/apresentacao-proxy.conf; }
+927:    location ^~ /swagger/ { proxy_pass http://127.0.0.1:8194; include /etc/nginx/snippets/apresentacao-proxy.conf; }
+928:    location ^~ /docs/    { proxy_pass http://127.0.0.1:8194; include /etc/nginx/snippets/apresentacao-proxy.conf; }
+929:    location ^~ /monitor  { proxy_pass http://127.0.0.1:8194; include /etc/nginx/snippets/apresentacao-proxy.conf; }
+930-
+931-    # WK-20260829-apk-download-luis: listagem estática de APKs para distribuição pontual.
+932-    location ^~ /apk/ {
+933-        alias /var/www/apresentacao.zeecred.dev.br/apk/;
+934-        autoindex on;
+--
+987-        return 301 https://$host$request_uri;
+988-    }
+989-}
+990-
+991-server {
+992:    listen 443 ssl;
+993:    listen [::]:443 ssl;
+994-    server_name management.zeecred.dev.br;
+995-
+996:    ssl_certificate     /etc/nginx/ssl/management.zeecred.dev.br.crt;
+997:    ssl_certificate_key /etc/nginx/ssl/management.zeecred.dev.br.key;
+998-    ssl_protocols       TLSv1.2 TLSv1.3;
+999-
+1000-    client_max_body_size 50m;
+1001-
+1002-    location / {
+1003:        proxy_pass http://127.0.0.1:8192;
+1004-        proxy_http_version 1.1;
+1005-        # WebSocket (socket.io do monitor, /ws do jkx): $http_upgrade vazio em
+1006-        # HTTP comum, "upgrade" quando o cliente pede — não interfere no resto.
+1007-        proxy_set_header Upgrade           $http_upgrade;
+1008-        proxy_set_header Connection        $http_upgrade;
+--
+1042-        return 301 https://$host$request_uri;
+1043-    }
+1044-}
+1045-
+1046-server {
+1047:    listen 443 ssl;
+1048:    listen [::]:443 ssl;
+1049-    server_name jkx.app app.jkx.app;
+1050-
+1051:    ssl_certificate     /etc/nginx/ssl/jkx.app.crt;
+1052:    ssl_certificate_key /etc/nginx/ssl/jkx.app.key;
+1053-    ssl_protocols       TLSv1.2 TLSv1.3;
+1054-
+1055-    location / {
+1056:        proxy_pass http://127.0.0.1:8192;
+1057-        proxy_http_version 1.1;
+1058-        proxy_set_header Upgrade           $http_upgrade;
+1059-        proxy_set_header Connection        $http_upgrade;
+1060-        proxy_set_header Host              $host;
+1061-        proxy_set_header X-Real-IP         $remote_addr;
+--
+1070-
+1071-# configuration file /etc/nginx/sites-enabled/020-codexbridge.conf:
+1072-server {
+1073-    listen 80;
+1074-    listen [::]:80;
+1075:    server_name codexbridge.inovacaosistemas.com.br;
+1076-
+1077-    location /.well-known/acme-challenge/ {
+1078-        root /var/www/html;
+1079-    }
+1080-
+--
+1082-        return 301 https://$host$request_uri;
+1083-    }
+1084-}
+1085-
+1086-server {
+1087:    listen 443 ssl http2;
+1088:    listen [::]:443 ssl http2;
+1089:    server_name codexbridge.inovacaosistemas.com.br;
+1090-
+1091:    ssl_certificate /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/fullchain.pem;
+1092:    ssl_certificate_key /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/privkey.pem;
+1093-    ssl_protocols TLSv1.2 TLSv1.3;
+1094-    ssl_prefer_server_ciphers on;
+1095-
+1096-    client_max_body_size 2m;
+1097-
+1098-    location / {
+1099:        proxy_pass http://127.0.0.1:18081;
+1100-        proxy_http_version 1.1;
+1101-        proxy_set_header Host $host;
+1102-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+1103-        proxy_set_header X-Forwarded-Proto https;
+1104-    }
+--
+1115-    listen 127.0.0.1:8098;
+1116-    server_name _;
+1117-    client_max_body_size 512m;
+1118-
+1119-    location / {
+1120:        proxy_pass https://127.0.0.1:443;
+1121-        proxy_ssl_server_name on;
+1122-        proxy_ssl_name        $host;
+1123-        proxy_ssl_verify      off;
+1124-
+1125-        proxy_set_header Host              $host;
+--
+1144-    listen [::]:80;
+1145-    server_name vgaspar-monitor.inovacaosistemas.com.br;
+1146-
+1147-    # Unico caminho encaminhado: o desafio ACME.
+1148-    location /.well-known/acme-challenge/ {
+1149:        proxy_pass http://192.168.71.248:80;
+1150-        proxy_set_header Host $host;
+1151-        proxy_set_header X-Real-IP $remote_addr;
+1152-    }
+1153-
+1154-    # O painel nao e servido por aqui: a borda publica dele e a 8443 (-> frida:443).
+== T610 enabled-site file names ==
+/etc/nginx/sites-enabled/007-fw-monitor.conf
+== T610 files mentioning CodexBridge ==
+/etc/nginx/sites-available/020-codexbridge.conf
+/etc/nginx/sites-enabled/020-codexbridge.conf
+== T610 local HTTPS probes with forced name -> 127.0.0.1 ==
+temp-tools/53-devel3-inspect-t610-codexbridge-vhost.sh: line 42: path: unbound variable

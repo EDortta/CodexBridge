@@ -1,0 +1,13 @@
+== Fix ChatGPT OAuth discovery ==
+utc=2026-09-16T16:49:39Z
+patched_main=yes
+== commit canonical source change ==
+[development 594d166] fix: serve RFC9728 metadata for MCP resource path
+ 1 file changed, 1 insertion(+)
+To https://github.com/EDortta/CodexBridge.git
+   6ff9ae9..594d166  development -> development
+== deploy gateway main.py to Frida ==
+active
+== validate OAuth metadata through permanent public endpoint ==
+-- /.well-known/oauth-protected-resource/mcp --
+curl: (22) The requested URL returned error: 502

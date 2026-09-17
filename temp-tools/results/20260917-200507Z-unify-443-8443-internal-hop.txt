@@ -1,0 +1,28 @@
+== Unify CodexBridge 443 and legacy 8443 without a proxy loop ==
+utc=2026-09-17T20:05:07Z
+
+Target topology:
+  public :443  -> T610 nginx -> Frida 192.168.71.248:18082 -> gateway 127.0.0.1:18080
+  public :8443 -> Frida nginx -> T610 192.168.71.50:443 -> Frida 192.168.71.248:18082 -> gateway
+
+Canonical OAuth/MCP identity:
+  https://codexbridge.inovacaosistemas.com.br
+
+Why this design:
+- gateway stays bound to localhost on Frida;
+- T610 does not need direct access to Frida:18080;
+- Frida gets one LAN-only nginx hop, reachable only from T610;
+- :8443 really traverses T610, as requested;
+- no public-hostname hairpin and no T610<->Frida loop.
+== preflight identities ==
+t610_hostname=dom1-inovacao
+127.0.0.1/8 192.168.71.50/24 192.168.11.50/24 10.114.81.1/24 172.21.0.1/16 172.18.0.1/16 172.22.0.1/16 172.17.0.1/16 172.20.0.1/16 172.25.0.1/16 172.26.0.1/16 
+frida_hostname=frida
+127.0.0.1/8 192.168.71.248/24 10.8.0.1/24 172.17.0.1/16 
+== install Frida LAN-only gateway hop on 192.168.71.248:18082 ==
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+frida_internal_hop=installed
+backup=/var/backups/codex-bridge/internal-hop-20260917-200511Z
+== verify T610 -> Frida internal hop ==
+curl: (28) Connection timed out after 5002 milliseconds

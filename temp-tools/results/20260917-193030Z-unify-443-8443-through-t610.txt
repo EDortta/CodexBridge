@@ -1,0 +1,13 @@
+== Unify CodexBridge public 443 and 8443 through T610 ==
+utc=2026-09-17T19:30:30Z
+
+Target topology:
+  public :443  -> T610 nginx -> Frida gateway :18080
+  public :8443 -> Frida nginx -> T610 LAN :443 -> Frida gateway :18080
+
+Canonical OAuth/MCP identity remains:
+  https://codexbridge.inovacaosistemas.com.br
+
+This deliberately avoids any public-hostname hairpin between Frida and T610.
+== preflight: T610 -> Frida gateway 18080 ==
+ssh: Could not resolve hostname codexbridge.inovacaosistemas.com.br: Name or service not known

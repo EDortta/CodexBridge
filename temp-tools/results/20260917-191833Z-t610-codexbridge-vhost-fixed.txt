@@ -1323,3 +1323,8 @@ curl_rc=0
 </html>
 
 CODEXBRIDGE_T610_VHOST_DIAGNOSTIC_COMPLETE
+[development f41947e] results: inspect T610 CodexBridge vhost after quoting fix
+ 1 file changed, 1325 insertions(+)
+ create mode 100644 temp-tools/results/20260917-191833Z-t610-codexbridge-vhost-fixed.txt
+To https://github.com/EDortta/CodexBridge.git
+   1ebd499..f41947e  development -> development

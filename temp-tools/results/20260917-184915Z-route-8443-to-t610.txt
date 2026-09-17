@@ -1,0 +1,11 @@
+== Route public :8443 through Frida to canonical T610 :443 ==
+utc=2026-09-17T18:49:15Z
+host=codexbridge.inovacaosistemas.com.br
+
+Goal:
+- keep ChatGPT legacy OAuth/MCP calls to :8443 working;
+- make Frida act only as a compatibility reverse proxy for :8443;
+- canonical application/OAuth identity remains https://codexbridge.inovacaosistemas.com.br (bare 443);
+- T610 remains the canonical 443 origin for now.
+== preflight: Frida can reach canonical bare 443 ==
+curl: (22) The requested URL returned error: 400

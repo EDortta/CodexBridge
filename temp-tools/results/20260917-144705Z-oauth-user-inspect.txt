@@ -1,0 +1,66 @@
+== Inspect CodexBridge OAuth login account ==
+This script never prints password hashes or secrets.
+It checks both likely ingress hosts:
+  - T610 via public SSH :22
+  - Frida via public SSH :2200
+It identifies where the active gateway/user registry lives, lists only user_id/email/enabled/roles,
+and optionally lets you reset one password interactively without writing the password to GitHub.
+utc=2026-09-17T14:47:05Z
+== public OAuth/MCP identity ==
+-- https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-authorization-server --
+{
+    "issuer": "https://codexbridge.inovacaosistemas.com.br",
+    "authorization_endpoint": "https://codexbridge.inovacaosistemas.com.br/oauth/authorize",
+    "token_endpoint": "https://codexbridge.inovacaosistemas.com.br/oauth/token",
+    "scopes_supported": [
+        "codexbridge.read",
+        "codexbridge.task.cancel",
+        "codexbridge.task.submit"
+    ],
+    "response_types_supported": [
+        "code"
+    ],
+    "grant_types_supported": [
+        "authorization_code"
+    ],
+    "token_endpoint_auth_methods_supported": [
+        "none"
+    ],
+    "code_challenge_methods_supported": [
+        "S256"
+    ]
+}
+-- https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-protected-resource/mcp --
+{
+    "resource": "https://codexbridge.inovacaosistemas.com.br/mcp",
+    "authorization_servers": [
+        "https://codexbridge.inovacaosistemas.com.br"
+    ],
+    "bearer_methods_supported": [
+        "header"
+    ],
+    "scopes_supported": [
+        "codexbridge.read",
+        "codexbridge.task.cancel",
+        "codexbridge.task.submit"
+    ]
+}
+== probe T610 (:22) ==
+hostname=dom1-inovacao
+gateway_unit=absent
+env_file=missing
+== probe Frida (:2200) ==
+hostname=frida
+gateway_unit=present
+gateway_active=active
+env_file=present
+public_base_url=https://codexbridge.inovacaosistemas.com.br
+user_registry_file=/etc/codex-bridge/users.json
+user_registry=readable
+{"user_id": "esteban", "email": "esteban@local", "enabled": true, "roles": ["admin"]}
+== choose active gateway host ==
+target=Frida
+
+Reset a password now? [y/N] User ID or email to reset: New password: 
+Confirm new password: 
+password_reset=aborted_too_short_min_12

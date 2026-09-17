@@ -1,0 +1,40 @@
+== CodexBridge agent credential resync ==
+utc=2026-09-16T16:19:04Z
+executor_id=devel3
+ws_url=wss://codexbridge.inovacaosistemas.com.br:8443/agent/ws
+token_present=yes
+== compute current token hash locally ==
+token_hash_present=yes
+== resync gateway hash with the agent's current machine token ==
+/bin/sh: 14: /etc/codex-bridge/env: codexbridge.task.submit: not found
+Traceback (most recent call last):
+  File "<stdin>", line 6, in <module>
+  File "/opt/codex-bridge/gateway/app/db/session.py", line 5, in <module>
+    from gateway.app.core.config import settings
+  File "/opt/codex-bridge/gateway/app/core/config.py", line 315, in <module>
+    settings = Settings()
+               ^^^^^^^^^^
+  File "/opt/codex-bridge/.venv/lib/python3.11/site-packages/pydantic_settings/main.py", line 215, in __init__
+    else __pydantic_self__.__class__._settings_init_sources(
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex-bridge/.venv/lib/python3.11/site-packages/pydantic_settings/main.py", line 395, in _settings_init_sources
+    dotenv_settings = DotEnvSettingsSource(
+                      ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex-bridge/.venv/lib/python3.11/site-packages/pydantic_settings/sources/providers/dotenv.py", line 56, in __init__
+    super().__init__(
+  File "/opt/codex-bridge/.venv/lib/python3.11/site-packages/pydantic_settings/sources/providers/env.py", line 72, in __init__
+    self.env_vars = self._load_env_vars()
+                    ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex-bridge/.venv/lib/python3.11/site-packages/pydantic_settings/sources/providers/dotenv.py", line 69, in _load_env_vars
+    return self._read_env_files()
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex-bridge/.venv/lib/python3.11/site-packages/pydantic_settings/sources/providers/dotenv.py", line 106, in _read_env_files
+    if env_path.is_file() or env_path.is_fifo():
+       ^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.11/pathlib.py", line 1268, in is_file
+    return S_ISREG(self.stat().st_mode)
+                   ^^^^^^^^^^^
+  File "/usr/lib/python3.11/pathlib.py", line 1014, in stat
+    return os.stat(self, follow_symlinks=follow_symlinks)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+PermissionError: [Errno 13] Permission denied: '.env'

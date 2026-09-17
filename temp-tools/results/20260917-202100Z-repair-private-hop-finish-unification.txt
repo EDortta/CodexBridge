@@ -1,0 +1,376 @@
+== Repair Frida private hop and finish CodexBridge 443/8443 unification ==
+utc=2026-09-17T20:21:00Z
+
+Known topology:
+- devel3 is remote and irrelevant to the Frida/T610 LAN path.
+- Frida LAN: 192.168.71.248
+- T610/dom1 LAN: 192.168.71.50
+- Frida public SSH: frida.inovacaosistemas.com.br:2200
+- T610 public SSH: dom1.inovacaosistemas.com.br:22
+- public 443 -> T610
+- public 8443 -> Frida
+- both hosts run nginx; esteban has passwordless sudo.
+
+This script focuses on the one failed hop only:
+  T610 192.168.71.50 -> Frida 192.168.71.248:18082
+It will diagnose that hop, add a narrowly-scoped firewall allowance only if needed,
+and then finish the nginx unification.
+== verify listener and local Frida hop ==
+LISTEN 0      511    192.168.71.248:18082      0.0.0.0:*    users:(("nginx",pid=32333,fd=33),("nginx",pid=9258,fd=33),("nginx",pid=9257,fd=33),("nginx",pid=9256,fd=33),("nginx",pid=9255,fd=33))
+*   Trying 192.168.71.248:18082...
+* Connected to 192.168.71.248 (192.168.71.248) port 18082 (#0)
+> GET /health HTTP/1.1
+> Host: codexbridge.inovacaosistemas.com.br
+> User-Agent: curl/7.88.1
+> Accept: */*
+> 
+< HTTP/1.1 403 Forbidden
+< Server: nginx/1.22.1
+< Date: Thu, 17 Sep 2026 20:21:02 GMT
+< Content-Type: text/html
+< Content-Length: 153
+< Connection: keep-alive
+< 
+{ [153 bytes data]
+* Connection #0 to host 192.168.71.248 left intact
+<html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+<hr><center>nginx/1.22.1</center>
+</body>
+</html>
+== verify T610 route/neighbor/connectivity to Frida ==
+192.168.71.248 dev eno1 src 192.168.71.50 uid 1000 
+    cache 
+PING 192.168.71.248 (192.168.71.248) 56(84) bytes of data.
+64 bytes from 192.168.71.248: icmp_seq=1 ttl=64 time=1.19 ms
+64 bytes from 192.168.71.248: icmp_seq=2 ttl=64 time=1.00 ms
+
+--- 192.168.71.248 ping statistics ---
+2 packets transmitted, 2 received, 0% packet loss, time 1001ms
+rtt min/avg/max/mdev = 1.001/1.097/1.193/0.096 ms
+192.168.71.248 dev eno1 lladdr b8:27:eb:c6:22:1a REACHABLE 
+tcp_18082=open
+== inspect Frida firewall ==
+--- ufw ---
+--- nft ---
+table ip mangle {
+	chain PREROUTING {
+		type filter hook prerouting priority mangle; policy accept;
+	}
+
+	chain INPUT {
+		type filter hook input priority mangle; policy accept;
+	}
+
+	chain FORWARD {
+		type filter hook forward priority mangle; policy accept;
+	}
+
+	chain OUTPUT {
+		type route hook output priority mangle; policy accept;
+	}
+
+	chain POSTROUTING {
+		type filter hook postrouting priority mangle; policy accept;
+	}
+}
+table ip raw {
+	chain PREROUTING {
+		type filter hook prerouting priority raw; policy accept;
+		iifname != "docker0" ip daddr 172.17.0.2 counter packets 0 bytes 0 drop
+	}
+
+	chain OUTPUT {
+		type filter hook output priority raw; policy accept;
+	}
+}
+table ip filter {
+	chain INPUT {
+		type filter hook input priority filter; policy drop;
+		ip saddr 192.168.71.50 ip daddr 192.168.71.248 tcp dport 18082 ct state new counter packets 3 bytes 180 accept
+		ip saddr 34.94.131.149 counter packets 0 bytes 0 drop
+		udp dport 1194 counter packets 984566 bytes 343975648 accept
+		iifname "lo" counter packets 597964 bytes 141518284 accept
+		ct state related,established counter packets 5413778 bytes 1266833384 accept
+		meta l4proto tcp ct state new tcp dport { 22, 80, 443, 1194 } counter packets 105482 bytes 6549942 accept
+		meta l4proto icmp counter packets 2 bytes 168 accept
+		ip saddr 10.8.0.0/24 counter packets 0 bytes 0 accept
+		counter packets 49146 bytes 13601697 log prefix "Firewall: *INPUT Blocked* "
+		counter packets 49146 bytes 13601697 drop
+	}
+
+	chain FORWARD {
+		type filter hook forward priority filter; policy drop;
+		counter packets 19 bytes 7252 jump DOCKER-USER
+		counter packets 19 bytes 7252 jump DOCKER-FORWARD
+		ct state related,established counter packets 0 bytes 0 accept
+		ip saddr 10.8.0.0/24 counter packets 0 bytes 0 accept
+		ip saddr 10.8.0.0/24 counter packets 0 bytes 0 accept
+		ip daddr 10.8.0.0/24 counter packets 0 bytes 0 accept
+		iifname "tun0" oifname "eth0" counter packets 0 bytes 0 accept
+		iifname "eth0" oifname "tun0" ct state related,established counter packets 0 bytes 0 accept
+	}
+
+	chain OUTPUT {
+		type filter hook output priority filter; policy accept;
+	}
+
+	chain ALLOWIN {
+	}
+
+	chain ALLOWOUT {
+	}
+
+	chain DENYIN {
+	}
+
+	chain DENYOUT {
+	}
+
+	chain INVALID {
+	}
+
+	chain INVDROP {
+	}
+
+	chain LOCALINPUT {
+	}
+
+	chain LOCALOUTPUT {
+	}
+
+	chain LOGDROPIN {
+	}
+
+	chain LOGDROPOUT {
+	}
+
+	chain DOCKER {
+		iifname != "docker0" oifname "docker0" ip daddr 172.17.0.2 tcp dport 5000 counter packets 0 bytes 0 accept
+		iifname != "docker0" oifname "docker0" counter packets 0 bytes 0 drop
+	}
+
+	chain DOCKER-FORWARD {
+		counter packets 19 bytes 7252 jump DOCKER-CT
+		counter packets 19 bytes 7252 jump DOCKER-ISOLATION-STAGE-1
+		counter packets 19 bytes 7252 jump DOCKER-BRIDGE
+		iifname "docker0" counter packets 0 bytes 0 accept
+	}
+
+	chain DOCKER-BRIDGE {
+		oifname "docker0" counter packets 0 bytes 0 jump DOCKER
+	}
+
+	chain DOCKER-CT {
+		oifname "docker0" ct state related,established counter packets 0 bytes 0 accept
+	}
+
+	chain DOCKER-ISOLATION-STAGE-1 {
+		iifname "docker0" oifname != "docker0" counter packets 0 bytes 0 jump DOCKER-ISOLATION-STAGE-2
+	}
+
+	chain DOCKER-ISOLATION-STAGE-2 {
+		oifname "docker0" counter packets 0 bytes 0 drop
+	}
+
+	chain DOCKER-USER {
+	}
+}
+table ip nat {
+	chain PREROUTING {
+		type nat hook prerouting priority dstnat; policy accept;
+		fib daddr type local counter packets 194625 bytes 13922953 jump DOCKER
+	}
+
+	chain INPUT {
+		type nat hook input priority 100; policy accept;
+	}
+
+	chain OUTPUT {
+		type nat hook output priority -100; policy accept;
+		ip daddr != 127.0.0.0/8 fib daddr type local counter packets 8 bytes 480 jump DOCKER
+	}
+
+	chain POSTROUTING {
+		type nat hook postrouting priority srcnat; policy accept;
+		oifname != "docker0" ip saddr 172.17.0.0/16 counter packets 6 bytes 360 masquerade
+		ip saddr 10.8.0.0/24 ip daddr != 10.8.0.0/24 counter packets 0 bytes 0 snat to 192.168.71.248
+	}
+
+	chain DOCKER {
+		iifname "docker0" counter packets 0 bytes 0 return
+		iifname != "docker0" tcp dport 5000 counter packets 0 bytes 0 dnat to 172.17.0.2:5000
+	}
+}
+table ip6 mangle {
+	chain PREROUTING {
+		type filter hook prerouting priority mangle; policy accept;
+	}
+
+	chain INPUT {
+		type filter hook input priority mangle; policy accept;
+	}
+
+	chain FORWARD {
+		type filter hook forward priority mangle; policy accept;
+	}
+
+	chain OUTPUT {
+		type route hook output priority mangle; policy accept;
+	}
+
+	chain POSTROUTING {
+		type filter hook postrouting priority mangle; policy accept;
+	}
+}
+table ip6 raw {
+	chain PREROUTING {
+		type filter hook prerouting priority raw; policy accept;
+	}
+
+	chain OUTPUT {
+		type filter hook output priority raw; policy accept;
+	}
+}
+table ip6 filter {
+	chain INPUT {
+		type filter hook input priority filter; policy drop;
+		iifname != "lo" counter packets 65140 bytes 64651435 jump LOCALINPUT
+		iifname "lo" counter packets 769202 bytes 450832637 accept
+		iifname != "lo" meta l4proto tcp counter packets 42299 bytes 59465075 jump INVALID
+		iifname != "lo" meta l4proto ipv6-icmp counter packets 4681 bytes 404240 accept
+		iifname != "lo" ct state related,established counter packets 42301 bytes 59465497 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 20 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 21 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 22 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 25 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 53 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 853 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 80 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 110 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 143 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 443 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 465 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 587 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 993 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto tcp ct state new tcp dport 995 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto udp ct state new udp dport 20 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto udp ct state new udp dport 21 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto udp ct state new udp dport 53 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto udp ct state new udp dport 853 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto udp ct state new udp dport 80 counter packets 0 bytes 0 accept
+		iifname != "lo" meta l4proto udp ct state new udp dport 443 counter packets 0 bytes 0 accept
+		iifname != "lo" counter packets 18158 bytes 4781698 jump LOGDROPIN
+	}
+
+	chain FORWARD {
+		type filter hook forward priority filter; policy drop;
+		counter packets 0 bytes 0 jump DOCKER-USER
+		counter packets 0 bytes 0 jump DOCKER-FORWARD
+	}
+
+	chain OUTPUT {
+		type filter hook output priority filter; policy drop;
+		oifname != "lo" counter packets 21974 bytes 2336922 jump LOCALOUTPUT
+		oifname != "lo" tcp dport 53 counter packets 0 bytes 0 accept
+		oifname != "lo" udp dport 53 counter packets 2 bytes 170 accept
+		oifname != "lo" tcp sport 53 counter packets 0 bytes 0 accept
+		oifname != "lo" udp sport 53 counter packets 0 bytes 0 accept
+		oifname "lo" counter packets 769202 bytes 450832637 accept
+		oifname != "lo" meta l4proto tcp counter packets 11705 bytes 1276039 jump INVALID
+		oifname != "lo" meta l4proto ipv6-icmp counter packets 6246 bytes 556264 accept
+		oifname != "lo" ct state related,established counter packets 11620 bytes 1269287 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 20 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 21 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 22 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 25 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 53 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 853 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 80 counter packets 6 bytes 480 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 110 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 113 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 443 counter packets 73 bytes 5840 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 587 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 993 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto tcp ct state new tcp dport 995 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto udp ct state new udp dport 20 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto udp ct state new udp dport 21 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto udp ct state new udp dport 53 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto udp ct state new udp dport 853 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto udp ct state new udp dport 113 counter packets 0 bytes 0 accept
+		oifname != "lo" meta l4proto udp ct state new udp dport 123 counter packets 0 bytes 0 accept
+		oifname != "lo" counter packets 4021 bytes 504449 jump LOGDROPOUT
+	}
+
+	chain ALLOWIN {
+	}
+
+	chain ALLOWOUT {
+	}
+
+	chain DENYIN {
+	}
+
+	chain DENYOUT {
+	}
+--- iptables ---
+-P INPUT DROP
+-P FORWARD DROP
+-P OUTPUT ACCEPT
+-N ALLOWIN
+-N ALLOWOUT
+-N DENYIN
+-N DENYOUT
+-N DOCKER
+-N DOCKER-BRIDGE
+-N DOCKER-CT
+-N DOCKER-FORWARD
+-N DOCKER-ISOLATION-STAGE-1
+-N DOCKER-ISOLATION-STAGE-2
+-N DOCKER-USER
+-N INVALID
+-N INVDROP
+-N LOCALINPUT
+-N LOCALOUTPUT
+-N LOGDROPIN
+-N LOGDROPOUT
+-A INPUT -s 192.168.71.50/32 -d 192.168.71.248/32 -p tcp -m tcp --dport 18082 -m conntrack --ctstate NEW -j ACCEPT
+-A INPUT -s 34.94.131.149/32 -j DROP
+-A INPUT -p udp -m udp --dport 1194 -j ACCEPT
+-A INPUT -i lo -j ACCEPT
+-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A INPUT -p tcp -m conntrack --ctstate NEW -m multiport --dports 22,80,443,1194 -j ACCEPT
+-A INPUT -p icmp -j ACCEPT
+-A INPUT -s 10.8.0.0/24 -j ACCEPT
+-A INPUT -j LOG --log-prefix "Firewall: *INPUT Blocked* "
+-A INPUT -j DROP
+-A FORWARD -j DOCKER-USER
+-A FORWARD -j DOCKER-FORWARD
+-A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+-A FORWARD -s 10.8.0.0/24 -j ACCEPT
+-A FORWARD -s 10.8.0.0/24 -j ACCEPT
+-A FORWARD -d 10.8.0.0/24 -j ACCEPT
+-A FORWARD -i tun0 -o eth0 -j ACCEPT
+-A FORWARD -i eth0 -o tun0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A DOCKER -d 172.17.0.2/32 ! -i docker0 -o docker0 -p tcp -m tcp --dport 5000 -j ACCEPT
+-A DOCKER ! -i docker0 -o docker0 -j DROP
+-A DOCKER-BRIDGE -o docker0 -j DOCKER
+-A DOCKER-CT -o docker0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A DOCKER-FORWARD -j DOCKER-CT
+-A DOCKER-FORWARD -j DOCKER-ISOLATION-STAGE-1
+-A DOCKER-FORWARD -j DOCKER-BRIDGE
+-A DOCKER-FORWARD -i docker0 -j ACCEPT
+-A DOCKER-ISOLATION-STAGE-1 -i docker0 ! -o docker0 -j DOCKER-ISOLATION-STAGE-2
+-A DOCKER-ISOLATION-STAGE-2 -o docker0 -j DROP
+== repair firewall only if T610 cannot connect ==
+private_hop_already_open=yes
+== prove T610 -> Frida private hop after repair ==
+{"status":"ok","time":"2026-09-17T20:21:07.443950Z"}
+t610_to_frida_private_hop=ok
+== install canonical T610 443 vhost ==
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+System has not been booted with systemd as init system (PID 1). Can't operate.
+Failed to connect to bus: Host is down

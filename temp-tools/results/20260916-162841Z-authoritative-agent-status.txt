@@ -1,0 +1,7 @@
+== CodexBridge authoritative agent verification ==
+utc=2026-09-16T16:28:41Z
+executor_id=devel3
+== local agent service ==
+active
+-- No entries --
+== authoritative gateway DB state ==

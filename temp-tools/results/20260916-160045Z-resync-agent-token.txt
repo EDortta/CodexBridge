@@ -1,0 +1,6 @@
+== CodexBridge agent credential resync ==
+utc=2026-09-16T16:00:45Z
+executor_id=devel3
+ws_url=wss://codexbridge.inovacaosistemas.com.br:8443/agent/ws
+token_present=yes
+== resync gateway hash with the agent's current machine token ==

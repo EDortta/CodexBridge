@@ -1,0 +1,22 @@
+
+
+Server URL: https://codexbridge.inovacaosistemas.com.br:8443/mcp
+
+Authentication: OAuth
+
+OAuth Client ID: chatgpt-codexbridge
+
+Client Secret: vazio
+
+Token endpoint auth method: none
+
+Authorization server base: https://codexbridge.inovacaosistemas.com.br:8443/codexbridge-v3
+
+Auth URL: https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize
+
+Token URL: https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
+
+Resource: https://codexbridge.inovacaosistemas.com.br:8443/mcp
+
+Scopes: codexbridge.read codexbridge.task.submit codexbridge.task.cancel
+

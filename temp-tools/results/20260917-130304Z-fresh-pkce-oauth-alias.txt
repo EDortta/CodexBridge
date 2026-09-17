@@ -1,0 +1,10 @@
+== Publish fresh ChatGPT PKCE OAuth discovery alias ==
+utc=2026-09-17T13:03:04Z
+fresh_issuer=https://codexbridge.inovacaosistemas.com.br:8443/codexbridge-v2
+backup=/var/backups/codex-bridge/nginx-pkce-20260917-130305Z
+nginx_alias=installed
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+== validate fresh discovery paths ==
+-- /.well-known/oauth-authorization-server/codexbridge-v2 --
+curl: (22) The requested URL returned error: 404

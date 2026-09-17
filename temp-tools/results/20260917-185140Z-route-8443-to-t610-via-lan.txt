@@ -1,0 +1,20 @@
+== Route public :8443 on Frida to T610 over LAN ==
+utc=2026-09-17T18:51:40Z
+host=codexbridge.inovacaosistemas.com.br
+
+This fixes script 50's bad hairpin assumption: Frida must NOT reach T610 by
+calling the public hostname, because that path can loop/hairpin through the
+router and hit the wrong virtual host. We discover T610's LAN address and use
+that as Frida's upstream while preserving TLS SNI/Host=codexbridge.inovacaosistemas.com.br.
+== identify T610 ==
+t610_hostname=dom1-inovacao
+t610_ipv4_candidates=192.168.71.50 192.168.11.50 10.114.81.1 172.21.0.1 172.18.0.1 172.22.0.1 172.17.0.1 172.20.0.1 172.25.0.1 172.26.0.1 
+== test Frida -> T610 candidates on HTTPS 443 with correct SNI ==
+candidate=192.168.71.50
+candidate_failed=curl: (22) The requested URL returned error: 400 
+candidate=192.168.11.50
+candidate_failed=curl: (28) Failed to connect to codexbridge.inovacaosistemas.com.br port 443 after 5000 ms: Timeout was reached 
+candidate=10.114.81.1
+candidate_failed=curl: (28) Failed to connect to codexbridge.inovacaosistemas.com.br port 443 after 5000 ms: Timeout was reached 
+ERROR: Frida cannot reach any discovered T610 LAN address on HTTPS 443 with SNI codexbridge.inovacaosistemas.com.br
+No nginx changes were made.
