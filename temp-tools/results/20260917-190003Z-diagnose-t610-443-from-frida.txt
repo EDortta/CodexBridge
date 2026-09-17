@@ -1,0 +1,133 @@
+== Diagnose T610 443 as seen from Frida ==
+utc=2026-09-17T19:00:03Z
+public_host=codexbridge.inovacaosistemas.com.br
+
+Topology assumed for this diagnostic only:
+- devel3 is remote; its 192.168.71.x similarity is irrelevant.
+- Frida and T610 are physically on the same LAN.
+- public SSH codexbridge.inovacaosistemas.com.br:2200 -> Frida.
+- public SSH codexbridge.inovacaosistemas.com.br:22   -> T610.
+- public HTTPS codexbridge.inovacaosistemas.com.br:443 is expected to be the T610 path.
+- public HTTPS codexbridge.inovacaosistemas.com.br:8443 is expected to be the Frida path.
+
+This script makes NO nginx changes.
+== identify both machines ==
+frida_hostname=frida
+frida_ipv4=192.168.71.248 10.8.0.1 172.17.0.1 2804:554:28d:5400:b91:8cc7:7410:7857  
+t610_hostname=dom1-inovacao
+t610_ipv4=192.168.71.50 192.168.11.50 10.114.81.1 172.21.0.1 172.18.0.1 172.22.0.1 172.17.0.1 172.20.0.1 172.25.0.1 172.26.0.1  
+t610_private_candidates=192.168.71.50 192.168.11.50 10.114.81.1 172.21.0.1 172.18.0.1 172.22.0.1 172.17.0.1 172.20.0.1 172.25.0.1 172.26.0.1 
+== inspect what T610 is actually listening on ==
+LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("node",pid=1879,fd=22))                                                                                                                                                                                                                                                                                                                                                                                                                 
+LISTEN 0      511          0.0.0.0:443        0.0.0.0:*    users:(("nginx",pid=1570,fd=8),("nginx",pid=1569,fd=8),("nginx",pid=1568,fd=8),("nginx",pid=1567,fd=8),("nginx",pid=1565,fd=8),("nginx",pid=1564,fd=8),("nginx",pid=1563,fd=8),("nginx",pid=1562,fd=8),("nginx",pid=1561,fd=8),("nginx",pid=1559,fd=8),("nginx",pid=1558,fd=8),("nginx",pid=1557,fd=8),("nginx",pid=1556,fd=8),("nginx",pid=1555,fd=8),("nginx",pid=1554,fd=8),("nginx",pid=1553,fd=8),("nginx",pid=1552,fd=8))                 
+LISTEN 0      511          0.0.0.0:80         0.0.0.0:*    users:(("nginx",pid=1570,fd=6),("nginx",pid=1569,fd=6),("nginx",pid=1568,fd=6),("nginx",pid=1567,fd=6),("nginx",pid=1565,fd=6),("nginx",pid=1564,fd=6),("nginx",pid=1563,fd=6),("nginx",pid=1562,fd=6),("nginx",pid=1561,fd=6),("nginx",pid=1559,fd=6),("nginx",pid=1558,fd=6),("nginx",pid=1557,fd=6),("nginx",pid=1556,fd=6),("nginx",pid=1555,fd=6),("nginx",pid=1554,fd=6),("nginx",pid=1553,fd=6),("nginx",pid=1552,fd=6))                 
+LISTEN 0      511             [::]:443           [::]:*    users:(("nginx",pid=1570,fd=9),("nginx",pid=1569,fd=9),("nginx",pid=1568,fd=9),("nginx",pid=1567,fd=9),("nginx",pid=1565,fd=9),("nginx",pid=1564,fd=9),("nginx",pid=1563,fd=9),("nginx",pid=1562,fd=9),("nginx",pid=1561,fd=9),("nginx",pid=1559,fd=9),("nginx",pid=1558,fd=9),("nginx",pid=1557,fd=9),("nginx",pid=1556,fd=9),("nginx",pid=1555,fd=9),("nginx",pid=1554,fd=9),("nginx",pid=1553,fd=9),("nginx",pid=1552,fd=9))                 
+LISTEN 0      511             [::]:80            [::]:*    users:(("nginx",pid=1570,fd=7),("nginx",pid=1569,fd=7),("nginx",pid=1568,fd=7),("nginx",pid=1567,fd=7),("nginx",pid=1565,fd=7),("nginx",pid=1564,fd=7),("nginx",pid=1563,fd=7),("nginx",pid=1562,fd=7),("nginx",pid=1561,fd=7),("nginx",pid=1559,fd=7),("nginx",pid=1558,fd=7),("nginx",pid=1557,fd=7),("nginx",pid=1556,fd=7),("nginx",pid=1555,fd=7),("nginx",pid=1554,fd=7),("nginx",pid=1553,fd=7),("nginx",pid=1552,fd=7))                 
+
+nginx_present=no
+== inspect T610 nginx references to CodexBridge/443 ==
+== compare public 443/8443 fingerprints from devel3 ==
+-- https://codexbridge.inovacaosistemas.com.br --
+HTTP/2 400 
+server: nginx/1.22.1
+date: Thu, 17 Sep 2026 19:00:14 GMT
+content-type: text/html
+content-length: 233
+
+body=<html> <head><title>400 Request Header Or Cookie Too Large</title></head> <body> <center><h1>400 Bad Request</h1></center> <center>Request Header Or Cookie Too Large</center> <hr><center>nginx/1.22.1</center> </body> </html> 
+-- https://codexbridge.inovacaosistemas.com.br:8443 --
+HTTP/2 400 
+server: nginx/1.22.1
+date: Thu, 17 Sep 2026 19:00:22 GMT
+content-type: text/html
+content-length: 233
+
+body=<html> <head><title>400 Request Header Or Cookie Too Large</title></head> <body> <center><h1>400 Bad Request</h1></center> <center>Request Header Or Cookie Too Large</center> <hr><center>nginx/1.22.1</center> </body> </html> 
+== test Frida -> every T610 private candidate with Host/SNI preserved ==
+-- candidate=192.168.71.50 --
+curl_rc=0
+HTTP/2 400 
+server: nginx/1.22.1
+date: Thu, 17 Sep 2026 19:00:30 GMT
+content-type: text/html
+content-length: 233
+
+body=<html> <head><title>400 Request Header Or Cookie Too Large</title></head> <body> <center><h1>400 Bad Request</h1></center> <center>Request Header Or Cookie Too Large</center> <hr><center>nginx/1.22.1</center> </body> </html> 
+-- candidate=192.168.11.50 --
+curl: (28) Failed to connect to codexbridge.inovacaosistemas.com.br port 443 after 5001 ms: Timeout was reached
+curl_rc=28
+body=
+-- candidate=10.114.81.1 --
+curl: (28) Failed to connect to codexbridge.inovacaosistemas.com.br port 443 after 5001 ms: Timeout was reached
+curl_rc=28
+body=
+-- candidate=172.21.0.1 --
+curl: (28) Failed to connect to codexbridge.inovacaosistemas.com.br port 443 after 5001 ms: Timeout was reached
+curl_rc=28
+body=
+-- candidate=172.18.0.1 --
+curl: (28) Failed to connect to codexbridge.inovacaosistemas.com.br port 443 after 5001 ms: Timeout was reached
+curl_rc=28
+body=
+-- candidate=172.22.0.1 --
+curl: (28) Failed to connect to codexbridge.inovacaosistemas.com.br port 443 after 5001 ms: Timeout was reached
+curl_rc=28
+body=
+-- candidate=172.17.0.1 --
+curl_rc=0
+HTTP/2 400 
+server: nginx/1.22.1
+date: Thu, 17 Sep 2026 19:01:13 GMT
+content-type: text/html
+content-length: 233
+
+body=<html> <head><title>400 Request Header Or Cookie Too Large</title></head> <body> <center><h1>400 Bad Request</h1></center> <center>Request Header Or Cookie Too Large</center> <hr><center>nginx/1.22.1</center> </body> </html> 
+-- candidate=172.20.0.1 --
+curl: (28) Failed to connect to codexbridge.inovacaosistemas.com.br port 443 after 5001 ms: Timeout was reached
+curl_rc=28
+body=
+-- candidate=172.25.0.1 --
+curl: (28) Failed to connect to codexbridge.inovacaosistemas.com.br port 443 after 5001 ms: Timeout was reached
+curl_rc=28
+body=
+-- candidate=172.26.0.1 --
+curl: (28) Failed to connect to codexbridge.inovacaosistemas.com.br port 443 after 5001 ms: Timeout was reached
+curl_rc=28
+body=
+== test plain TCP reachability from Frida to T610 candidates ==
+tcp_192.168.71.50_443=open
+tcp_192.168.11.50_443=closed
+tcp_10.114.81.1_443=closed
+tcp_172.21.0.1_443=closed
+tcp_172.18.0.1_443=closed
+tcp_172.22.0.1_443=closed
+tcp_172.17.0.1_443=open
+tcp_172.20.0.1_443=closed
+tcp_172.25.0.1_443=closed
+tcp_172.26.0.1_443=closed
+== inspect certificate/vhost selected by T610 LAN candidates from Frida ==
+-- candidate=192.168.71.50 --
+subject=CN = codexbridge.inovacaosistemas.com.br
+issuer=C = US, O = Let's Encrypt, CN = YE2
+X509v3 Subject Alternative Name: 
+    DNS:codexbridge.inovacaosistemas.com.br
+-- candidate=192.168.11.50 --
+-- candidate=10.114.81.1 --
+-- candidate=172.21.0.1 --
+-- candidate=172.18.0.1 --
+-- candidate=172.22.0.1 --
+-- candidate=172.17.0.1 --
+subject=CN = codexbridge.inovacaosistemas.com.br
+issuer=C = US, O = Let's Encrypt, CN = YE2
+X509v3 Subject Alternative Name: 
+    DNS:codexbridge.inovacaosistemas.com.br
+-- candidate=172.20.0.1 --
+-- candidate=172.25.0.1 --
+-- candidate=172.26.0.1 --
+
+DIAGNOSTIC_INTERPRETATION:
+- HTTP 400 with tcp=open means Frida can physically reach that T610 address; the problem is application/vhost selection, not LAN reachability.
+- A certificate for codexbridge.inovacaosistemas.com.br plus HTTP 400 points to nginx/request handling on T610.
+- A different certificate or no TLS indicates the candidate is not the canonical T610 HTTPS listener.
+
+CODEXBRIDGE_T610_443_FROM_FRIDA_DIAGNOSTIC_COMPLETE
