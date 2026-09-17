@@ -1,0 +1,62 @@
+
+===== Health check - HTTPS =====
+URL: https://codexbridge.inovacaosistemas.com.br/health
+
+HTTP/2 400 
+server: nginx/1.22.1
+date: Thu, 17 Sep 2026 20:36:12 GMT
+content-type: text/html
+content-length: 233
+
+<html>
+<head><title>400 Request Header Or Cookie Too Large</title></head>
+<body>
+<center><h1>400 Bad Request</h1></center>
+<center>Request Header Or Cookie Too Large</center>
+<hr><center>nginx/1.22.1</center>
+</body>
+</html>
+
+
+===== Health check - port 8443 =====
+URL: https://codexbridge.inovacaosistemas.com.br:8443/health
+
+HTTP/2 400 
+server: nginx/1.22.1
+date: Thu, 17 Sep 2026 20:36:19 GMT
+content-type: text/html
+content-length: 233
+
+<html>
+<head><title>400 Request Header Or Cookie Too Large</title></head>
+<body>
+<center><h1>400 Bad Request</h1></center>
+<center>Request Header Or Cookie Too Large</center>
+<hr><center>nginx/1.22.1</center>
+</body>
+</html>
+
+
+===== OAuth authorization server metadata - HTTPS =====
+URL: https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-authorization-server
+
+parse error: Invalid numeric literal at line 1, column 7
+
+
+===== OAuth authorization server metadata - port 8443 =====
+URL: https://codexbridge.inovacaosistemas.com.br:8443/.well-known/oauth-authorization-server
+
+parse error: Invalid numeric literal at line 1, column 7
+
+
+===== OAuth protected resource metadata - HTTPS =====
+URL: https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-protected-resource/mcp
+
+parse error: Invalid numeric literal at line 1, column 7
+
+
+===== OAuth protected resource metadata - port 8443 =====
+URL: https://codexbridge.inovacaosistemas.com.br:8443/.well-known/oauth-protected-resource/mcp
+
+parse error: Invalid numeric literal at line 1, column 7
+
