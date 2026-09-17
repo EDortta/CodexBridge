@@ -1,0 +1,109 @@
+== Activate live nginx unification ==
+utc=2026-09-17T20:47:03Z
+
+Reason:
+- previous run wrote and validated the new T610 vhost;
+- it then aborted because systemctl is unavailable on that environment;
+- nginx was therefore never reloaded, leaving the old 127.0.0.1:18081 loop live;
+- that loop explains the external "Request Header Or Cookie Too Large" response.
+== confirm private hop remains healthy ==
+{"status":"ok","time":"2026-09-17T20:47:04.338101Z"}== inspect T610 live/file state before reload ==
+pid1=init
+--- vhost file ---
+server {
+    listen 80;
+    listen [::]:80;
+    server_name codexbridge.inovacaosistemas.com.br;
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://$host$request_uri; }
+}
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name codexbridge.inovacaosistemas.com.br;
+    ssl_certificate /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/codexbridge.inovacaosistemas.com.br/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 2m;
+    location /agent/ws {
+        proxy_pass http://192.168.71.248:18082/agent/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host codexbridge.inovacaosistemas.com.br;
+        proxy_set_header X-Forwarded-Host codexbridge.inovacaosistemas.com.br;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
+    location / {
+        proxy_pass http://192.168.71.248:18082;
+        proxy_http_version 1.1;
+        proxy_set_header Host codexbridge.inovacaosistemas.com.br;
+        proxy_set_header X-Forwarded-Host codexbridge.inovacaosistemas.com.br;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        proxy_buffering off;
+    }
+}
+--- master ---
+root        1552       1  0 06:08 ?        00:00:00 nginx: master process /usr/sbin/nginx
+1000000     2637    2117  0 06:08 ?        00:00:00 nginx: master process /usr/sbin/nginx -g daemon on; master_process on;
+1000000     5935    5568  0 06:08 ?        00:00:00 nginx: master process nginx -g daemon off;
+1000000     5958    5828  0 06:08 ?        00:00:00 nginx: master process /usr/local/openresty/bin/openresty -g daemon off;
+1000000    11443   11343  0 06:09 ?        00:00:00 nginx: master process nginx -g daemon off;
+1000000    13630   13592  0 06:09 ?        00:00:00 nginx: master process nginx -g daemon off;
+1000000    13631   13476  0 06:09 ?        00:00:00 nginx: master process nginx -g daemon off;
+1000000    14510   14149  0 06:10 ?        00:00:00 nginx: master process nginx -g daemon off;
+1000000    14536   14147  0 06:10 ?        00:00:00 nginx: master process nginx -g daemon off;
+1000000    15017   14973  0 06:10 ?        00:00:00 nginx: master process /usr/local/openresty/bin/openresty -g daemon off;
+1000000    16273   16191  0 06:10 ?        00:00:00 nginx: master process nginx -g daemon off;
+1000000    19796   19656  0 06:10 ?        00:00:00 nginx: master process /usr/local/openresty/bin/openresty -g daemon off;
+1000000    19815   19464  0 06:10 ?        00:00:00 nginx: master process nginx -g daemon off;
+== reload T610 nginx without relying on systemd ==
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+2026/09/17 17:47:05 [notice] 2852463#2852463: signal process started
+== prove T610 local 443 now uses private Frida hop ==
+{"status":"ok","time":"2026-09-17T20:47:08.901343Z"}== install Frida legacy 8443 compatibility vhost ==
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+2026/09/17 17:47:12 [notice] 14790#14790: signal process started
+backup=/var/backups/codex-bridge/frida-public-vhost-20260917-204710Z
+== validate from devel3 as external client ==
+-- https://codexbridge.inovacaosistemas.com.br/health
+curl: (22) The requested URL returned error: 502
+
+-- https://codexbridge.inovacaosistemas.com.br:8443/health
+curl: (22) The requested URL returned error: 502
+
+== validate canonical OAuth metadata on both paths ==
+-- https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-authorization-server
+curl: (22) The requested URL returned error: 502
+Expecting value: line 1 column 1 (char 0)
+-- https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-protected-resource/mcp
+curl: (22) The requested URL returned error: 502
+Expecting value: line 1 column 1 (char 0)
+-- https://codexbridge.inovacaosistemas.com.br:8443/.well-known/oauth-authorization-server
+curl: (22) The requested URL returned error: 502
+Expecting value: line 1 column 1 (char 0)
+-- https://codexbridge.inovacaosistemas.com.br:8443/.well-known/oauth-protected-resource/mcp
+curl: (22) The requested URL returned error: 502
+Expecting value: line 1 column 1 (char 0)
+curl: (22) The requested URL returned error: 502
+curl: (22) The requested URL returned error: 502
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+  File "/usr/lib/python3.10/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+  File "/usr/lib/python3.10/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+  File "/usr/lib/python3.10/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+CODEXBRIDGE_LIVE_443_8443_UNIFIED_READY
+exit_code=0
