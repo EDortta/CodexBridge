@@ -371,3 +371,8 @@ same_server_identity= True
 5) Do not modify routing yet. This script is read-only apart from writing its result.
 
 CODEXBRIDGE_LEGACY_443_TRACE_COMPLETE
+[development cd70dee] results: trace legacy bare-443 CodexBridge source
+ 1 file changed, 373 insertions(+)
+ create mode 100644 temp-tools/results/20260917-135639Z-legacy-443-plugin-source.txt
+To https://github.com/EDortta/CodexBridge.git
+   c5fa97e..cd70dee  development -> development

@@ -70,3 +70,8 @@ backup=/etc/codex-bridge/users.json.bak-20260917-144801Z
 gateway_restart=ok
 password_reset=ok
 CODEXBRIDGE_OAUTH_USER_INSPECT_COMPLETE
+[development 3615f9e] results: inspect CodexBridge OAuth users
+ 1 file changed, 72 insertions(+)
+ create mode 100644 temp-tools/results/20260917-144726Z-oauth-user-inspect.txt
+To https://github.com/EDortta/CodexBridge.git
+   ac55581..3615f9e  development -> development

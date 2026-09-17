@@ -23,3 +23,8 @@ Token URL: https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
 Resource: https://codexbridge.inovacaosistemas.com.br:8443/mcp
 Client ID: chatgpt-codexbridge
 Token endpoint auth method: none
+[development b5ba089] results: publish ChatGPT PKCE OAuth alias v3
+ 1 file changed, 25 insertions(+)
+ create mode 100644 temp-tools/results/20260917-132544Z-pkce-oauth-alias-v3.txt
+To https://github.com/EDortta/CodexBridge.git
+   5ab42a7..b5ba089  development -> development

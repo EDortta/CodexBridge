@@ -242,3 +242,8 @@ Sep 16 18:19:37 frida uvicorn[22624]: INFO:     127.0.0.1:55508 - "GET /.well-kn
 == interpretation marker ==
 If :8443 metadata above contains code_challenge_methods_supported=[S256] but ChatGPT still rejects PKCE, compare the recent nginx request paths/host/port. That tells us which discovery URL ChatGPT actually fetched.
 CHATGPT_PKCE_DISCOVERY_DIAGNOSTIC_COMPLETE
+[development eaa6db0] results: diagnose ChatGPT PKCE discovery
+ 1 file changed, 244 insertions(+)
+ create mode 100644 temp-tools/results/20260916-211932Z-chatgpt-pkce-discovery.txt
+To https://github.com/EDortta/CodexBridge.git
+   fceace1..eaa6db0  development -> development

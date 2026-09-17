@@ -131,3 +131,8 @@ DIAGNOSTIC_INTERPRETATION:
 - A different certificate or no TLS indicates the candidate is not the canonical T610 HTTPS listener.
 
 CODEXBRIDGE_T610_443_FROM_FRIDA_DIAGNOSTIC_COMPLETE
+[development bcb2734] results: diagnose T610 443 from Frida
+ 1 file changed, 133 insertions(+)
+ create mode 100644 temp-tools/results/20260917-190003Z-diagnose-t610-443-from-frida.txt
+To https://github.com/EDortta/CodexBridge.git
+   cfe4eb4..bcb2734  development -> development

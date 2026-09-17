@@ -90,3 +90,8 @@ Interpretation hints:
 - If 443 depends on T610 while 8443 reaches Frida, moving the canonical public CodexBridge ingress to Frida is architecturally reasonable because Frida hosts the gateway and Bridge Nodes connect outbound by WebSocket.
 
 CODEXBRIDGE_CLOUDFLARE_INGRESS_AUDIT_COMPLETE
+[development 68fad7c] results: audit Cloudflare CodexBridge ingress
+ 1 file changed, 92 insertions(+)
+ create mode 100644 temp-tools/results/20260917-141941Z-cloudflare-codexbridge-ingress.txt
+To https://github.com/EDortta/CodexBridge.git
+   9dac54d..68fad7c  development -> development

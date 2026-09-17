@@ -19,3 +19,8 @@ updated=docs/installation.md
 /.well-known/oauth-protected-resource/mcp => {"resource":"https://codexbridge.inovacaosistemas.com.br/mcp","authorization_servers":["https://codexbridge.inovacaosistemas.com.br"],"bearer_methods_supported":["header"],"scopes_supported":["codexbridge.read","codexbridge.task.cancel","codexbridge.task.submit"]}
 oauth_443=ok
 CODEXBRIDGE_CANONICAL_443_READY
+[development 84b8d45] ops: canonicalize CodexBridge on bare 443
+ 4 files changed, 25 insertions(+), 4 deletions(-)
+ create mode 100644 temp-tools/results/20260917-143453Z-canonical-443.txt
+To https://github.com/EDortta/CodexBridge.git
+   da1b281..84b8d45  development -> development
