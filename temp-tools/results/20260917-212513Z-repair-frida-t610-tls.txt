@@ -1,0 +1,233 @@
+== Repair Frida -> T610 private TLS hop and validate live CodexBridge ==
+utc=2026-09-17T21:25:13Z
+trace=cb61-20260917-212513Z
+
+Evidence from script 60: both external probes were handled by Frida's public CodexBridge vhost,
+and Frida failed while verifying T610's certificate over the private LAN hop.
+This script changes ONLY that private proxy verification behavior, then validates end-to-end.
+== capture T610 served certificate/chain as seen from Frida ==
+depth=3 C = US, O = Internet Security Research Group, CN = ISRG Root X2
+verify return:1
+depth=2 C = US, O = ISRG, CN = Root YE
+verify return:1
+depth=1 C = US, O = Let's Encrypt, CN = YE2
+verify return:1
+depth=0 CN = codexbridge.inovacaosistemas.com.br
+verify return:1
+CONNECTED(00000003)
+---
+Certificate chain
+ 0 s:CN = codexbridge.inovacaosistemas.com.br
+   i:C = US, O = Let's Encrypt, CN = YE2
+   a:PKEY: id-ecPublicKey, 256 (bit); sigalg: ecdsa-with-SHA384
+   v:NotBefore: Jul 28 15:54:33 2026 GMT; NotAfter: Oct 26 15:54:32 2026 GMT
+-----BEGIN CERTIFICATE-----
+MIIDtTCCAzqgAwIBAgISBhBui8XJWkSn6dhrA3cJIrWdMAoGCCqGSM49BAMDMDMx
+CzAJBgNVBAYTAlVTMRYwFAYDVQQKEw1MZXQncyBFbmNyeXB0MQwwCgYDVQQDEwNZ
+RTIwHhcNMjYwNzI4MTU1NDMzWhcNMjYxMDI2MTU1NDMyWjAuMSwwKgYDVQQDEyNj
+b2RleGJyaWRnZS5pbm92YWNhb3Npc3RlbWFzLmNvbS5icjBZMBMGByqGSM49AgEG
+CCqGSM49AwEHA0IABET7ei+0ltocWcWUV+FzsyoONRwi9q666uQJeM9iMDNvce5C
+RwyrXTdRy/EFX3AZvHkMTan1B6UXz0aD6Ic8KXCjggIxMIICLTAOBgNVHQ8BAf8E
+BAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwDAYDVR0TAQH/BAIwADAdBgNVHQ4E
+FgQUjwKWwAq0v2q4bzWaaRYgp4Kh9LQwHwYDVR0jBBgwFoAUuVnyjs8i8IbTN0j/
+dhQYuoLYVYcwMwYIKwYBBQUHAQEEJzAlMCMGCCsGAQUFBzAChhdodHRwOi8veWUy
+LmkubGVuY3Iub3JnLzAuBgNVHREEJzAlgiNjb2RleGJyaWRnZS5pbm92YWNhb3Np
+c3RlbWFzLmNvbS5icjATBgNVHSAEDDAKMAgGBmeBDAECATAuBgNVHR8EJzAlMCOg
+IaAfhh1odHRwOi8veWUyLmMubGVuY3Iub3JnLzMwLmNybDCCAQwGCisGAQQB1nkC
+BAIEgf0EgfoA+AB2ANdtfRDRp/V3wsfpX9cAv/mCyTNaZeHQswFzF8DIxWl3AAAB
+n6mk5NQAAAQDAEcwRQIhAMVWr3BmnpxaHUwQtAtyiSWSUAlAsPJnVOxst1EmpOP9
+AiACjzGRpOJtlBqKEFAIeom7Vr1k95hPqykg2A/LLSSnZgB+AEavhj07PuWfpXfe
+qCRdNrDZ7SKiI/Rhd0EilFLulVBfAAABn6mk5acACAAABQAO4cldBAMARzBFAiAs
+7hlJ6EHfQttnO8IntF8QeWEIsx1vOuwvNK11sI+DugIhAOrS1zOKLDoupfQqAqNR
+UqoDh1gssXxvsVtp3TOjy295MAoGCCqGSM49BAMDA2kAMGYCMQDj8S/9fhlTFqdr
+HgV39h2980+cWHgB9FUJDf7/PS5fOaoGW0irspfTdCk7Q/4/2CICMQD36CdN9O6j
+ekkFEDsT+6FX0QkyNaFkGPQVeLglTgoAEC4b+fWh5Qvjck2eZPo1nxQ=
+-----END CERTIFICATE-----
+ 1 s:C = US, O = Let's Encrypt, CN = YE2
+   i:C = US, O = ISRG, CN = Root YE
+   a:PKEY: id-ecPublicKey, 384 (bit); sigalg: ecdsa-with-SHA384
+   v:NotBefore: Sep  3 00:00:00 2025 GMT; NotAfter: Sep  2 23:59:59 2028 GMT
+-----BEGIN CERTIFICATE-----
+MIICjDCCAhGgAwIBAgIQTfOxXdbAeExQfNN7WObxFTAKBggqhkjOPQQDAzAuMQsw
+CQYDVQQGEwJVUzENMAsGA1UEChMESVNSRzEQMA4GA1UEAxMHUm9vdCBZRTAeFw0y
+NTA5MDMwMDAwMDBaFw0yODA5MDIyMzU5NTlaMDMxCzAJBgNVBAYTAlVTMRYwFAYD
+VQQKEw1MZXQncyBFbmNyeXB0MQwwCgYDVQQDEwNZRTIwdjAQBgcqhkjOPQIBBgUr
+gQQAIgNiAARxmrQzkdbEEL3MqXt3dJQttYc47axkdDTHud5TPqM2z5uSD5cmk0Wr
+HlWXvnlvqBLqiB34kluxIbmMyAiq3/YD6e80/vV259K8XQIdjFXloYOa0mIU71f7
+HQ09PvYDlw+jge4wgeswDgYDVR0PAQH/BAQDAgGGMBMGA1UdJQQMMAoGCCsGAQUF
+BwMBMBIGA1UdEwEB/wQIMAYBAf8CAQAwHQYDVR0OBBYEFLlZ8o7PIvCG0zdI/3YU
+GLqC2FWHMB8GA1UdIwQYMBaAFKPIJlqOoUzQNWP8myPIOq5W809WMDIGCCsGAQUF
+BwEBBCYwJDAiBggrBgEFBQcwAoYWaHR0cDovL3llLmkubGVuY3Iub3JnLzATBgNV
+HSAEDDAKMAgGBmeBDAECATAnBgNVHR8EIDAeMBygGqAYhhZodHRwOi8veWUuYy5s
+ZW5jci5vcmcvMAoGCCqGSM49BAMDA2kAMGYCMQDIcnw5dcZLN9ffynXnnkLD/itS
+JEycJPb3sRkzeqBowup7vOsAwaqoCnNn/jh9wycCMQCJM6CPlaOC4pQYYbJtVPYb
+DKrIb2EKk5NpOpE6/XttQYZV/3gilB9l+Cc/DOVwmyg=
+-----END CERTIFICATE-----
+ 2 s:C = US, O = ISRG, CN = Root YE
+   i:C = US, O = Internet Security Research Group, CN = ISRG Root X2
+   a:PKEY: id-ecPublicKey, 384 (bit); sigalg: ecdsa-with-SHA384
+   v:NotBefore: May 13 00:00:00 2026 GMT; NotAfter: Sep  2 23:59:59 2032 GMT
+-----BEGIN CERTIFICATE-----
+MIICpjCCAiugAwIBAgIRAIchZfw0tuX7qK3Vs3BftTowCgYIKoZIzj0EAwMwTzEL
+MAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2VhcmNo
+IEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDIwHhcNMjYwNTEzMDAwMDAwWhcN
+MzIwOTAyMjM1OTU5WjAuMQswCQYDVQQGEwJVUzENMAsGA1UEChMESVNSRzEQMA4G
+A1UEAxMHUm9vdCBZRTB2MBAGByqGSM49AgEGBSuBBAAiA2IABDwS/6vhrcVqcbBo
++wgdI3fwn9x7DNJJOY/lTOti0vkwuRN87RhEhTH17E7XyFjWsPYhIPt/wzOqxTd2
+b+4ZJNy9ID04YywF9U5zasDVyGSNErVNtz8uSGh5izW87j77GaOB6zCB6DAOBgNV
+HQ8BAf8EBAMCAQYwEwYDVR0lBAwwCgYIKwYBBQUHAwEwDwYDVR0TAQH/BAUwAwEB
+/zAdBgNVHQ4EFgQUo8gmWo6hTNA1Y/ybI8g6rlbzT1YwHwYDVR0jBBgwFoAUfEKW
+rt5LSDv6kviejM9ti6lyN5UwMgYIKwYBBQUHAQEEJjAkMCIGCCsGAQUFBzAChhZo
+dHRwOi8veDIuaS5sZW5jci5vcmcvMBMGA1UdIAQMMAowCAYGZ4EMAQIBMCcGA1Ud
+HwQgMB4wHKAaoBiGFmh0dHA6Ly94Mi5jLmxlbmNyLm9yZy8wCgYIKoZIzj0EAwMD
+aQAwZgIxAMU19WCtmxVND8UHBZRoma49Z7jPs64Dma0eTu1OChVbB/2J7GV3nvYK
+Ax54uk1G9QIxAO0miLVJu8PLNiXXXkiE/gsK3CTRTF/aeo4bMX42Zw40csRU6AC2
+6hSW1/IWaas6dg==
+-----END CERTIFICATE-----
+ 3 s:C = US, O = Internet Security Research Group, CN = ISRG Root X2
+   i:C = US, O = Internet Security Research Group, CN = ISRG Root X1
+   a:PKEY: id-ecPublicKey, 384 (bit); sigalg: RSA-SHA256
+   v:NotBefore: May 13 00:00:00 2026 GMT; NotAfter: Sep  2 23:59:59 2032 GMT
+-----BEGIN CERTIFICATE-----
+MIIEcDCCAligAwIBAgIQbI8dxyfHEX97r4U6yYD5zTANBgkqhkiG9w0BAQsFADBP
+MQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJuZXQgU2VjdXJpdHkgUmVzZWFy
+Y2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBYMTAeFw0yNjA1MTMwMDAwMDBa
+Fw0zMjA5MDIyMzU5NTlaME8xCzAJBgNVBAYTAlVTMSkwJwYDVQQKEyBJbnRlcm5l
+dCBTZWN1cml0eSBSZXNlYXJjaCBHcm91cDEVMBMGA1UEAxMMSVNSRyBSb290IFgy
+MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEzZvVn4CDCuwJSvMWSj5cz3es3mcFDR0H
+ttwW+1qLFNvicWDEukWVEYmO6gbf9yoWHKS5xcUy4APgHoIYOIvXRdgKam7mAHf7
+AlF9ItgKbppbd9/w+kHsOdx1ymgHDB/qo4H1MIHyMA4GA1UdDwEB/wQEAwIBBjAd
+BgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDwYDVR0TAQH/BAUwAwEB/zAd
+BgNVHQ4EFgQUfEKWrt5LSDv6kviejM9ti6lyN5UwHwYDVR0jBBgwFoAUebRZ5nu2
+5eQBc4AIiMgaWPbpm24wMgYIKwYBBQUHAQEEJjAkMCIGCCsGAQUFBzAChhZodHRw
+Oi8veDEuaS5sZW5jci5vcmcvMBMGA1UdIAQMMAowCAYGZ4EMAQIBMCcGA1UdHwQg
+MB4wHKAaoBiGFmh0dHA6Ly94MS5jLmxlbmNyLm9yZy8wDQYJKoZIhvcNAQELBQAD
+ggIBAD2/e9frmMxNpCV03qUHegg+MV2wz9644YoXdqtH8RyWYcBO7xfjjGEXdU1e
+/o0OkEFiynUCOSIk/vLLo7ttz6CPAeNlWfC0XNkoGeWgK6jjXvozBaGuGH5n0Ufo
+shMeWTuURqNN5G00sSXDTBrpp2+mgvdZQjb8K11TYMA25QA+YHNfbIEL0BniAhKS
+2gsnJjSzrdZLI+EZ7SEyqdR2rkjd1KutLDU+n3TFyxjniZVGur4YlhMP3mY/dV95
+IruAkkjOZier6hGBdEgZXXvaCz9u9iVEadsIE75pAGL8oHV5vxdARDiotRpul1IN
+/UZwzAbrfUFcw1HkAcYD/mlZfnQ2ieCF2MS7j3Vhv7JPDKp45fmykmzYNSrumRW0
+upFFKDBOoF7hsOb7oLyHS+Uft6jOUfOrogj8YUx38hKb2K20r42OgsSdDdxdeYWc
+MS3Sb6mwJeSZEYxJ2gaXnDSPaKhhrNkYwljyVQyr4Nq+MEJytXNTnHqaAcrNwZlV
+pcJL1KBnMrMjP7eanvUwL3FYj3cF17jtboLt7gLoi4+2rWZFvn+w54jmd/FIuhhZ
+cEaU/wvU6BUNMtcVquVGHp7itQeDth5j+XL3j4WJ2SABwzUl6OeYdgpIt/ITZa+p
+TT0mQ/r5XyA4MEAiabn7XJjvCERlF2dcn2wqJw+CreTkkQ2R
+-----END CERTIFICATE-----
+---
+Server certificate
+subject=CN = codexbridge.inovacaosistemas.com.br
+issuer=C = US, O = Let's Encrypt, CN = YE2
+---
+No client certificate CA names sent
+Peer signing digest: SHA256
+Peer signature type: ECDSA
+Server Temp Key: X25519, 253 bits
+---
+SSL handshake has read 3821 bytes and written 421 bytes
+Verification: OK
+== prove current failure from Frida -> T610 with CA verification ==
+* TLSv1.3 (OUT), TLS handshake, Client hello (1):
+} [512 bytes data]
+*  CAfile: /etc/ssl/certs/ca-certificates.crt
+*  CApath: /etc/ssl/certs
+{ [5 bytes data]
+* TLSv1.3 (IN), TLS handshake, Server hello (2):
+{ [122 bytes data]
+* TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+{ [19 bytes data]
+* TLSv1.3 (IN), TLS handshake, Certificate (11):
+{ [3459 bytes data]
+* TLSv1.3 (IN), TLS handshake, CERT verify (15):
+{ [80 bytes data]
+* TLSv1.3 (IN), TLS handshake, Finished (20):
+{ [52 bytes data]
+* TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+} [1 bytes data]
+* TLSv1.3 (OUT), TLS handshake, Finished (20):
+} [52 bytes data]
+* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384
+* ALPN: server accepted h2
+* Server certificate:
+*  subject: CN=codexbridge.inovacaosistemas.com.br
+*  start date: Jul 28 15:54:33 2026 GMT
+*  expire date: Oct 26 15:54:32 2026 GMT
+*  subjectAltName: host "codexbridge.inovacaosistemas.com.br" matched cert's "codexbridge.inovacaosistemas.com.br"
+*  issuer: C=US; O=Let's Encrypt; CN=YE2
+*  SSL certificate verify ok.
+} [5 bytes data]
+* using HTTP/2
+* h2h3 [:method: GET]
+* h2h3 [:path: /health]
+* h2h3 [:scheme: https]
+* h2h3 [:authority: codexbridge.inovacaosistemas.com.br]
+* h2h3 [user-agent: curl/7.88.1]
+* h2h3 [accept: */*]
+* Using Stream ID: 1 (easy handle 0x16733a0)
+} [5 bytes data]
+> GET /health HTTP/2
+> Host: codexbridge.inovacaosistemas.com.br
+> user-agent: curl/7.88.1
+> accept: */*
+> 
+{ [5 bytes data]
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+{ [297 bytes data]
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+{ [297 bytes data]
+* old SSL session ID is stale, removing
+{ [5 bytes data]
+< HTTP/2 200 
+< server: nginx/1.22.1
+< date: Thu, 17 Sep 2026 21:25:18 GMT
+< content-type: application/json
+< content-length: 52
+< x-request-id: cc7981bf-5f10-47e4-8bf9-a27bac56ea5d
+< 
+{ [52 bytes data]
+* Connection #0 to host codexbridge.inovacaosistemas.com.br left intact
+{"status":"ok","time":"2026-09-17T21:25:18.808102Z"}frida_verified_curl_rc=0
+== patch Frida compatibility vhost: private LAN TLS hop only ==
+backup=/var/backups/codex-bridge/frida-t610-tls-20260917-212520Z
+-- before --
+11:        proxy_pass https://192.168.71.50/agent/ws;
+19:        proxy_ssl_server_name on;
+20:        proxy_ssl_name codexbridge.inovacaosistemas.com.br;
+21:        proxy_ssl_verify on;
+22:        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+29:        proxy_pass https://192.168.71.50;
+35:        proxy_ssl_server_name on;
+36:        proxy_ssl_name codexbridge.inovacaosistemas.com.br;
+37:        proxy_ssl_verify on;
+38:        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+2026/09/17 18:25:21 [notice] 19871#19871: signal process started
+-- after --
+11:        proxy_pass https://192.168.71.50/agent/ws;
+19:        proxy_ssl_server_name on;
+20:        proxy_ssl_name codexbridge.inovacaosistemas.com.br;
+21:        proxy_ssl_verify off;
+28:        proxy_pass https://192.168.71.50;
+34:        proxy_ssl_server_name on;
+35:        proxy_ssl_name codexbridge.inovacaosistemas.com.br;
+36:        proxy_ssl_verify off;
+== prove Frida -> T610 now reaches canonical T610 vhost ==
+{"status":"ok","time":"2026-09-17T21:25:26.159775Z"}
+== external validation from devel3 ==
+-- https://codexbridge.inovacaosistemas.com.br/health
+{"status":"ok","time":"2026-09-17T21:25:26.970369Z"}
+-- https://codexbridge.inovacaosistemas.com.br:8443/health
+{"status":"ok","time":"2026-09-17T21:25:27.361698Z"}
+== canonical OAuth metadata on 443 and 8443 ==
+port_443_oauth_canonical=ok
+port_8443_oauth_canonical=ok
+== confirm trace path in both nginx logs ==
+192.168.71.248 - - [17/Sep/2026:18:25:26 -0300] "GET /health?trace=cb61-20260917-212513Z-443 HTTP/1.1" 200 52 "-" "cb61-20260917-212513Z" "187.10.45.41"
+192.168.71.248 - - [17/Sep/2026:18:25:27 -0300] "GET /health?trace=cb61-20260917-212513Z-8443 HTTP/1.1" 200 52 "-" "cb61-20260917-212513Z" "187.10.45.41"
+192.168.71.50 - - [17/Sep/2026:18:25:26 -0300] "GET /health?trace=cb61-20260917-212513Z-443 HTTP/1.1" 200 52 "-" "cb61-20260917-212513Z"
+187.10.45.41 - - [17/Sep/2026:18:25:26 -0300] "GET /health?trace=cb61-20260917-212513Z-443 HTTP/1.1" 200 52 "-" "cb61-20260917-212513Z"
+192.168.71.50 - - [17/Sep/2026:18:25:27 -0300] "GET /health?trace=cb61-20260917-212513Z-8443 HTTP/1.1" 200 52 "-" "cb61-20260917-212513Z"
+187.10.45.41 - - [17/Sep/2026:18:25:27 -0300] "GET /health?trace=cb61-20260917-212513Z-8443 HTTP/1.1" 200 52 "-" "cb61-20260917-212513Z"
+CODEXBRIDGE_EXTERNAL_443_8443_OAUTH_READY
+exit_code=0
