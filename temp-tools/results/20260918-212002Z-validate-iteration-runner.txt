@@ -1,0 +1,55 @@
+== Validate CodexBridge Iteration Runner ==
+utc=2026-09-18T21:20:02Z
+global_timeout_seconds=120
+
+== python compile ==
+step_exit_code=0
+
+== unit tests ==
+.....                                                                    [100%]
+5 passed in 0.33s
+step_exit_code=0
+
+== manifest syntax ==
+{
+    "enabled": false,
+    "run_id": "example-run",
+    "project": "CodexBridge",
+    "round": 1,
+    "max_rounds": 8,
+    "deadline": "2026-09-19T03:00:00-03:00",
+    "branch": "development",
+    "script": "temp-tools/72-devel3-capture-browser-oauth-resilient.sh",
+    "args": [],
+    "timeout_seconds": 300,
+    "status": "paused",
+    "ready_revision": null
+}
+step_exit_code=0
+
+== checkout status before runner dry-run ==
+ M temp-tools/results/20260917-205829Z-trace-live-502-path.txt
+ M temp-tools/results/20260917-210824Z-trace-live-502-path.txt
+ M temp-tools/results/20260917-212513Z-repair-frida-t610-tls.txt
+?? .claude-flow/
+?? .swarm/
+?? claude-handoff-c6b23ec8-d96b-48d1-bae4-7847b4a9430f.md
+?? coordination-status-20260911.txt
+?? curl-tests.sh
+?? ruvector.db
+?? temp-tools/results/20260918-212002Z-validate-iteration-runner.txt
+
+== dry run (paused or busy checkout must not execute) ==
+iteration_runner=busy reason=tracked working tree is dirty
+step_exit_code=0
+
+== cron readiness ==
+/usr/bin/git
+/usr/bin/python3
+/usr/bin/timeout
+state_dir=/home/esteban/.local/state/codexbridge-iteration-runner
+ITERATION_RUNNER_VALIDATION_READY
+
+== script exit ==
+exit_code=0
+utc=2026-09-18T21:20:08Z
