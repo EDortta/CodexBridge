@@ -1,0 +1,35 @@
+== Repair CodexBridge OAuth registry permissions ==
+utc=2026-09-18T19:56:00Z
+
+== current state ==
+drwxr-xr-x 3 root root 4096 Sep 18 16:05 /etc/codex-bridge
+-rw------- 1 root root 581 Sep 18 13:12 /etc/codex-bridge/users.json
+CODEX_BRIDGE_USER_REGISTRY_FILE=/etc/codex-bridge/auth/users.json
+
+== backup ==
+backup=/var/backups/codex-bridge/oauth-registry-20260918-195601Z
+
+== install dedicated writable auth registry directory ==
+
+== point gateway at dedicated registry ==
+
+== prove service account can read and atomically replace in auth directory ==
+service_registry_access=ok
+
+== restart gateway ==
+active
+
+== verify effective settings and user lookup as service account ==
+registry_path=/etc/codex-bridge/users.json
+registry_reason=the user registry '/etc/codex-bridge/users.json' cannot be read (PermissionError: [Errno 13] Permission denied: '/etc/codex-bridge/users.json'). No account can sign in until it parses.
+lookup_user=missing
+user registry '/etc/codex-bridge/users.json' is unusable (PermissionError: [Errno 13] Permission denied: '/etc/codex-bridge/users.json'); failing closed — no account can sign in until it is fixed.
+
+== recent auth warnings after restart ==
+
+== external health from devel3 ==
+curl: (22) The requested URL returned error: 502
+
+== script exit ==
+exit_code=22
+utc=2026-09-18T19:56:11Z
