@@ -1,0 +1,53 @@
+name: Iteration result webhook
+
+on:
+  push:
+    branches: [development]
+    paths:
+      - "iteration-results/**/*.json"
+
+permissions:
+  contents: read
+
+jobs:
+  notify-controller:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Notify configured iteration controller
+        env:
+          WEBHOOK_URL: ${{ secrets.ITERATION_CONTROLLER_WEBHOOK_URL }}
+          WEBHOOK_TOKEN: ${{ secrets.ITERATION_CONTROLLER_WEBHOOK_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK_URL:-}" ]; then
+            echo "ITERATION_CONTROLLER_WEBHOOK_URL is not configured; nothing to notify."
+            exit 0
+          fi
+
+          mapfile -t files < <(
+            git diff --name-only "$BEFORE_SHA" "$COMMIT_SHA" -- 'iteration-results/**/*.json' |
+            sort -u
+          )
+
+          for file in "${files[@]}"; do
+            [ -f "$file" ] || continue
+            payload="$(jq -cn               --arg repository "$REPOSITORY"               --arg ref "$REF_NAME"               --arg commit "$COMMIT_SHA"               --arg file "$file"               --slurpfile result "$file"               '{repository:$repository,ref:$ref,commit:$commit,file:$file,result:$result[0]}')"
+
+            args=(-fsS --connect-timeout 5 --max-time 20
+                  -H 'Content-Type: application/json'
+                  -H 'User-Agent: CodexBridge-Iteration-Webhook/1'
+                  --data "$payload")
+            if [ -n "${WEBHOOK_TOKEN:-}" ]; then
+              args+=(-H "Authorization: Bearer $WEBHOOK_TOKEN")
+            fi
+            curl "${args[@]}" "$WEBHOOK_URL"
+          done
