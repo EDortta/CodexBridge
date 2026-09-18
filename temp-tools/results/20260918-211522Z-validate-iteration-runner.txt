@@ -1,0 +1,43 @@
+== Validate CodexBridge Iteration Runner ==
+utc=2026-09-18T21:15:22Z
+global_timeout_seconds=120
+
+== python compile ==
+step_exit_code=0
+
+== unit tests ==
+.....                                                                    [100%]
+5 passed in 0.34s
+step_exit_code=0
+
+== manifest syntax ==
+{
+    "enabled": false,
+    "run_id": "example-run",
+    "project": "CodexBridge",
+    "round": 1,
+    "max_rounds": 8,
+    "deadline": "2026-09-19T03:00:00-03:00",
+    "branch": "development",
+    "script": "temp-tools/72-devel3-capture-browser-oauth-resilient.sh",
+    "args": [],
+    "timeout_seconds": 300,
+    "status": "paused",
+    "ready_revision": null
+}
+step_exit_code=0
+
+== dry run (paused manifest must not execute) ==
+iteration_runner=error error=tracked working tree is dirty; refusing pull/test
+step_exit_code=2
+
+== cron readiness ==
+/usr/bin/git
+/usr/bin/python3
+/usr/bin/timeout
+state_dir=/home/esteban/.local/state/codexbridge-iteration-runner
+ITERATION_RUNNER_VALIDATION_FAILED
+
+== script exit ==
+exit_code=1
+utc=2026-09-18T21:15:30Z
