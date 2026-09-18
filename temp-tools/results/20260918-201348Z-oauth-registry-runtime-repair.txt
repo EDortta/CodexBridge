@@ -1,0 +1,37 @@
+== CodexBridge OAuth runtime registry repair ==
+utc=2026-09-18T20:13:48Z
+global_timeout_seconds=120
+ssh_timeout_seconds=20
+curl_timeout_seconds=15
+
+== inspect live service process environment ==
+main_pid=3925
+unit_active=active
+env_file_line=CODEX_BRIDGE_USER_REGISTRY_FILE=/etc/codex-bridge/auth/users.json
+process_env_line=CODEX_BRIDGE_USER_REGISTRY_FILE=/etc/codex-bridge/auth/users.json
+expected=/etc/codex-bridge/auth/users.json
+
+== ensure the running service receives the intended registry ==
+process_env_mismatch=no
+final_process_env_line=CODEX_BRIDGE_USER_REGISTRY_FILE=/etc/codex-bridge/auth/users.json
+
+== verify registry as codexbridge service account using exact live env ==
+settings.user_registry_file=/etc/codex-bridge/auth/users.json
+registry_reason=None
+lookup_user=found
+user_id=esteban
+email=edortta71@gmail.com
+enabled=True
+
+== gateway journal after repair ==
+Sep 18 17:04:49 frida uvicorn[3925]: INFO:     192.168.71.50:0 - "GET /health HTTP/1.1" 200 OK
+
+== external health with bounded retries ==
+{"status":"ok","time":"2026-09-18T20:14:00.483120Z"}
+external_health=ok
+
+CODEXBRIDGE_OAUTH_RUNTIME_REGISTRY_READY
+
+== script exit ==
+exit_code=0
+utc=2026-09-18T20:14:00Z
