@@ -1,0 +1,54 @@
+== CodexBridge OAuth runtime registry repair ==
+utc=2026-09-18T20:04:36Z
+global_timeout_seconds=120
+ssh_timeout_seconds=20
+curl_timeout_seconds=15
+
+== inspect live service process environment ==
+main_pid=3925
+unit_active=active
+env_file_line=CODEX_BRIDGE_USER_REGISTRY_FILE=/etc/codex-bridge/auth/users.json
+process_env_line=CODEX_BRIDGE_USER_REGISTRY_FILE=/etc/codex-bridge/auth/users.json
+expected=/etc/codex-bridge/auth/users.json
+
+== ensure the running service receives the intended registry ==
+process_env_mismatch=no
+final_process_env_line=CODEX_BRIDGE_USER_REGISTRY_FILE=/etc/codex-bridge/auth/users.json
+
+== verify registry as codexbridge service account using exact live env ==
+settings.user_registry_file=/etc/codex-bridge/auth/users.json
+registry_reason=None
+lookup_user=found
+user_id=esteban
+email=edortta71@gmail.com
+enabled=True
+
+== gateway journal after repair ==
+Sep 18 16:56:03 frida systemd[1]: Stopping codex-bridge-gateway.service - Codex Bridge Gateway...
+Sep 18 16:56:03 frida uvicorn[29613]: INFO:     Shutting down
+Sep 18 16:56:03 frida uvicorn[29613]: INFO:     Waiting for background tasks to complete. (CTRL+C to force quit)
+Sep 18 16:56:03 frida uvicorn[29613]: INFO:     Waiting for application shutdown.
+Sep 18 16:56:03 frida uvicorn[29613]: INFO:     Application shutdown complete.
+Sep 18 16:56:03 frida uvicorn[29613]: INFO:     Finished server process [29613]
+Sep 18 16:56:03 frida systemd[1]: codex-bridge-gateway.service: Deactivated successfully.
+Sep 18 16:56:03 frida systemd[1]: Stopped codex-bridge-gateway.service - Codex Bridge Gateway.
+Sep 18 16:56:03 frida systemd[1]: codex-bridge-gateway.service: Consumed 1min 9.108s CPU time.
+Sep 18 16:56:03 frida systemd[1]: Started codex-bridge-gateway.service - Codex Bridge Gateway.
+Sep 18 16:56:23 frida uvicorn[3925]: INFO:     Started server process [3925]
+Sep 18 16:56:23 frida uvicorn[3925]: INFO:     Waiting for application startup.
+Sep 18 16:56:24 frida uvicorn[3925]: INFO:     Application startup complete.
+Sep 18 16:56:24 frida uvicorn[3925]: INFO:     Uvicorn running on http://0.0.0.0:18080 (Press CTRL+C to quit)
+Sep 18 16:56:35 frida uvicorn[3925]: INFO:     192.168.71.50:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 18 16:56:35 frida uvicorn[3925]: INFO:     connection open
+Sep 18 16:56:35 frida uvicorn[3925]: INFO:     192.168.71.50:0 - "WebSocket /agent/ws?executor_id=devel3" [accepted]
+Sep 18 16:56:35 frida uvicorn[3925]: INFO:     connection open
+
+== external health with bounded retries ==
+{"status":"ok","time":"2026-09-18T20:04:49.377145Z"}
+external_health=ok
+
+CODEXBRIDGE_OAUTH_RUNTIME_REGISTRY_READY
+
+== script exit ==
+exit_code=0
+utc=2026-09-18T20:04:49Z
