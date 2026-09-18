@@ -42,6 +42,12 @@ class RunnerError(RuntimeError):
     pass
 
 
+class ProjectBusy(RuntimeError):
+    """The checkout is in use or locally modified; cron should retry later."""
+
+    pass
+
+
 @dataclasses.dataclass(frozen=True)
 class Manifest:
     enabled: bool
@@ -191,7 +197,7 @@ def pull_current_branch(repo: Path) -> str:
     if not current:
         raise RunnerError("detached HEAD is not supported")
     if tracked_dirty(repo):
-        raise RunnerError("tracked working tree is dirty; refusing pull/test")
+        raise ProjectBusy("tracked working tree is dirty")
     git(repo, "fetch", "--prune", "origin", current, timeout=60)
     git(repo, "pull", "--ff-only", "origin", current, timeout=60)
     return current
@@ -460,6 +466,9 @@ def main() -> int:
         # quiet; the committed JSON drives the next controller round.
         return 0
 
+    except ProjectBusy as exc:
+        print(f"iteration_runner=busy reason={exc}")
+        return 0
     except RunnerError as exc:
         print(f"iteration_runner=error error={exc}", file=sys.stderr)
         return 2
