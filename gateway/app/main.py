@@ -25,6 +25,7 @@ from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import issues as issues_routes
 from gateway.app.api.routes import notifications as notifications_routes
 from gateway.app.api.routes import reminders as reminders_routes
+from gateway.app.api.routes import password_recovery as password_recovery_routes
 from gateway.app.api.setup import install_api_conventions
 from gateway.app.core.agent_auth import resolve_executor_token
 from gateway.app.core.config import settings
@@ -212,6 +213,9 @@ app.include_router(control_ui_routes.router, dependencies=[Depends(RateLimitDepe
 # router above.
 app.include_router(reminders_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
+# Password recovery uses the same per-client limiter as the other credential surfaces.
+app.include_router(password_recovery_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+
 
 def oauth_www_authenticate_header() -> str:
     resource_metadata = f'{settings.effective_oauth_issuer()}/.well-known/oauth-protected-resource'
@@ -235,37 +239,93 @@ def render_authorize_form(
     code_challenge_method: str,
     error: str | None = None,
 ) -> HTMLResponse:
-    error_html = f'<p style="color:#b91c1c">{html.escape(error)}</p>' if error else ""
+    error_html = (
+        f'<div class="alert" role="alert">{html.escape(error)}</div>' if error else ""
+    )
     body = f"""<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>CodexBridge OAuth</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Authorize ChatGPT · CodexBridge</title>
     <style>
-      body {{ font-family: sans-serif; max-width: 36rem; margin: 3rem auto; padding: 0 1rem; }}
-      input {{ display:block; width:100%; padding:0.65rem; margin:0.5rem 0 1rem; }}
-      button {{ padding:0.75rem 1rem; }}
-      .hint {{ color:#555; font-size:0.95rem; }}
+      :root {{ color-scheme: dark; }}
+      * {{ box-sizing: border-box; }}
+      body {{
+        margin: 0; min-height: 100vh; display: grid; place-items: center;
+        padding: 24px; color: #edf5fb;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at 18% 18%, rgba(25, 207, 181, .16), transparent 31rem),
+          radial-gradient(circle at 82% 86%, rgba(45, 108, 223, .12), transparent 34rem),
+          linear-gradient(145deg, #06111f, #0a1727 58%, #07121e);
+      }}
+      .card {{
+        width: min(100%, 460px); padding: 32px;
+        border: 1px solid rgba(148, 190, 226, .13); border-radius: 20px;
+        background: rgba(12, 26, 43, .94);
+        box-shadow: 0 28px 90px rgba(0, 0, 0, .44);
+      }}
+      .brand {{ display: flex; align-items: center; gap: 12px; margin-bottom: 28px; font-weight: 800; }}
+      .mark {{
+        width: 44px; height: 44px; display: grid; place-items: center;
+        border-radius: 12px; color: #061511; font-size: 18px; font-weight: 900;
+        background: linear-gradient(135deg, #16bfa9, #56dec9);
+        box-shadow: 0 9px 28px rgba(22, 191, 169, .22);
+      }}
+      h1 {{ margin: 0 0 10px; font-size: 27px; letter-spacing: -.025em; }}
+      .lead {{ margin: 0 0 22px; color: #aebdcc; line-height: 1.55; }}
+      .client {{
+        display: flex; align-items: center; gap: 10px; margin: 0 0 22px;
+        padding: 11px 12px; border-radius: 10px; color: #c9d7e3;
+        background: #0a1929; border: 1px solid #263b50; font-size: 14px;
+      }}
+      .dot {{ width: 9px; height: 9px; border-radius: 50%; background: #2ed2bb; box-shadow: 0 0 0 4px rgba(46,210,187,.11); }}
+      label {{ display: block; margin: 15px 0 7px; color: #dce6ef; font-size: 14px; font-weight: 650; }}
+      input {{
+        width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid #31465b;
+        background: #081522; color: white; outline: none; font-size: 15px;
+      }}
+      input:focus {{ border-color: #2ed2bb; box-shadow: 0 0 0 3px rgba(46, 210, 187, .12); }}
+      .row {{ display: flex; justify-content: flex-end; margin-top: 8px; }}
+      a {{ color: #56dcc8; text-decoration: none; font-size: 14px; }}
+      a:hover {{ text-decoration: underline; }}
+      button {{
+        width: 100%; margin-top: 20px; border: 0; border-radius: 10px; padding: 13px 16px;
+        background: #2bcdb7; color: #041411; font-size: 15px; font-weight: 850; cursor: pointer;
+      }}
+      button:hover {{ filter: brightness(1.06); }}
+      .alert {{
+        margin: 0 0 16px; padding: 11px 12px; border-radius: 9px;
+        color: #ffc3cb; background: #34171c; border: 1px solid #71333c; font-size: 14px;
+      }}
+      .foot {{ margin: 20px 0 0; color: #8397a9; font-size: 12px; line-height: 1.5; }}
     </style>
   </head>
   <body>
-    <h1>Authorize CodexBridge</h1>
-    <p class="hint">Sign in with an approved CodexBridge user to let ChatGPT call this MCP server on your behalf.</p>
-    {error_html}
-    <form method="post" action="/oauth/authorize">
-      <input type="hidden" name="response_type" value="code" />
-      <input type="hidden" name="client_id" value="{html.escape(client_id)}" />
-      <input type="hidden" name="redirect_uri" value="{html.escape(redirect_uri)}" />
-      <input type="hidden" name="state" value="{html.escape(state or '')}" />
-      <input type="hidden" name="scope" value="{html.escape(scope)}" />
-      <input type="hidden" name="code_challenge" value="{html.escape(code_challenge)}" />
-      <input type="hidden" name="code_challenge_method" value="{html.escape(code_challenge_method)}" />
-      <label>Username or email</label>
-      <input name="username" autocomplete="username" />
-      <label>Password</label>
-      <input name="password" type="password" autocomplete="current-password" />
-      <button type="submit">Authorize</button>
-    </form>
+    <main class="card">
+      <div class="brand"><div class="mark">&lt;/&gt;</div><span>CodexBridge</span></div>
+      <h1>Authorize ChatGPT</h1>
+      <p class="lead">Sign in to allow ChatGPT to use the CodexBridge tools available to your account.</p>
+      <div class="client"><span class="dot"></span><span>Secure OAuth authorization · PKCE S256</span></div>
+      {error_html}
+      <form method="post" action="/oauth/authorize">
+        <input type="hidden" name="response_type" value="code" />
+        <input type="hidden" name="client_id" value="{html.escape(client_id)}" />
+        <input type="hidden" name="redirect_uri" value="{html.escape(redirect_uri)}" />
+        <input type="hidden" name="state" value="{html.escape(state or '')}" />
+        <input type="hidden" name="scope" value="{html.escape(scope)}" />
+        <input type="hidden" name="code_challenge" value="{html.escape(code_challenge)}" />
+        <input type="hidden" name="code_challenge_method" value="{html.escape(code_challenge_method)}" />
+        <label for="username">Username or email</label>
+        <input id="username" name="username" autocomplete="username" required autofocus />
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required />
+        <div class="row"><a href="/oauth/password/forgot">Forgot password?</a></div>
+        <button type="submit">Continue to ChatGPT</button>
+      </form>
+      <p class="foot">Your password is handled by CodexBridge and is never shared with ChatGPT.</p>
+    </main>
   </body>
 </html>"""
     return HTMLResponse(body)
