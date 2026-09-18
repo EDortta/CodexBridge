@@ -20,11 +20,11 @@ import argparse
 import dataclasses
 import datetime as dt
 import fcntl
-import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -186,14 +186,15 @@ def tracked_dirty(repo: Path) -> bool:
     )
 
 
-def ensure_branch_and_pull(repo: Path, branch: str) -> None:
+def pull_current_branch(repo: Path) -> str:
     current = git(repo, "branch", "--show-current").stdout.strip()
-    if current != branch:
-        raise RunnerError(f"checkout is on {current!r}, manifest requires {branch!r}")
+    if not current:
+        raise RunnerError("detached HEAD is not supported")
     if tracked_dirty(repo):
         raise RunnerError("tracked working tree is dirty; refusing pull/test")
-    git(repo, "fetch", "--prune", "origin", branch, timeout=60)
-    git(repo, "pull", "--ff-only", "origin", branch, timeout=60)
+    git(repo, "fetch", "--prune", "origin", current, timeout=60)
+    git(repo, "pull", "--ff-only", "origin", current, timeout=60)
+    return current
 
 
 def safe_script(repo: Path, rel: str) -> Path:
@@ -264,22 +265,36 @@ def execute_round(repo: Path, manifest: Manifest) -> dict[str, Any]:
         out.write(f"run_id={manifest.run_id}\nround={manifest.round}\n")
         out.write(f"started_at={started}\ncommand_script={manifest.script}\n\n")
         out.flush()
+        proc = subprocess.Popen(
+            command,
+            cwd=repo,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
         try:
-            cp = subprocess.run(
-                command,
-                cwd=repo,
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=manifest.timeout_seconds,
-                check=False,
-                start_new_session=True,
-            )
-            exit_code = cp.returncode
+            exit_code = proc.wait(timeout=manifest.timeout_seconds)
         except subprocess.TimeoutExpired:
             timed_out = True
             exit_code = 124
             out.write(f"\nITERATION_RUNNER_TIMEOUT after {manifest.timeout_seconds}s\n")
+            out.flush()
+            # Kill the whole process group, not only the shell/python parent.
+            # A timed-out test must not leave ssh/curl/pytest grandchildren
+            # running behind the project lock after cron moves on.
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+                proc.wait(timeout=5)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
 
     finished = utc_now()
     head_after = git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -390,19 +405,24 @@ def main() -> int:
         return 0
 
     try:
-        # Read the current branch first only to know what to update. A manifest
-        # on a different branch is refused after the fast-forward.
+        # Pull first. A controller may create the manifest remotely while this
+        # checkout still has no manifest or has a stale paused copy.
+        current_branch = pull_current_branch(repo)
+
         manifest_path = (repo / args.manifest).resolve()
+        try:
+            manifest_path.relative_to(repo)
+        except ValueError as exc:
+            raise RunnerError("manifest path escapes repository root") from exc
         if not manifest_path.exists():
             print("iteration_runner=no_manifest")
             return 0
 
-        initial = Manifest.load(manifest_path)
-        ensure_branch_and_pull(repo, initial.branch)
-
-        # The pull may have changed the manifest; decisions are always based on
-        # the freshly pulled version.
         manifest = Manifest.load(manifest_path)
+        if manifest.branch != current_branch:
+            raise RunnerError(
+                f"checkout is on {current_branch!r}, manifest requires {manifest.branch!r}"
+            )
 
         if not manifest.enabled or manifest.status != "ready":
             print(f"iteration_runner=idle status={manifest.status} enabled={manifest.enabled}")
