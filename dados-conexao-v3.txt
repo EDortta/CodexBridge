@@ -1,22 +1,76 @@
+CodexBridge — dados de conexão
 
+Canonical MCP server URL:
+https://codexbridge.inovacaosistemas.com.br/mcp
 
-Server URL: https://codexbridge.inovacaosistemas.com.br:8443/mcp
+Authentication:
+OAuth 2.0 Authorization Code + PKCE (S256)
 
-Authentication: OAuth
+OAuth Client ID:
+chatgpt-codexbridge
 
-OAuth Client ID: chatgpt-codexbridge
+Client Secret:
+vazio
 
-Client Secret: vazio
+Token endpoint auth method:
+none
 
-Token endpoint auth method: none
+Canonical OAuth issuer / authorization server base:
+https://codexbridge.inovacaosistemas.com.br
 
-Authorization server base: https://codexbridge.inovacaosistemas.com.br:8443/codexbridge-v3
+Authorization URL:
+https://codexbridge.inovacaosistemas.com.br/oauth/authorize
 
-Auth URL: https://codexbridge.inovacaosistemas.com.br:8443/oauth/authorize
+Token URL:
+https://codexbridge.inovacaosistemas.com.br/oauth/token
 
-Token URL: https://codexbridge.inovacaosistemas.com.br:8443/oauth/token
+Protected resource:
+https://codexbridge.inovacaosistemas.com.br/mcp
 
-Resource: https://codexbridge.inovacaosistemas.com.br:8443/mcp
+OAuth authorization-server metadata:
+https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-authorization-server
 
-Scopes: codexbridge.read codexbridge.task.submit codexbridge.task.cancel
+OAuth protected-resource metadata:
+https://codexbridge.inovacaosistemas.com.br/.well-known/oauth-protected-resource/mcp
 
+Default scopes currently advertised by the gateway:
+codexbridge.read
+codexbridge.task.submit
+codexbridge.task.cancel
+codexbridge.issues.write
+codexbridge.conversations.write
+codexbridge.reminders.write
+codexbridge.reminders.read
+codexbridge.notifications.manage
+
+Important:
+- New ChatGPT registration must use the canonical URL without :8443.
+- Do not use the old /codexbridge-v3 alias.
+- Port 8443 remains only as a temporary compatibility transport for the old ChatGPT registration path.
+- Canonical OAuth issuer, authorization endpoint, token endpoint and MCP resource must never advertise :8443.
+
+Current public routing:
+- Public 443 reaches the canonical CodexBridge path through the current Frida/T610 ingress chain.
+- Public 8443 remains compatible and reaches the same canonical OAuth/MCP service.
+- External validation from devel3 confirmed HTTP 200 on both 443 and 8443.
+
+OAuth login UI:
+https://codexbridge.inovacaosistemas.com.br/oauth/authorize
+
+Password recovery:
+https://codexbridge.inovacaosistemas.com.br/oauth/password/forgot
+
+User/password management from the repository:
+bash tools/codexbridge-user.sh --user USERNAME --email EMAIL
+
+To create a new administrator:
+bash tools/codexbridge-user.sh --user USERNAME --email EMAIL --create --admin
+
+The CLI prompts for the password interactively and updates:
+/etc/codex-bridge/users.json
+
+ChatGPT:
+- The old CodexBridge plugin was removed.
+- Re-register CodexBridge only after the new OAuth UI/password-recovery deployment is validated.
+- New registration target:
+  https://codexbridge.inovacaosistemas.com.br/mcp
