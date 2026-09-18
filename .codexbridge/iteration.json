@@ -1,0 +1,14 @@
+{
+  "enabled": false,
+  "run_id": "example-run",
+  "project": "CodexBridge",
+  "round": 1,
+  "max_rounds": 8,
+  "deadline": "2026-09-19T03:00:00-03:00",
+  "branch": "development",
+  "script": "temp-tools/72-devel3-capture-browser-oauth-resilient.sh",
+  "args": [],
+  "timeout_seconds": 300,
+  "status": "paused",
+  "ready_revision": null
+}
