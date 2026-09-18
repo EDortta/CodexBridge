@@ -33,7 +33,10 @@ main() {
   step "python compile" python3 -m py_compile tools/iteration_runner.py
   step "unit tests" pytest -q tests/unit/test_iteration_runner.py
   step "manifest syntax" python3 -m json.tool .codexbridge/iteration.json
-  step "dry run (paused manifest must not execute)" python3 tools/iteration_runner.py --dry-run
+  echo
+  echo "== checkout status before runner dry-run =="
+  git status --short || true
+  step "dry run (paused or busy checkout must not execute)" python3 tools/iteration_runner.py --dry-run
 
   echo
   echo "== cron readiness =="
