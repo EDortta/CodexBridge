@@ -447,6 +447,69 @@ _FALLBACK_ITERATIONS = 600000
 _MAX_ITERATIONS = 10_000_000
 
 
+
+def hash_password(password: str, iterations: int = 600000) -> str:
+    """Create a registry-compatible PBKDF2-SHA256 password hash."""
+    if not password:
+        raise ValueError("password must not be empty")
+    if iterations <= 0 or iterations > _MAX_ITERATIONS:
+        raise ValueError("invalid PBKDF2 iteration count")
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    encode = lambda raw: base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return "$".join(("pbkdf2_sha256", str(iterations), encode(salt), encode(digest)))
+
+
+def set_user_password(path: str, user_id: str, password: str) -> None:
+    """Atomically replace one user's password hash in the configured registry.
+
+    The registry is validated before and after the update. File mode is preserved
+    and the replacement happens with os.replace so readers never observe a
+    partially-written JSON document.
+    """
+    import os
+    import tempfile
+
+    file_path = Path(path)
+    payload = json.loads(file_path.read_text(encoding="utf-8"))
+    registry = UserRegistry.model_validate(payload)
+
+    found = False
+    for user in registry.users:
+        if user.user_id == user_id:
+            user.password_hash = hash_password(password)
+            found = True
+            break
+    if not found:
+        raise KeyError(f"unknown user_id: {user_id}")
+
+    rendered = json.dumps(
+        {"users": [user.model_dump() for user in registry.users]},
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n"
+    mode = file_path.stat().st_mode & 0o777
+
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=file_path.name + ".",
+        suffix=".tmp",
+        dir=str(file_path.parent),
+        text=True,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(rendered)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, mode)
+        # Validate the exact bytes that are about to become authoritative.
+        UserRegistry.model_validate(json.loads(Path(tmp_name).read_text(encoding="utf-8")))
+        os.replace(tmp_name, file_path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+
 def verify_password(password: str, encoded_hash: str) -> bool:
     try:
         algorithm, iterations, salt_b64, digest_b64 = encoded_hash.split("$", 3)
