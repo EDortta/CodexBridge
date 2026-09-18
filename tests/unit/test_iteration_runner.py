@@ -4,11 +4,13 @@ import datetime as dt
 import importlib.util
 import json
 from pathlib import Path
+import sys
 
 MODULE_PATH = Path(__file__).resolve().parents[2] / "tools" / "iteration_runner.py"
 SPEC = importlib.util.spec_from_file_location("iteration_runner", MODULE_PATH)
 assert SPEC and SPEC.loader
 runner = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = runner
 SPEC.loader.exec_module(runner)
 
 
