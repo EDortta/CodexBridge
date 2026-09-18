@@ -540,6 +540,7 @@ async def oauth_authorize(
     dependencies=[Depends(RateLimitDependency(rate_limiter))],
 )
 async def oauth_authorize_submit(
+    request: Request,
     response_type: str = Form(...),
     client_id: str = Form(...),
     redirect_uri: str = Form(...),
@@ -567,8 +568,34 @@ async def oauth_authorize_submit(
     # `_async` because that derivation has no `await` in it: called directly it
     # would hold the event loop for its whole duration, and ten concurrent
     # attempts here took `GET /health` from 0.8 ms to 3.3 s.
+    login_fingerprint = hash_token(username.strip().lower())[:16]
+    auth_logger = logging.getLogger("codexbridge.oauth")
+    registry_problem = unusable_registry_reason(settings.user_registry_file)
+    auth_logger.info(
+        "oauth_authorize_attempt client=%s client_id=%s login_fp=%s registry=%s registry_ok=%s scope_count=%s pkce_method=%s",
+        client_key(request),
+        client_id,
+        login_fingerprint,
+        settings.user_registry_file,
+        registry_problem is None,
+        len([item for item in scope.split() if item]),
+        code_challenge_method,
+        extra={"correlation_id": None, "task_id": None, "executor_id": None},
+    )
+
     outcome = await authenticate_async(settings.user_registry_file, username, password)
     user = outcome.user
+    auth_logger.info(
+        "oauth_authorize_result client=%s client_id=%s login_fp=%s outcome=%s resolved_user_id=%s enabled=%s registry=%s",
+        client_key(request),
+        client_id,
+        login_fingerprint,
+        "accepted" if outcome.ok else outcome.reason,
+        user.user_id if user is not None else None,
+        user.enabled if user is not None else None,
+        settings.user_registry_file,
+        extra={"correlation_id": None, "task_id": None, "executor_id": None},
+    )
     if not outcome.ok:
         return render_authorize_form(
             client_id=client_id,
@@ -594,6 +621,16 @@ async def oauth_authorize_submit(
             error="Requested scopes are not allowed for this user.",
         )
     code = generate_authorization_code()
+    auth_logger.info(
+        "oauth_authorize_grant client=%s client_id=%s login_fp=%s user_id=%s scope_count=%s redirect_host=%s",
+        client_key(request),
+        client_id,
+        login_fingerprint,
+        user.user_id,
+        len(requested_scopes),
+        redirect_uri.split("/", 3)[2] if "://" in redirect_uri else "invalid",
+        extra={"correlation_id": None, "task_id": None, "executor_id": None},
+    )
     await store.create_oauth_authorization_code(
         session,
         code=code,
