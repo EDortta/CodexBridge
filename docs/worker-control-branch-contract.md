@@ -2,6 +2,7 @@
 
 - Data: 2026-10-16
 - Work ID: WK-20261016-worker-control-branch-contract
+- Roteiro de implementação: [worker-implementation-plan.md](./worker-implementation-plan.md)
 - Estado: **proposta aprovada conceitualmente; não implementada nem implantada**
 - Escopo desta alteração: documentação **somente** no repositório CodexBridge.
 - Classificação: desenho **aditivo**, com implicações **security-sensitive** e possível **contract-change** na implementação futura. Nenhum contrato MCP/REST/WebSocket em produção é alterado por este documento.
