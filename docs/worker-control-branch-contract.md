@@ -84,10 +84,10 @@ Project↔repositório; os comandos não aceitam um path de workspace.
 
 ## Branch e esquema de arquivos
 
-Nome recomendado, igual em todos os repositórios: \`codexbridge-control\`
+Nome recomendado, igual em todos os repositórios: `codexbridge-control`
 (nome configurável, decidido na adoção). Ela é persistente, **não é branch de
 implementação e não deve ser mesclada em development**. As branches de código
-continuam seguindo o fluxo \`development → feature → testes → merge\`.
+continuam seguindo o fluxo `development → feature → testes → merge`.
 
 ~~~text
 # Dentro da branch codexbridge-control de CADA repositório GitHub
@@ -103,9 +103,9 @@ continuam seguindo o fluxo \`development → feature → testes → merge\`.
           tests.txt
 ~~~
 
-- Request é imutável após aceitação. Cada \`request-id\` é único e idempotente
+- Request é imutável após aceitação. Cada `request-id` é único e idempotente
   por projeto. Não se sobrescrevem resultados de tentativas antigas.
-- \`node-id\` é a identidade estável autenticada pelo Gateway; \`hostname\` é
+- `node-id` é a identidade estável autenticada pelo Gateway; `hostname` é
   metadado legível, pode mudar ou repetir entre máquinas; o diretório combina
   os dois de modo sanitizado e sem depender apenas do hostname.
 - O **Worker é o único componente CodexBridge que escreve resultados** na
@@ -135,8 +135,8 @@ local arbitrário; compilar Android é apenas **um exemplo**, não o caso centra
 }
 ~~~
 
-- \`targets.mode = selected\`: um ou mais IDs de Node explicitamente indicados.
-  \`targets.mode = all\`: conjunto de todos os Nodes registrados **e elegíveis**
+- `targets.mode = selected`: um ou mais IDs de Node explicitamente indicados.
+  `targets.mode = all`: conjunto de todos os Nodes registrados **e elegíveis**
   para o Project/operação, resolvido e congelado no Gateway ao admitir o
   pedido. "Todos" nunca significa todos os hosts da rede ou todos os Nodes
   sem autorização. Não selecionar destino diferente como fallback silencioso.
@@ -154,9 +154,9 @@ local arbitrário; compilar Android é apenas **um exemplo**, não o caso centra
   failed ou expired), incluindo indicação de conclusão da fila.
 - Uma solicitação só fica concluída quando todos os destinos chegarem a um
   estado terminal; expiração da ativação não mascara trabalho já iniciado.
-- Resultado mínimo por tentativa: \`requestId\`, \`project\`, \`nodeId\`,
-  \`hostname\`, \`attemptId\`, \`operation\`, \`commit\`, início/fim,
-  \`status\`, código de saída (quando aplicável), resumo e evidências textuais
+- Resultado mínimo por tentativa: `requestId`, `project`, `nodeId`,
+  `hostname`, `attemptId`, `operation`, `commit`, início/fim,
+  `status`, código de saída (quando aplicável), resumo e evidências textuais
   **limitadas e redigidas**.
 
 ## Segurança, limite de confiança e extensibilidade
