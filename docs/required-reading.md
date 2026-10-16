@@ -47,6 +47,7 @@ a toca. Use `- (none)` se genuinamente não houver nenhum.
   por que `forge`, `agent`/`executor` e `mission`/`task`/`session`/`decision`
   não são intercambiáveis.
 - `docs/napkin-lessons.md` — lições curtas; leia ao retomar trabalho relacionado
+- `docs/worker-control-branch-contract.md` — **obrigatório** antes de implementar Worker, ativações temporárias, seleção multi-Node, branch de controle ou publicação de resultados; proposta ainda não implementada.
 
 ## Fontes locais — fora do checkout
 
