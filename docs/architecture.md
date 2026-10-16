@@ -11,7 +11,7 @@ O sistema tem dois componentes independentes:
 1. `gateway` no `frida`
 2. `codex-bridge-agent` no executor com os repositórios locais, preferencialmente `devel3`
 
-O ChatGPT conversa apenas com o `gateway`, através de um servidor MCP remoto exposto em `HTTPS /mcp` no `frida`. O `gateway` não acessa o executor por SSH. O executor abre uma conexão reversa `wss://codexbridge.inovacaosistemas.com.br:8443/agent/ws` e fica escutando tarefas.
+O ChatGPT acessa o Gateway via MCP remoto em `HTTPS /mcp`. Há também uma **via complementar proposta** para clientes com acesso MCP limitado: ordens declarativas via branch de controle **do repositório de cada Project** no GitHub, observadas por um Worker que as encaminha ao **Gateway**. Essa via não desvia o Gateway nem é um shell remoto. O Gateway não acessa o Executor por SSH; o Executor abre a conexão reversa `wss` com o Gateway e aguarda o despacho autorizado. O contrato proposto, não implementado, está em [Worker de controle por branch](./worker-control-branch-contract.md).
 
 ## Decisões arquiteturais
 
