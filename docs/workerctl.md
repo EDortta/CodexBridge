@@ -5,10 +5,11 @@ GitHub polling, Gateway integration or deployment.
 
 This is **local configuration only**, not authority to execute anything.
 The Bridge Gateway remains the authority for Project/Node permissions.
-The conceptual contract and later Worker service stages are tracked in
-`docs/worker-control-branch-contract.md` and
-`docs/worker-implementation-plan.md` (initially drafted on the separate
-feature branch `feature/worker-control-branch-contract-20261016`).
+The conceptual contract and later Worker service stages are recorded in
+[the design contract](https://github.com/EDortta/CodexBridge/blob/feature/worker-control-branch-contract-20261016/docs/worker-control-branch-contract.md)
+and [implementation plan](https://github.com/EDortta/CodexBridge/blob/feature/worker-control-branch-contract-20261016/docs/worker-implementation-plan.md)
+on the separate documentation branch. These files have not yet been merged
+into `development`.
 
 Requires Python 3.10 or newer; no additional Python packages.
 
