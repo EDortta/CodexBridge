@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.20.0
+  version: 1.20.1
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -4070,6 +4070,27 @@ x-contract-excluded-paths:
       contract is RFC 6749 as profiled by OAuth 2.1, not this document.
       docs/chatgpt-oauth-rollout.md is a rollout plan and does NOT specify these
       request/response shapes — do not follow it expecting one.
+
+  - path: /.well-known/oauth-protected-resource/mcp
+    methods: [GET]
+    reason: >-
+      MCP-specific OAuth Protected Resource Metadata (RFC 9728). This
+      discovery endpoint is part of OAuth/MCP interoperability rather than
+      the versioned CodexBridge application API.
+
+  - path: /oauth/password/forgot
+    methods: [GET, POST]
+    reason: >-
+      Browser-facing password recovery form and submission. Returns HTML
+      and follows the OAuth user interaction flow, not the versioned mobile
+      API. See gateway/app/api/routes/password_recovery.py.
+
+  - path: /oauth/password/reset
+    methods: [GET, POST]
+    reason: >-
+      Browser-facing password reset form and submission. Returns HTML
+      and is not a JSON application API. See
+      gateway/app/api/routes/password_recovery.py.
 
   - path: /oauth/token
     methods: [POST]
