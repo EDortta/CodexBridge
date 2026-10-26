@@ -145,6 +145,7 @@ scripts/
   enroll_node.py  — "Redeem a node-enrollment invite and save the machine token locally."
   install.sh
   publish_contract.py  — "Publish the OpenAPI contract as a pinned, checksummed artifact."
+  worker_request.py  — "Strict validation of untrusted control-branch envelopes."
   worker_watch.py  — "Read-only observer for activated GitHub control branches."
   workerctl.py  — "Local eight-hour project activation CLI."
   register_projects.py  — "Turn an operator-approved project list into a diff against the real"
@@ -267,6 +268,7 @@ tests/
     test_schema_guard.py  — "The guard that refuses to serve a database the code has outgrown."
     test_security.py
     test_users.py
+    test_worker_request.py  — "Worker envelope validation and rejection tests."
     test_worker_watch.py  — "Worker polling and activation allowlist tests."
     test_version_is_single_sourced.py  — "Every statement of the application version must be the same statement."
 ```
@@ -3400,3 +3402,11 @@ tests/
 ### `tools/iteration_runner.py`
 
 > Module indexed in the repository file tree; see source for runtime interfaces.
+
+### `scripts/worker_request.py`
+
+> Validates the strict worker transport contract without granting execution rights.
+
+### `tests/unit/test_worker_request.py`
+
+> Validates the strict worker transport contract without granting execution rights.
