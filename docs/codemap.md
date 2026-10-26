@@ -269,6 +269,7 @@ tests/
     test_security.py
     test_users.py
     test_worker_request.py  — "Worker envelope validation and rejection tests."
+    test_worker_validated_requests.py  — "Immutable Git blob validation tests."
     test_worker_watch.py  — "Worker polling and activation allowlist tests."
     test_version_is_single_sourced.py  — "Every statement of the application version must be the same statement."
 ```
@@ -3410,3 +3411,7 @@ tests/
 ### `tests/unit/test_worker_request.py`
 
 > Validates the strict worker transport contract without granting execution rights.
+
+### `tests/unit/test_worker_validated_requests.py`
+
+> Tests immutable control-request reads and fail-closed validation.
