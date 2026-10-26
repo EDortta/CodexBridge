@@ -70,6 +70,7 @@ gateway/
       errors.py  — "The one error envelope every contract endpoint returns."
       idempotency.py  — "Replay-safe writes for a client that goes offline mid-request."
       pagination.py  — "Cursor pagination for collections, and the offset scheme logs keep."
+      password_recovery.py  — "Browser password recovery and reset endpoints."
       permissions.py  — "What an actor may do, in one table the API and the client both read."
       rate_limit.py  — "Rate limiting for the contract surface."
       request_context.py  — "Per-request identifier, carried from the middleware to the error envelope."
@@ -144,6 +145,8 @@ scripts/
   enroll_node.py  — "Redeem a node-enrollment invite and save the machine token locally."
   install.sh
   publish_contract.py  — "Publish the OpenAPI contract as a pinned, checksummed artifact."
+  worker_watch.py  — "Read-only observer for activated GitHub control branches."
+  workerctl.py  — "Local eight-hour project activation CLI."
   register_projects.py  — "Turn an operator-approved project list into a diff against the real"
 shared/
   __init__.py  — "Shared contracts for the gateway and the agent."
@@ -151,6 +154,9 @@ shared/
   project_discovery.py  — "Read-only filesystem discovery of real git repositories."
   protocol.py
   security.py
+tools/
+  codexbridge-user.py  — "CodexBridge operator command-line helper."
+  iteration_runner.py  — "Development iteration runner."
 temp-tools/
   01-devel3-refresh-codemap-and-test.sh
   02-devel3-implement-mission-aggregate.sh
@@ -245,6 +251,7 @@ tests/
     test_instructions.py  — "`resolve_issue_text` and `build_task_instruction`."
     test_issue_materialize.py  — "`materialize_epic` and the shared numbering scanner -- issue #78, Commit 2c."
     test_issue_render.py  — "`render_epic_markdown` -- issue #78, Commit 2a."
+    test_iteration_runner.py  — "Iteration runner unit tests."
     test_main_import.py
     test_mission_completion.py
     test_mission_types.py
@@ -260,6 +267,7 @@ tests/
     test_schema_guard.py  — "The guard that refuses to serve a database the code has outgrown."
     test_security.py
     test_users.py
+    test_worker_watch.py  — "Worker polling and activation allowlist tests."
     test_version_is_single_sourced.py  — "Every statement of the application version must be the same statement."
 ```
 
