@@ -5,7 +5,6 @@ validate activation, commit, Node, capabilities and catalog operation again.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import re
 
 PROJECT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}\Z")
@@ -33,7 +32,7 @@ def validate_envelope(value: object, *, activated_project: str) -> dict:
         raise InvalidControlRequest("project mismatch")
     if not isinstance(request_id, str) or not REQUEST_ID.fullmatch(request_id):
         raise InvalidControlRequest("invalid request id")
-    if value["operation"] not in OPERATIONS:
+    if not isinstance(value["operation"], str) or value["operation"] not in OPERATIONS:
         raise InvalidControlRequest("operation outside transport vocabulary")
     source = value["source"]
     if not isinstance(source, dict) or set(source) != {"branch", "commit"}:
@@ -50,7 +49,7 @@ def validate_envelope(value: object, *, activated_project: str) -> dict:
     if not isinstance(targets, dict) or set(targets) != {"mode", "nodes"}:
         raise InvalidControlRequest("invalid targets")
     mode, nodes = targets["mode"], targets["nodes"]
-    if mode not in {"all", "selected"} or not isinstance(nodes, list):
+    if not isinstance(mode, str) or mode not in {"all", "selected"} or not isinstance(nodes, list):
         raise InvalidControlRequest("invalid selection")
     if mode == "all" and nodes:
         raise InvalidControlRequest("all mode must not include explicit nodes")
