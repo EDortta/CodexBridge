@@ -70,7 +70,6 @@ gateway/
       errors.py  — "The one error envelope every contract endpoint returns."
       idempotency.py  — "Replay-safe writes for a client that goes offline mid-request."
       pagination.py  — "Cursor pagination for collections, and the offset scheme logs keep."
-      password_recovery.py  — "Browser password recovery and reset endpoints."
       permissions.py  — "What an actor may do, in one table the API and the client both read."
       rate_limit.py  — "Rate limiting for the contract surface."
       request_context.py  — "Per-request identifier, carried from the middleware to the error envelope."
@@ -80,6 +79,7 @@ gateway/
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
         authorizations.py  — "The explicit operator grant: `POST .../authorize` and `.../revoke`."
         control_ui.py  — "CodexBridge Control — the first server-rendered screens (issue #73 Stage 5)."
+        password_recovery.py  — "Browser password recovery and reset routes."
         conversations.py  — "Conversations and contextual messaging — issue #10."
         decisions.py  — "Operational decisions: sensitive tasks AND sensitive forge writes held for"
         discovery.py  — "Discovered resources: the panel's half of "the node proposes, the panel adopts"."
@@ -3376,3 +3376,27 @@ tests/
 - `test_new_state_is_not_implicitly_approved(tmp_path)`
 - `test_path_default_is_platform_appropriate(monkeypatch, tmp_path)`
 - `test_clock_rewind_in_another_project_blocks_new_activations()`
+
+### `gateway/app/api/routes/password_recovery.py`
+
+> Module indexed in the repository file tree; see source for runtime interfaces.
+
+### `scripts/worker_watch.py`
+
+> Module indexed in the repository file tree; see source for runtime interfaces.
+
+### `tests/unit/test_iteration_runner.py`
+
+> Module indexed in the repository file tree; see source for runtime interfaces.
+
+### `tests/unit/test_worker_watch.py`
+
+> Module indexed in the repository file tree; see source for runtime interfaces.
+
+### `tools/codexbridge-user.py`
+
+> Module indexed in the repository file tree; see source for runtime interfaces.
+
+### `tools/iteration_runner.py`
+
+> Module indexed in the repository file tree; see source for runtime interfaces.
