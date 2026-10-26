@@ -3333,3 +3333,38 @@ tests/
 - `test_mcp_server_info_reports_the_single_source()` — "The MCP client sees this one; it drifted independently of the HTTP API."
 - `test_no_stray_version_literals_in_the_gateway()` — "A new hardcoded copy is how the previous four accumulated."
 
+### `scripts/workerctl.py`
+
+> Stage 1: local registration and eight-hour, max-three-project Worker activations.
+> No polling, network dispatch or Executor permission is granted here.
+
+- `WorkerctlError`
+- `register(state, project, repository, branch, now)`
+- `enable(state, project, now)`
+- `disable(state, project, now)`
+- `list_projects(state, now)`
+- `default_state_file()`
+- `main(argv)`
+- Internals: `_locked_file`, `_read_state`, `_write_state`, `_validate_state`
+
+### `tests/unit/test_workerctl.py`
+
+> Stage-one validation of 8h TTL, cap of three, UTC, crash-safe file handling and competing CLI processes.
+
+- `test_three_projects_allowed_but_fourth_refused()`
+- `test_exact_eight_hours_with_utc_and_local_offset()`
+- `test_repeated_enable_does_not_renew_and_explicit_reactivation_does()`
+- `test_disable_frees_slot_without_removing_other_registration()`
+- `test_expired_slot_is_reusable()`
+- `test_registration_is_idempotent_and_cannot_be_retarged_while_active()`
+- `test_bad_identifiers_refused(project, repo, branch)`
+- `test_same_repo_cannot_consume_multiple_alias_slots()`
+- `test_naive_time_or_clock_rewind_is_not_active()`
+- `test_state_file_errors_fail_closed_without_reset(tmp_path)`
+- `test_invalid_window_duration_in_state_is_refused()`
+- `test_state_file_symlink_is_not_followed(tmp_path)`
+- `test_cli_register_enable_list_disable_and_persist(tmp_path, capsys)`
+- `test_two_competing_cli_processes_cannot_admit_four_projects(tmp_path)`
+- `test_new_state_is_not_implicitly_approved(tmp_path)`
+- `test_path_default_is_platform_appropriate(monkeypatch, tmp_path)`
+- `test_clock_rewind_in_another_project_blocks_new_activations()`
