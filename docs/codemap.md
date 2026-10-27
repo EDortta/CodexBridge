@@ -135,6 +135,7 @@ gateway/
       mission_types.py
       notify.py  — "Out-of-band completion notification by email."
       store.py
+      worker_admission.py  — "Gateway-owned credential checks and replay-safe request admission."
     version.py  — "The single statement of this application's version."
 pyproject.toml
 scripts/
@@ -270,6 +271,7 @@ tests/
     test_users.py
     test_worker_request.py  — "Worker envelope validation and rejection tests."
     test_worker_validated_requests.py  — "Immutable Git blob validation tests."
+    test_worker_admission.py  — "Gateway admission fail-closed invariants."
     test_worker_gateway_schema.py  — "Worker identity and replay ledger schema invariants."
     test_worker_watch.py  — "Worker polling and activation allowlist tests."
     test_version_is_single_sourced.py  — "Every statement of the application version must be the same statement."
@@ -3420,3 +3422,11 @@ tests/
 ### `tests/unit/test_worker_gateway_schema.py`
 
 > Verifies worker identity separation and per-project replay keys.
+
+### `gateway/app/services/worker_admission.py`
+
+> Worker identity and transport admission boundary; no task dispatch.
+
+### `tests/unit/test_worker_admission.py`
+
+> Worker identity and transport admission boundary; no task dispatch.
