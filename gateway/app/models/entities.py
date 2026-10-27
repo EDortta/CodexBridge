@@ -948,3 +948,19 @@ class WorkerRequestModel(Base):
     operation: Mapped[str] = mapped_column(String(32))
     state: Mapped[str] = mapped_column(String(32))
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WorkerProjectLeaseModel(Base):
+    """Gateway-authorized, time-bounded project activation; never self-issued."""
+
+    __tablename__ = "worker_project_leases"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    worker_id: Mapped[str] = mapped_column(String(128), ForeignKey("worker_identities.id"))
+    project_id: Mapped[str] = mapped_column(String(128))
+    repository: Mapped[str] = mapped_column(String(255))
+    control_branch: Mapped[str] = mapped_column(String(128))
+    authorized_by: Mapped[str] = mapped_column(String(255))
+    enabled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
