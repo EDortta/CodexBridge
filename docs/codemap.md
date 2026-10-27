@@ -135,6 +135,7 @@ gateway/
       mission_types.py
       notify.py  — "Out-of-band completion notification by email."
       store.py
+      worker_lease_grants.py  — "Serialized Gateway activation grant with a global three-project cap."
       worker_leases.py  — "Validation of Gateway-authorized eight-hour Worker leases."
       worker_admission.py  — "Gateway-owned credential checks and replay-safe request admission."
     version.py  — "The single statement of this application's version."
@@ -273,6 +274,7 @@ tests/
     test_worker_request.py  — "Worker envelope validation and rejection tests."
     test_worker_validated_requests.py  — "Immutable Git blob validation tests."
     test_worker_admission.py  — "Gateway admission fail-closed invariants."
+    test_worker_lease_grants.py  — "Database-backed activation capacity tests."
     test_worker_leases.py  — "Activation lease security boundary tests."
     test_worker_gateway_schema.py  — "Worker identity and replay ledger schema invariants."
     test_worker_watch.py  — "Worker polling and activation allowlist tests."
@@ -3440,3 +3442,11 @@ tests/
 ### `tests/unit/test_worker_leases.py`
 
 > Checks the bounded Gateway activation window without granting access.
+
+### `gateway/app/services/worker_lease_grants.py`
+
+> Gateway-side lease-grant transaction and tests.
+
+### `tests/unit/test_worker_lease_grants.py`
+
+> Gateway-side lease-grant transaction and tests.
