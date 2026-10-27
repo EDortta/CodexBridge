@@ -921,3 +921,30 @@ class NodeInviteModel(Base):
         String(128), ForeignKey("nodes.id"), nullable=True
     )
     display_name_hint: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class WorkerIdentityModel(Base):
+    """Transport credential only, never an Executor or implicit execution grant."""
+
+    __tablename__ = "worker_identities"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WorkerRequestModel(Base):
+    """Immutable project-scoped admission key; no execution until Gateway approval."""
+
+    __tablename__ = "worker_requests"
+
+    project_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    worker_id: Mapped[str] = mapped_column(String(128), ForeignKey("worker_identities.id"))
+    payload_sha256: Mapped[str] = mapped_column(String(64))
+    source_commit: Mapped[str] = mapped_column(String(40))
+    operation: Mapped[str] = mapped_column(String(32))
+    state: Mapped[str] = mapped_column(String(32))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
