@@ -964,3 +964,12 @@ class WorkerProjectLeaseModel(Base):
     enabled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WorkerLeaseSerializationModel(Base):
+    """Single DB row whose UPDATE serializes fleet-wide lease decisions."""
+
+    __tablename__ = "worker_lease_serialization"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

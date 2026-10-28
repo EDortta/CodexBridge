@@ -1,0 +1,5 @@
+# Worker lease issuance — transactional foundation
+
+A Gateway-side service acquires a database write lock on the singleton row in migration `0022` before inspecting active Worker leases. Its issuance limit is **three distinct active projects across the Gateway**, not three per local Worker. Each new lease expires exactly eight hours after issuance. An existing matching activation is returned without extending it; a project with a different active binding is denied. It checks that the Worker identity is enabled and not revoked.
+
+This increment does **not** expose the service as an HTTP route. `binding_verified=True` must only be passed after a separately authenticated operator approval and server-side verification of project/repository identity. Local `workerctl enable` is not a grant. An HTTP endpoint, credential provisioning, complete concurrency tests on production DBs, lease revocation, Worker transport and dispatch remain separate gates. The migration must be applied in an approved deployment, not as a side effect of a PR merge.
