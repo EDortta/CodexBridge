@@ -59,6 +59,9 @@ async def activate(
     if not isinstance(bound_repository, str) or bound_repository.lower() != payload.repository.lower():
         raise ApiError(status_code=403, code=PERMISSION_DENIED,
                        message="Project has no matching Gateway-side worker repository binding.")
+    # session.get opened an implicit read transaction. The grant service owns
+    # its write transaction and serialization lock; close the read first.
+    await session.rollback()
     try:
         lease, created = await grant_worker_lease(
             session, worker_id=worker_id, project_id=project.id,
