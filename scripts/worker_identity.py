@@ -16,6 +16,9 @@ import re
 import secrets
 import sys
 
+# Allow direct execution from scripts/ without pip-installing the checkout.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
