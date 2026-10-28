@@ -79,6 +79,7 @@ gateway/
         auth.py  — "Sign-in, renewal, revocation, and what the actor may actually do."
         authorizations.py  — "The explicit operator grant: `POST .../authorize` and `.../revoke`."
         control_ui.py  — "CodexBridge Control — the first server-rendered screens (issue #73 Stage 5)."
+        worker_intake.py  — "Authenticated Worker intake route; never dispatches."
         worker_activations.py  — "Operator-only Worker activation API."
         password_recovery.py  — "Browser password recovery and reset routes."
         conversations.py  — "Conversations and contextual messaging — issue #10."
@@ -3460,3 +3461,7 @@ tests/
 ### `tests/unit/test_worker_activation_api.py`
 
 > Checks that activation requires a human administrative principal.
+
+### `gateway/app/api/routes/worker_intake.py`
+
+> Validates worker identity, live Gateway lease, and persistently records control requests without dispatch.
