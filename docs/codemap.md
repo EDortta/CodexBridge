@@ -276,6 +276,7 @@ tests/
     test_worker_validated_requests.py  — "Immutable Git blob validation tests."
     test_worker_admission.py  — "Gateway admission fail-closed invariants."
     test_worker_lease_grants.py  — "Database-backed activation capacity tests."
+    test_worker_activation_api.py  — "Operator endpoint authorization tests."
     test_worker_leases.py  — "Activation lease security boundary tests."
     test_worker_gateway_schema.py  — "Worker identity and replay ledger schema invariants."
     test_worker_watch.py  — "Worker polling and activation allowlist tests."
@@ -3455,3 +3456,7 @@ tests/
 ### `gateway/app/api/routes/worker_activations.py`
 
 > Operator-authenticated, Gateway-bounded Worker activation endpoint.
+
+### `tests/unit/test_worker_activation_api.py`
+
+> Checks that activation requires a human administrative principal.
