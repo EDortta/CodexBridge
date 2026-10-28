@@ -25,6 +25,7 @@ from gateway.app.api.routes import events as events_routes
 from gateway.app.api.routes import issues as issues_routes
 from gateway.app.api.routes import notifications as notifications_routes
 from gateway.app.api.routes import reminders as reminders_routes
+from gateway.app.api.routes import worker_intake as worker_intake_routes
 from gateway.app.api.routes import worker_activations as worker_activations_routes
 from gateway.app.api.routes import password_recovery as password_recovery_routes
 from gateway.app.api.setup import install_api_conventions
@@ -217,6 +218,7 @@ app.include_router(reminders_routes.router, dependencies=[Depends(RateLimitDepen
 # Password recovery uses the same per-client limiter as the other credential surfaces.
 app.include_router(password_recovery_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 app.include_router(worker_activations_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
+app.include_router(worker_intake_routes.router, dependencies=[Depends(RateLimitDependency(rate_limiter))])
 
 
 def oauth_www_authenticate_header() -> str:
