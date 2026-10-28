@@ -17,7 +17,7 @@ import signal
 import sys
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 from worker_request import InvalidControlRequest, validate_envelope
@@ -81,7 +81,7 @@ def observe(project: str, repository: str, branch: str, token: str | None) -> di
             "request_count": len(requests), "requests": sorted(requests, key=lambda r: r["name"])}
 
 
-def read_validated_requests(observation: dict, token: str | None) -> list[dict]:
+def read_validated_requests(observation: dict, token: str | None, *, include_envelope: bool = False) -> list[dict]:
     """Read blobs by immutable Git SHA, never by a moving branch reference.
 
     Returns only safe IDs and hashes for diagnostic output, not request bodies.
@@ -115,8 +115,51 @@ def read_validated_requests(observation: dict, token: str | None) -> list[dict]:
             raise ValueError("invalid control request") from exc
         if name != envelope["requestId"] + ".json":
             raise ValueError("request filename does not match immutable ID")
-        accepted.append({"requestId": envelope["requestId"], "blobSha": sha})
+        entry = {"requestId": envelope["requestId"], "blobSha": sha}
+        if include_envelope:
+            entry["envelope"] = envelope
+        accepted.append(entry)
     return accepted
+
+
+def gateway_intake(gateway_url: str, worker_token: str, observation: dict,
+                   envelope: dict) -> dict:
+    """Forward data to Gateway for admission, never execute a local command."""
+    parts = urlsplit(gateway_url)
+    if (parts.scheme != "https" or not parts.hostname or parts.username
+            or parts.password or parts.query or parts.fragment
+            or parts.path not in {"", "/"}):
+        raise ValueError("Gateway must be a bare HTTPS origin without userinfo")
+    if not worker_token or len(worker_token) < 32:
+        raise ValueError("missing Worker credential")
+    payload = json.dumps({
+        "repository": observation["repository"],
+        "controlBranch": observation["branch"], "envelope": envelope,
+    }, separators=(",", ":")).encode("utf-8")
+    if len(payload) > MAX_BODY:
+        raise ValueError("intake payload exceeds limit")
+    url = gateway_url.rstrip("/") + "/control/worker-intake/requests"
+    request = Request(url, data=payload, method="POST", headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-Worker-Token": worker_token,
+        "User-Agent": "codexbridge-worker/0",
+    })
+    with urlopen(request, timeout=15) as response:
+        if response.status != 202:
+            raise ValueError("unexpected Gateway intake status")
+        result = response.read(MAX_BODY + 1)
+    if len(result) > MAX_BODY:
+        raise ValueError("Gateway response too large")
+    value = json.loads(result)
+    if (not isinstance(value, dict)
+            or value.get("requestId") != envelope["requestId"]
+            or value.get("projectId") != envelope["project"]
+            or value.get("state") != "admitted"
+            or type(value.get("created")) is not bool):
+        raise ValueError("unexpected Gateway intake acknowledgement")
+    return {"requestId": value["requestId"], "state": value["state"],
+            "created": value["created"]}
 
 
 def poll_once(state_file: Path, token: str | None) -> list[dict]:
@@ -129,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-file", type=Path, default=default_state_file())
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--forward-gateway", action="store_true", help="Submit validated requests to Gateway for admission only")
     parser.add_argument("--validate-requests", action="store_true", help="Read and validate blob content; never dispatch")
     args = parser.parse_args(argv)
     if not 15 <= args.interval <= 3600:
@@ -136,12 +180,22 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
     token = os.environ.get("CODEXBRIDGE_GITHUB_TOKEN")
+    gateway_url = os.environ.get("CODEXBRIDGE_GATEWAY_URL", "")
+    worker_token = os.environ.get("CODEXBRIDGE_WORKER_TOKEN", "")
+    if args.forward_gateway and (not gateway_url or len(worker_token) < 32):
+        parser.error("Gateway HTTPS URL and Worker token must be configured in environment")
     try:
         while not STOP:
             try:
                 for item in poll_once(args.state_file, token):
                     # Only count/commit metadata. Never print request content or credentials.
-                    if args.validate_requests:
+                    if args.forward_gateway:
+                        envelopes = read_validated_requests(item, token, include_envelope=True)
+                        item["gateway_admissions"] = [
+                            gateway_intake(gateway_url, worker_token, item, request["envelope"])
+                            for request in envelopes
+                        ]
+                    elif args.validate_requests:
                         item["validated_requests"] = read_validated_requests(item, token)
                     print(json.dumps(item, sort_keys=True), flush=True)
             except (WorkerctlError, HTTPError, URLError, ValueError, OSError) as exc:
