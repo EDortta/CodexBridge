@@ -281,6 +281,7 @@ tests/
     test_worker_activation_api.py  — "Operator endpoint authorization tests."
     test_worker_leases.py  — "Activation lease security boundary tests."
     test_worker_gateway_schema.py  — "Worker identity and replay ledger schema invariants."
+    test_worker_gateway_forward.py  — "Worker HTTPS Gateway forwarding tests."
     test_worker_watch.py  — "Worker polling and activation allowlist tests."
     test_version_is_single_sourced.py  — "Every statement of the application version must be the same statement."
 ```
@@ -3470,3 +3471,7 @@ tests/
 ### `tests/unit/test_worker_intake.py`
 
 > Ensures Worker intake rejects missing credentials and invalid envelopes.
+
+### `tests/unit/test_worker_gateway_forward.py`
+
+> Verifies opt-in transport forwarding and strict Gateway acknowledgement.
