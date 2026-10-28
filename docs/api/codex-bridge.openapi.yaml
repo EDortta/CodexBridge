@@ -3,7 +3,7 @@ openapi: 3.1.0
 info:
   title: CodexBridge Mobile API
   summary: Contract-first HTTP API consumed by CodexBridgeMobile.
-  version: 1.20.1
+  version: 1.20.2
   description: |
     Canonical contract for the public HTTP API that `EDortta/CodexBridgeMobile`
     consumes. For that API this document is the **source of truth**: an
@@ -4036,6 +4036,14 @@ x-minimum-supported-version: '1.6.0'
 # that test, so an endpoint can never be omitted by accident — only on purpose,
 # in writing. The human-readable version of this table is `docs/api/README.md`.
 x-contract-excluded-paths:
+  - path: /control/workers/{worker_id}/activate
+    methods: [POST]
+    reason: >-
+      Administrative Worker activation control plane; requires a
+      human administrator's authenticated OAuth bearer token and checks a
+      Gateway-side repository binding. Not part of the mobile API.
+      See gateway/app/api/routes/worker_activations.py.
+
 
   - path: /healthz
     methods: [GET]
