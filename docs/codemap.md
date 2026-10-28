@@ -151,6 +151,7 @@ scripts/
   install.sh
   publish_contract.py  — "Publish the OpenAPI contract as a pinned, checksummed artifact."
   worker_request.py  — "Strict validation of untrusted control-branch envelopes."
+  worker_identity.py  — "Gateway-local Worker identity provision/revoke CLI."
   worker_watch.py  — "Read-only observer for activated GitHub control branches."
   workerctl.py  — "Local eight-hour project activation CLI."
   register_projects.py  — "Turn an operator-approved project list into a diff against the real"
@@ -281,6 +282,7 @@ tests/
     test_worker_activation_api.py  — "Operator endpoint authorization tests."
     test_worker_leases.py  — "Activation lease security boundary tests."
     test_worker_gateway_schema.py  — "Worker identity and replay ledger schema invariants."
+    test_worker_bootstrap.py  — "Worker bootstrap credential security tests."
     test_worker_gateway_forward.py  — "Worker HTTPS Gateway forwarding tests."
     test_worker_watch.py  — "Worker polling and activation allowlist tests."
     test_version_is_single_sourced.py  — "Every statement of the application version must be the same statement."
@@ -3475,3 +3477,15 @@ tests/
 ### `tests/unit/test_worker_gateway_forward.py`
 
 > Verifies opt-in transport forwarding and strict Gateway acknowledgement.
+
+### `scripts/worker_identity.py`
+
+> Worker deployment bootstrap and security checks.
+
+### `scripts/install-worker-systemd.sh`
+
+> Worker deployment bootstrap and security checks.
+
+### `tests/unit/test_worker_bootstrap.py`
+
+> Worker deployment bootstrap and security checks.
