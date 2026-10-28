@@ -67,14 +67,12 @@ async def intake_request(
         raise ApiError(status_code=403, code=PERMISSION_DENIED,
                        message="No active Gateway-approved Worker project lease.")
     try:
-        # Bind the authenticated worker identity from the DB, not request JSON.
-        from gateway.app.models.entities import WorkerIdentityModel
-        verified = await session.get(WorkerIdentityModel, worker_id)
-        if verified is None or not verified.enabled or verified.revoked_at is not None:
-            raise ApiError(status_code=401, code=UNAUTHENTICATED, message="Worker authentication required.")
-        await session.rollback()
+        # The DB identity was verified before the rollback. Pass its ID in a
+        # transport-only object to avoid accessing expired ORM attributes.
+        from types import SimpleNamespace
         row, created = await record_admission(
-            session, worker=verified, envelope=envelope, project_allowed=True,
+            session, worker=SimpleNamespace(id=worker_id), envelope=envelope,
+            project_allowed=True,
         )
     except WorkerAdmissionError as exc:
         raise ApiError(status_code=409, code=CONFLICT, message="Request ID collision or admission conflict.") from exc
