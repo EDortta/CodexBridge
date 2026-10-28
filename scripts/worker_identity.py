@@ -8,6 +8,7 @@ credential channel. Worker enrollment is a Gateway-local administrative step.
 from __future__ import annotations
 
 import argparse
+import json
 import asyncio
 from datetime import datetime, timezone
 import os
@@ -22,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
-from gateway.app.models.entities import WorkerIdentityModel
+from gateway.app.models.entities import WorkerIdentityModel, ProjectModel
 from shared.security import hash_token
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -85,6 +86,31 @@ async def revoke(database_url: str, worker_id: str) -> bool:
         await engine.dispose()
 
 
+async def bind_project(database_url: str, project_id: str, repository: str) -> None:
+    if not ID.fullmatch(project_id) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}", repository
+    ):
+        raise ValueError("invalid project or repository identifier")
+    engine = create_async_engine(database_url)
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            project = await session.get(ProjectModel, project_id)
+            if project is None or not project.enabled:
+                raise ValueError("project is not registered/enabled in Gateway")
+            config = json.loads(project.config_json or "{}")
+            if not isinstance(config, dict):
+                raise ValueError("invalid project configuration")
+            old = config.get("worker_repository")
+            if old and old.lower() != repository.lower():
+                raise ValueError("repository binding exists; manual review required for changing it")
+            config["worker_repository"] = repository
+            project.config_json = json.dumps(config, sort_keys=True)
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database-url", required=True)
@@ -92,6 +118,9 @@ def main() -> int:
     create = sub.add_parser("create")
     create.add_argument("worker_id")
     create.add_argument("--secret-file", required=True, type=Path)
+    bind = sub.add_parser("bind-project")
+    bind.add_argument("project_id")
+    bind.add_argument("repository", help="GitHub owner/repository")
     rev = sub.add_parser("revoke")
     rev.add_argument("worker_id")
     args = parser.parse_args()
@@ -99,6 +128,9 @@ def main() -> int:
         if args.command == "create":
             asyncio.run(provision(args.database_url, args.worker_id, args.secret_file))
             print(f"Worker {args.worker_id} registered; credential saved to {args.secret_file}")
+        elif args.command == "bind-project":
+            asyncio.run(bind_project(args.database_url, args.project_id, args.repository))
+            print(f"Project {args.project_id} bound to {args.repository}")
         elif args.command == "revoke":
             found = asyncio.run(revoke(args.database_url, args.worker_id))
             print("Worker revoked" if found else "Worker not found")
