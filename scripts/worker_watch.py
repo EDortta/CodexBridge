@@ -167,6 +167,17 @@ def poll_once(state_file: Path, token: str | None) -> list[dict]:
             for project, repo, branch in active_projects(state_file)]
 
 
+def credential_env(name: str) -> str | None:
+    """Prefer a root-provisioned credential file, never print its contents."""
+    path = os.environ.get(name + "_FILE")
+    if path:
+        credential = Path(path)
+        if not credential.is_file() or credential.stat().st_mode & 0o077:
+            raise ValueError("credential file must exist and be owner-only")
+        return credential.read_text(encoding="utf-8").strip()
+    return os.environ.get(name)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-file", type=Path, default=default_state_file())
@@ -179,9 +190,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--interval must be between 15 and 3600 seconds")
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
-    token = os.environ.get("CODEXBRIDGE_GITHUB_TOKEN")
+    try:
+        token = credential_env("CODEXBRIDGE_GITHUB_TOKEN")
+        worker_token = credential_env("CODEXBRIDGE_WORKER_TOKEN") or ""
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"status": "configuration_error", "error_type": type(exc).__name__}), file=sys.stderr)
+        return 1
     gateway_url = os.environ.get("CODEXBRIDGE_GATEWAY_URL", "")
-    worker_token = os.environ.get("CODEXBRIDGE_WORKER_TOKEN", "")
     if args.forward_gateway and (not gateway_url or len(worker_token) < 32):
         parser.error("Gateway HTTPS URL and Worker token must be configured in environment")
     try:
