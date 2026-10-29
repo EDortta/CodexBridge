@@ -53,25 +53,40 @@ print("CODEXBRIDGE_EVIDENCE_JSON=" + json.dumps(result, sort_keys=True))
 
 
 def run_check() -> dict:
-    command = [
-        "ssh", "-tt", "-o", "ConnectTimeout=12",
-        "-p", PORT, REMOTE, "sudo python3 -c " + __import__("shlex").quote(REMOTE_CHECK),
-    ]
+    # Interactive SSH/sudo owns the terminal. The remote test writes ONLY
+    # whitelisted booleans/counts to a temporary file readable by esteban.
+    # No sensitive stdout/stderr is ever copied into published evidence.
+    import shlex
+    marker = uuid.uuid4().hex
+    remote_path = f"/tmp/codexbridge-evidence-{marker}.json"
+    command = (
+        "sudo python3 -c " + shlex.quote(REMOTE_CHECK)
+        + " > " + shlex.quote(remote_path)
+        + " && chmod 600 " + shlex.quote(remote_path)
+    )
     try:
-        r = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=150)
-    except (OSError, subprocess.TimeoutExpired):
-        return {"remote_access": "unavailable"}
-    if r.returncode:
-        # Never publish remote stderr; it can contain sensitive diagnostics.
-        return {"remote_access": "ssh_or_sudo_failed"}
-    try:
-        lines = [line.strip().removeprefix("CODEXBRIDGE_EVIDENCE_JSON=")\n                 for line in r.stdout.splitlines()\n                 if line.strip().startswith("CODEXBRIDGE_EVIDENCE_JSON=")]\n        obj = json.loads(lines[-1])
+        # Do not capture the pseudo-terminal: sudo must be able to prompt.
+        completed = subprocess.run(
+            ["ssh", "-tt", "-o", "ConnectTimeout=12", "-p", PORT, REMOTE, command],
+            timeout=180,
+        )
+        if completed.returncode:
+            return {"remote_access": "ssh_or_sudo_failed"}
+        # The remote file contains only sanitized result JSON.
+        result = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-p", PORT, REMOTE,
+             "cat " + shlex.quote(remote_path) + " && rm -f " + shlex.quote(remote_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode:
+            return {"remote_access": "evidence_transfer_failed"}
+        obj = json.loads(result.stdout)
         if not isinstance(obj, dict):
             raise ValueError("not object")
         obj["remote_access"] = "ok"
         return obj
-    except (ValueError, TypeError):
-        return {"remote_access": "invalid_response"}
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
+        return {"remote_access": "unavailable"}
 
 
 def main() -> int:
