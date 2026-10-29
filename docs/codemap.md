@@ -3489,3 +3489,7 @@ tests/
 ### `tests/unit/test_worker_bootstrap.py`
 
 > Worker deployment bootstrap and security checks.
+
+### `scripts/diagnose_gateway_auth_evidence.py`
+
+> Runs sanitized remote Gateway authentication checks and publishes immutable evidence through the shared development-evidences publisher.
