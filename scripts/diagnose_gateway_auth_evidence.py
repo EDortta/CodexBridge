@@ -80,7 +80,10 @@ def run_check() -> dict:
         )
         if result.returncode:
             return {"remote_access": "evidence_transfer_failed"}
-        data = result.stdout.strip()\n        if not data.startswith("CODEXBRIDGE_EVIDENCE_JSON="):\n            raise ValueError("unexpected evidence response")\n        obj = json.loads(data.removeprefix("CODEXBRIDGE_EVIDENCE_JSON="))
+        data = result.stdout.strip()
+        if not data.startswith("CODEXBRIDGE_EVIDENCE_JSON="):
+            raise ValueError("unexpected evidence response")
+        obj = json.loads(data.removeprefix("CODEXBRIDGE_EVIDENCE_JSON="))
         if not isinstance(obj, dict):
             raise ValueError("not object")
         obj["remote_access"] = "ok"
