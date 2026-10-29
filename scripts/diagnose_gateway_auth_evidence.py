@@ -48,24 +48,24 @@ if env.exists():
         except (OSError, ValueError, TypeError):
             result['configured_registry_readable_json'] = False
 result['gateway_active'] = subprocess.run(['systemctl', 'is-active', '--quiet', 'codex-bridge-gateway']).returncode == 0
-print(json.dumps(result, sort_keys=True))
+print("CODEXBRIDGE_EVIDENCE_JSON=" + json.dumps(result, sort_keys=True))
 """
 
 
 def run_check() -> dict:
     command = [
-        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=12",
-        "-p", PORT, REMOTE, "sudo -n python3 -c " + __import__("shlex").quote(REMOTE_CHECK),
+        "ssh", "-tt", "-o", "ConnectTimeout=12",
+        "-p", PORT, REMOTE, "sudo python3 -c " + __import__("shlex").quote(REMOTE_CHECK),
     ]
     try:
-        r = subprocess.run(command, capture_output=True, text=True, timeout=40)
+        r = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=150)
     except (OSError, subprocess.TimeoutExpired):
         return {"remote_access": "unavailable"}
     if r.returncode:
         # Never publish remote stderr; it can contain sensitive diagnostics.
-        return {"remote_access": "needs_noninteractive_sudo_or_ssh"}
+        return {"remote_access": "ssh_or_sudo_failed"}
     try:
-        obj = json.loads(r.stdout)
+        lines = [line.strip().removeprefix("CODEXBRIDGE_EVIDENCE_JSON=")\n                 for line in r.stdout.splitlines()\n                 if line.strip().startswith("CODEXBRIDGE_EVIDENCE_JSON=")]\n        obj = json.loads(lines[-1])
         if not isinstance(obj, dict):
             raise ValueError("not object")
         obj["remote_access"] = "ok"
