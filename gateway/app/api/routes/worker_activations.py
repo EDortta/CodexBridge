@@ -61,10 +61,11 @@ async def activate(
                        message="Project has no matching Gateway-side worker repository binding.")
     # session.get opened an implicit read transaction. The grant service owns
     # its write transaction and serialization lock; close the read first.
+    stable_project_id = project.id
     await session.rollback()
     try:
         lease, created = await grant_worker_lease(
-            session, worker_id=worker_id, project_id=project.id,
+            session, worker_id=worker_id, project_id=stable_project_id,
             repository=bound_repository, control_branch=payload.control_branch,
             authorized_by="operator:" + principal.user_id, binding_verified=True,
         )
