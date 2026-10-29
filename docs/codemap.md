@@ -3493,3 +3493,7 @@ tests/
 ### `scripts/diagnose_gateway_auth_evidence.py`
 
 > Runs sanitized remote Gateway authentication checks and publishes immutable evidence through the shared development-evidences publisher.
+
+### `scripts/activate_worker_evidence.py`
+
+> Activates the devel3 Worker through a local SSH tunnel and publishes sanitized evidence using development-evidences/publisher.py; admin password remains local to devel3.
