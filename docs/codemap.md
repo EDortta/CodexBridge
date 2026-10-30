@@ -3505,3 +3505,7 @@ tests/
 ### `scripts/worker_transport_evidence.py`
 
 > Executes a one-shot SSH/git Worker observation preflight on devel3 and publishes sanitized results through the shared development-evidences publisher.
+
+### `scripts/install-worker-user-systemd.sh`
+
+> Installs the unprivileged CodexBridge Worker as a `systemctl --user` service, using the developer's SSH Git identity and XDG directories, without sudo.
