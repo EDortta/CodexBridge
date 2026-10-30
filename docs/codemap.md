@@ -3513,3 +3513,7 @@ tests/
 ### `scripts/migrate-worker-to-user.sh`
 
 > One-time migration of legacy system Worker state and machine credential to developer XDG directories; disables legacy unit without starting the new service.
+
+### `scripts/worker_user_preflight_evidence.py`
+
+> Checks the developer-owned systemd unit, migrated state and machine credential, legacy unit shutdown, and SSH Git access; publishes only sanitized booleans to development-evidences.
