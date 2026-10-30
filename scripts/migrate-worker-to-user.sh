@@ -19,6 +19,7 @@ fi
 if sudo test -f /etc/codexbridge-worker/worker-token; then
   sudo cat /etc/codexbridge-worker/worker-token > "$CONFIG/worker-token"
   chmod 600 "$CONFIG/worker-token"
+  touch "$CONFIG/worker.env"
   grep -v '^CODEXBRIDGE_WORKER_TOKEN_FILE=' "$CONFIG/worker.env" > "$CONFIG/.worker.env.tmp"
   mv "$CONFIG/.worker.env.tmp" "$CONFIG/worker.env"
   printf 'CODEXBRIDGE_WORKER_TOKEN_FILE=%s/worker-token\n' "$CONFIG" >> "$CONFIG/worker.env"
