@@ -3501,3 +3501,7 @@ tests/
 ### SSH Git control branch transport
 
 > `scripts/worker_watch.py` reads public and private control branches through SSH Git, with credentials from the Worker service account; no GitHub API token is used. The Gateway machine token remains required for admission.
+
+### `scripts/worker_transport_evidence.py`
+
+> Executes a one-shot SSH/git Worker observation preflight on devel3 and publishes sanitized results through the shared development-evidences publisher.
