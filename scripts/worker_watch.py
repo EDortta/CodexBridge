@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import stat
 import subprocess
 import re
 import sys
@@ -230,8 +231,12 @@ def credential_env(name: str) -> str | None:
     path = os.environ.get(name + "_FILE")
     if path:
         credential = Path(path)
-        if not credential.is_file() or credential.stat().st_mode & 0o077:
-            raise ValueError("credential file must exist and be owner-only")
+        if not credential.is_file():
+            raise ValueError("credential file missing")
+        info = credential.stat()
+        mode = stat.S_IMODE(info.st_mode)
+        if (mode & 0o007) or (mode & 0o020) or (mode & 0o040 and info.st_gid != os.getegid()):
+            raise ValueError("credential permissions must be owner-only or group-readable by worker")
         return credential.read_text(encoding="utf-8").strip()
     return os.environ.get(name)
 
