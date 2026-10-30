@@ -3497,3 +3497,7 @@ tests/
 ### `scripts/activate_worker_evidence.py`
 
 > Activates the devel3 Worker through a local SSH tunnel and publishes sanitized evidence using development-evidences/publisher.py; admin password remains local to devel3.
+
+### SSH Git control branch transport
+
+> `scripts/worker_watch.py` reads public and private control branches through SSH Git, with credentials from the Worker service account; no GitHub API token is used. The Gateway machine token remains required for admission.
