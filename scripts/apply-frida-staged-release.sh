@@ -65,10 +65,18 @@ if (( MIGRATE_STATUS != 0 )); then
   exit 1
 fi
 systemctl start codex-bridge-gateway
-sleep 3
-if ! systemctl is-active --quiet codex-bridge-gateway || \
-    ! curl --fail --silent --max-time 10 http://127.0.0.1:18080/health >/dev/null; then
-  echo "Health check failed; Gateway requires operator intervention. Backup: $BACKUP" >&2
+# Startup may take >20 seconds on ARM devices. Allow bounded readiness.
+READY=0
+for ATTEMPT in $(seq 1 30); do
+  if systemctl is-active --quiet codex-bridge-gateway && \
+     curl --fail --silent --max-time 3 http://127.0.0.1:18080/health >/dev/null; then
+    READY=1
+    break
+  fi
+  sleep 2
+done
+if (( READY != 1 )); then
+  echo "Health check failed after 60s; inspect service and preserve backup: $BACKUP" >&2
   exit 1
 fi
 echo "Release $ID deployed; Gateway active and local /health succeeded."
