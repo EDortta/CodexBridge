@@ -14,6 +14,9 @@ import json
 import os
 from pathlib import Path
 import signal
+import stat
+import subprocess
+import re
 import sys
 import time
 from urllib.error import HTTPError, URLError
@@ -44,6 +47,62 @@ def github_json(path: str, token: str | None) -> object:
     if len(data) > MAX_BODY:
         raise ValueError("GitHub response too large")
     return json.loads(data)
+
+
+def git_ssh_control(repository: str, branch: str, project: str) -> tuple[dict, dict]:
+    """Read private or public control branch with SSH Git (no GitHub API token).
+
+    Fetch a single control ref into a bare, worker-owned repository; never
+    check out request content or execute any repository-supplied commands.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repository):
+        raise ValueError("invalid GitHub repository")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", branch):
+        raise ValueError("invalid control branch")
+    if branch in {"main", "master", "development"}:
+        raise ValueError("code branch is not a control branch")
+    store = Path(os.environ.get("CODEXBRIDGE_GIT_CACHE", "/var/lib/codexbridge-worker/git-cache"))
+    store.mkdir(mode=0o700, parents=True, exist_ok=True)
+    cache = store / (repository.replace("/", "--") + ".git")
+    if not cache.exists():
+        subprocess.run(["git", "init", "--bare", "--quiet", str(cache)], check=True, timeout=20,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    def git(*args):
+        result = subprocess.run(["git", "--git-dir", str(cache), *args], check=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        return result.stdout
+    remote = "git@github.com:" + repository + ".git"
+    git("-c", "core.sshCommand=ssh -o BatchMode=yes", "fetch", "--no-tags",
+        "--depth=1", remote, "+refs/heads/" + branch + ":refs/codexbridge/control")
+    requests = []
+    envelopes = {}
+    tree = git("ls-tree", "-r", "-z", "refs/codexbridge/control", "--", ".codexbridge/requests/")
+    for item in tree.split(b"\\0"):
+        if not item:
+            continue
+        meta, filename = item.split(b"\\t", 1)
+        mode, kind, sha = meta.split(b" ")
+        if kind != b"blob":
+            continue
+        name = filename.decode("utf-8").split("/")[-1]
+        if not name.endswith(".json"):
+            continue
+        if "/" in filename.decode("utf-8")[len(".codexbridge/requests/"):]:
+            raise ValueError("nested control request")
+        body = git("cat-file", "blob", sha.decode())
+        if len(body) > MAX_BODY:
+            raise ValueError("request exceeds size limit")
+        try:
+            envelope = validate_envelope(json.loads(body), activated_project=project)
+        except (ValueError, UnicodeDecodeError, InvalidControlRequest) as exc:
+            raise ValueError("invalid control request") from exc
+        if name != envelope["requestId"] + ".json":
+            raise ValueError("request filename mismatch")
+        requests.append({"name": name, "sha": sha.decode()})
+        envelopes[sha.decode()] = envelope
+    observation = {"project": project, "repository": repository, "branch": branch,
+                   "request_count": len(requests), "requests": sorted(requests, key=lambda r: r["name"])}
+    return observation, envelopes
 
 
 def active_projects(state_file: Path) -> list[tuple[str, str, str]]:
@@ -172,8 +231,12 @@ def credential_env(name: str) -> str | None:
     path = os.environ.get(name + "_FILE")
     if path:
         credential = Path(path)
-        if not credential.is_file() or credential.stat().st_mode & 0o077:
-            raise ValueError("credential file must exist and be owner-only")
+        if not credential.is_file():
+            raise ValueError("credential file missing")
+        info = credential.stat()
+        mode = stat.S_IMODE(info.st_mode)
+        if (mode & 0o007) or (mode & 0o020) or (mode & 0o040 and info.st_gid != os.getegid()):
+            raise ValueError("credential permissions must be owner-only or group-readable by worker")
         return credential.read_text(encoding="utf-8").strip()
     return os.environ.get(name)
 
@@ -191,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
     try:
-        token = credential_env("CODEXBRIDGE_GITHUB_TOKEN")
+        token = None
         worker_token = credential_env("CODEXBRIDGE_WORKER_TOKEN") or ""
     except (OSError, ValueError) as exc:
         print(json.dumps({"status": "configuration_error", "error_type": type(exc).__name__}), file=sys.stderr)
@@ -202,18 +265,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         while not STOP:
             try:
-                for item in poll_once(args.state_file, token):
+                for project, repository, branch in active_projects(args.state_file):
+                    item, blobs = git_ssh_control(repository, branch, project)
                     # Only count/commit metadata. Never print request content or credentials.
                     if args.forward_gateway:
-                        envelopes = read_validated_requests(item, token, include_envelope=True)
+                        envelopes = [{"envelope": blobs[entry["sha"]]} for entry in item["requests"]]
                         item["gateway_admissions"] = [
                             gateway_intake(gateway_url, worker_token, item, request["envelope"])
                             for request in envelopes
                         ]
                     elif args.validate_requests:
-                        item["validated_requests"] = read_validated_requests(item, token)
+                        item["validated_requests"] = [{"requestId": blobs[entry["sha"]]["requestId"], "blobSha": entry["sha"]} for entry in item["requests"]]
                     print(json.dumps(item, sort_keys=True), flush=True)
-            except (WorkerctlError, HTTPError, URLError, ValueError, OSError) as exc:
+            except (WorkerctlError, HTTPError, URLError, ValueError, OSError, subprocess.SubprocessError) as exc:
                 print(json.dumps({"status": "poll_error", "error_type": type(exc).__name__}),
                       file=sys.stderr, flush=True)
                 if args.once:

@@ -19,9 +19,9 @@ if [[ ! -e "${CONFIG_DIR}/worker.env" ]]; then
 cat >"${CONFIG_DIR}/worker.env" <<'ENV'
 CODEXBRIDGE_GATEWAY_URL=https://codexbridge.inovacaosistemas.com.br
 CODEXBRIDGE_WORKER_TOKEN_FILE=/etc/codexbridge-worker/worker-token
-CODEXBRIDGE_GITHUB_TOKEN_FILE=/etc/codexbridge-worker/github-token
 ENV
 fi
+sed -i '/^CODEXBRIDGE_GITHUB_TOKEN_FILE=/d; /^CODEXBRIDGE_GITHUB_TOKEN=/d' "${CONFIG_DIR}/worker.env"
 chmod 0640 "${CONFIG_DIR}/worker.env"
 chown root:"${WORKER_USER}" "${CONFIG_DIR}/worker.env"
 cat > /etc/systemd/system/codexbridge-worker.service <<UNIT
@@ -43,6 +43,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/codexbridge-worker
+Environment=HOME=/var/lib/codexbridge-worker
 PrivateTmp=true
 UMask=0077
 
@@ -50,4 +51,4 @@ UMask=0077
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-echo "Installed, NOT started. Put worker-token and github-token (chmod 0640, chown root:${WORKER_USER}) in ${CONFIG_DIR}, register/activate projects and obtain a Gateway lease before starting."
+echo "Installed, NOT started. Put worker-token (chmod 0640, chown root:${WORKER_USER}) and SSH access for the service account in ${CONFIG_DIR}, register/activate projects and obtain a Gateway lease before starting."
