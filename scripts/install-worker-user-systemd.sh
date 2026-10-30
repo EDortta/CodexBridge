@@ -37,10 +37,9 @@ if [[ ! -f "$CONFIG_DIR/worker.env" ]]; then
   cat > "$CONFIG_DIR/worker.env" <<'ENV'
 CODEXBRIDGE_GATEWAY_URL=https://codexbridge.inovacaosistemas.com.br
 # Must be provisioned separately; never store this token in Git.
-CODEXBRIDGE_WORKER_TOKEN_FILE=
 ENV
 fi
 chmod 0600 "$CONFIG_DIR/worker.env"
 systemctl --user daemon-reload
 echo "Installed user unit, NOT started: systemctl --user start codexbridge-worker"
-echo "Configure Worker Gateway credential and enable project under $STATE_DIR/state.json"
+echo "Configure CODEXBRIDGE_WORKER_TOKEN_FILE in $CONFIG_DIR/worker.env and register/enable a project in $STATE_DIR/state.json"
