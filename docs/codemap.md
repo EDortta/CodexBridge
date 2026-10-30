@@ -3509,3 +3509,7 @@ tests/
 ### `scripts/install-worker-user-systemd.sh`
 
 > Installs the unprivileged CodexBridge Worker as a `systemctl --user` service, using the developer's SSH Git identity and XDG directories, without sudo.
+
+### `scripts/migrate-worker-to-user.sh`
+
+> One-time migration of legacy system Worker state and machine credential to developer XDG directories; disables legacy unit without starting the new service.
