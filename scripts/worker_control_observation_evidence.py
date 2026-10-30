@@ -36,20 +36,24 @@ def main():
     checks["validated_request_count"] = None
     if checks["watcher_exists"] and checks["local_activation_active"]:
         try:
-            r = subprocess.run(
-                [sys.executable, str(WATCHER), "--state-file", str(STATE),
-                 "--once", "--validate-requests"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=60)
-            for line in r.stdout.splitlines():
-                entry = json.loads(line)
-                if (entry.get("project") == "codexbridge"
-                    and entry.get("repository") == "EDortta/CodexBridge"
-                    and entry.get("branch") == "codexbridge-control"
-                    and isinstance(entry.get("validated_requests"), list)):
-                    checks["control_branch_read"] = r.returncode == 0
-                    checks["validated_request_count"] = len(entry["validated_requests"])
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            pass
+            import importlib.util
+            sys.path.insert(0, str(WATCHER.parent))
+            spec = importlib.util.spec_from_file_location("worker_watch_diagnostic", WATCHER)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            observation, envelopes = mod.git_ssh_control(
+                "EDortta/CodexBridge", "codexbridge-control", "codexbridge")
+            checks["control_branch_read"] = (
+                observation["repository"] == "EDortta/CodexBridge"
+                and observation["branch"] == "codexbridge-control")
+            checks["validated_request_count"] = len(envelopes)
+        except Exception as exc:
+            # Only controlled scalar diagnostics; never log exception text,
+            # Git stderr, paths, tokens, request payload or remote URL.
+            checks["failure_type"] = type(exc).__name__
+            checks["failure_errno"] = getattr(exc, "errno", None)
+            checks["failure_exit_code"] = getattr(exc, "returncode", None)
+            checks["failure_function"] = __import__("traceback").extract_tb(exc.__traceback__)[-1].name
     report = {"schema": 1, "project": "CodexBridge",
               "feature": "worker-control-observation", "branch": "development",
               "run_id": run_id, "timestamp_utc": now.isoformat(),
