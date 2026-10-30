@@ -3521,3 +3521,7 @@ tests/
 ### `scripts/worker_control_observation_evidence.py`
 
 > Validates active user-owned Git control-branch observation and publishes sanitized outcome; supports `CODEXBRIDGE_WATCHER_PATH` for verification before installation.
+
+### `scripts/worker_gateway_intake_evidence.py`
+
+> Runs an inert Git SSH control request through user Worker into Gateway intake once, publishing sanitized admission results to shared development-evidences.
