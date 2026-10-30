@@ -61,7 +61,7 @@ def git_ssh_control(repository: str, branch: str, project: str) -> tuple[dict, d
         raise ValueError("invalid control branch")
     if branch in {"main", "master", "development"}:
         raise ValueError("code branch is not a control branch")
-    store = Path(os.environ.get("CODEXBRIDGE_GIT_CACHE", "/var/lib/codexbridge-worker/git-cache"))
+    store = Path(os.environ.get("CODEXBRIDGE_GIT_CACHE", str(Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "codexbridge-worker/git-cache")))
     store.mkdir(mode=0o700, parents=True, exist_ok=True)
     cache = store / (repository.replace("/", "--") + ".git")
     if not cache.exists():
@@ -77,10 +77,10 @@ def git_ssh_control(repository: str, branch: str, project: str) -> tuple[dict, d
     requests = []
     envelopes = {}
     tree = git("ls-tree", "-r", "-z", "refs/codexbridge/control", "--", ".codexbridge/requests/")
-    for item in tree.split(b"\\0"):
+    for item in tree.split(bytes([0])):
         if not item:
             continue
-        meta, filename = item.split(b"\\t", 1)
+        meta, filename = item.split(bytes([9]), 1)
         mode, kind, sha = meta.split(b" ")
         if kind != b"blob":
             continue
