@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "requestId": "smoke-20261030-worker-intake",
+  "project": "codexbridge",
+  "operation": "analyze",
+  "source": {
+    "branch": "development",
+    "commit": "51e64e85ff6eba29195a6e94a787d285eee2dc9c"
+  },
+  "targets": {
+    "mode": "selected",
+    "nodes": [
+      "devel3"
+    ]
+  },
+  "parameters": {}
+}
