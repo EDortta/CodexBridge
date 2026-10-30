@@ -3517,3 +3517,7 @@ tests/
 ### `scripts/worker_user_preflight_evidence.py`
 
 > Checks the developer-owned systemd unit, migrated state and machine credential, legacy unit shutdown, and SSH Git access; publishes only sanitized booleans to development-evidences.
+
+### `scripts/worker_control_observation_evidence.py`
+
+> Runs an active-project, SSH Git control-branch observation check and publishes sanitized evidence through the shared publisher.
