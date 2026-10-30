@@ -48,6 +48,8 @@ if env.exists():
         except (OSError, ValueError, TypeError):
             result['configured_registry_readable_json'] = False
 result['gateway_active'] = subprocess.run(['systemctl', 'is-active', '--quiet', 'codex-bridge-gateway']).returncode == 0
+result['gateway_health_ok'] = subprocess.run(['curl','-fsS','--max-time','6','http://127.0.0.1:18080/health'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+result['activation_patch_deployed'] = 'stable_project_id = project.id' in pathlib.Path('/opt/codex-bridge/gateway/app/api/routes/worker_activations.py').read_text()
 print("CODEXBRIDGE_EVIDENCE_JSON=" + json.dumps(result, sort_keys=True))
 """
 
@@ -102,6 +104,8 @@ def main() -> int:
     status = "pass" if (
         checks.get("remote_access") == "ok"
         and checks.get("gateway_active") is True
+        and checks.get("gateway_health_ok") is True
+        and checks.get("activation_patch_deployed") is True
         and checks.get("configured_registry_exists") is True
         and checks.get("configured_admin_count") == 1
         and checks.get("configured_admin_enabled") is True
