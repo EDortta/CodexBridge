@@ -3521,3 +3521,7 @@ tests/
 ### `scripts/worker_control_observation_evidence.py`
 
 > Validates active user-owned Git control-branch observation and publishes sanitized outcome; supports `CODEXBRIDGE_WATCHER_PATH` for verification before installation.
+
+### `tests/unit/test_worker_leases_sqlite.py`
+
+> Regression: SQLite UTC lease timestamp round-trip must preserve eight-hour Gateway admission authorization and fail closed on expired, naive caller clock, or mismatched identity.
