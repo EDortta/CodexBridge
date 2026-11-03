@@ -47,7 +47,16 @@ def main():
     checks["worker_token_file_readable"]=bool(keyfile and Path(keyfile).is_file()
                                                 and os.access(keyfile,os.R_OK))
     checks["gateway_https_configured"]=env.get("CODEXBRIDGE_GATEWAY_URL","").startswith("https://")
-    if checks["user_context"] and checks["watcher_installed"]:
+    try:
+        from activate_worker_evidence import run as activate_gateway
+        auth_checks, lease = activate_gateway(Path(".credentials/admin-password.txt"))
+        checks["gateway_operator_login"]=auth_checks.get("sign_in","not_attempted")
+        checks["gateway_lease"]=auth_checks.get("activation","not_attempted")
+        if auth_checks.get("activation")=="ok":
+            checks["gateway_lease_created"]=lease.get("created")
+    except (OSError, ValueError, ImportError):
+        checks["gateway_lease"]="runner_error"
+    if checks["user_context"] and checks["watcher_installed"] and checks.get("gateway_lease")=="ok":
         try:
             proc=subprocess.run(
                 [sys.executable,str(WATCH),"--state-file",str(ROOT/"state.json"),
