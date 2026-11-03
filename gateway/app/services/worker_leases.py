@@ -18,6 +18,12 @@ def lease_is_active(lease: object, *, worker_id: str, project_id: str,
     try:
         enabled = lease.enabled_at
         expires = lease.expires_at
+        # The Gateway writes UTC; SQLite strips tzinfo on round-trip.
+        # Only persisted lease timestamps may be normalized this way.
+        if isinstance(enabled, datetime) and enabled.tzinfo is None:
+            enabled = enabled.replace(tzinfo=timezone.utc)
+        if isinstance(expires, datetime) and expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
         revoked = lease.revoked_at
         if not isinstance(enabled, datetime) or not isinstance(expires, datetime):
             return False
