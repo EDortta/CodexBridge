@@ -3525,3 +3525,7 @@ tests/
 ### `scripts/worker_gateway_intake_evidence.py`
 
 > Runs an inert Git SSH control request through user Worker into Gateway intake once, publishing sanitized admission results to shared development-evidences.
+
+### `tests/unit/test_worker_leases_sqlite.py`
+
+> Verifies the SQLite UTC lease round-trip, eight-hour expiry, timezone-aware clock and Worker identity binding.
