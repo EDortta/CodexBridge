@@ -16,8 +16,8 @@ def lease_is_active(lease: object, *, worker_id: str, project_id: str,
     if not isinstance(repository, str) or not repository or not control_branch:
         return False
     try:
-        enabled = lease.enabled_at
-        expires = lease.expires_at
+        enabled = lease.enabled_at.replace(tzinfo=timezone.utc) if lease.enabled_at.tzinfo is None else lease.enabled_at
+        expires = lease.expires_at.replace(tzinfo=timezone.utc) if lease.expires_at.tzinfo is None else lease.expires_at
         revoked = lease.revoked_at
         if not isinstance(enabled, datetime) or not isinstance(expires, datetime):
             return False
