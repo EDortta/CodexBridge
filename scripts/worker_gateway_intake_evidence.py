@@ -19,6 +19,7 @@ ROOT=Path(os.environ.get("XDG_STATE_HOME",str(HOME/".local/state")))/"codexbridg
 CONFIG=Path(os.environ.get("XDG_CONFIG_HOME",str(HOME/".config")))/"codexbridge-worker"
 WATCH=Path(os.environ.get("XDG_DATA_HOME",str(HOME/".local/share")))/"codexbridge-worker/scripts/worker_watch.py"
 PUBLISHER=HOME/".local/state/development-evidences/repo/publisher.py"
+CTL=HOME/".local/share/codexbridge-worker/scripts/workerctl.py"
 ID="smoke-20261030-worker-intake"
 
 def main():
@@ -33,6 +34,19 @@ def main():
                 k,v=line.split("=",1)
                 if k.startswith("CODEXBRIDGE_"):
                     env[k]=v.strip().strip('"')
+    try:
+        ctl=subprocess.run(
+            [sys.executable,str(CTL),"--state-file",str(ROOT/"state.json"),
+             "enable","--project","codexbridge"],
+            capture_output=True,text=True,timeout=15)
+        checks["local_activation_ready"]=ctl.returncode==0
+    except (OSError,subprocess.TimeoutExpired):
+        checks["local_activation_ready"]=False
+    keyfile=env.get("CODEXBRIDGE_WORKER_TOKEN_FILE","")
+    checks["worker_token_file_configured"]=bool(keyfile)
+    checks["worker_token_file_readable"]=bool(keyfile and Path(keyfile).is_file()
+                                                and os.access(keyfile,os.R_OK))
+    checks["gateway_https_configured"]=env.get("CODEXBRIDGE_GATEWAY_URL","").startswith("https://")
     if checks["user_context"] and checks["watcher_installed"]:
         try:
             proc=subprocess.run(
@@ -54,6 +68,14 @@ def main():
             if proc.returncode!=0:
                 # Only a classification; subprocess stderr is never published.
                 checks["worker_failed"]=True
+                for raw in proc.stderr.splitlines():
+                    try:
+                        diagnostic=json.loads(raw)
+                    except ValueError:
+                        continue
+                    if isinstance(diagnostic,dict):
+                        checks["worker_error_type"]=diagnostic.get("error_type","unknown")
+                        checks["worker_error_status"]=diagnostic.get("status","unknown")
         except (OSError,subprocess.TimeoutExpired):
             checks["runner_error"]=True
     status="pass" if all((checks["user_context"],checks["request_observed"],
