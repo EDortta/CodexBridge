@@ -19,6 +19,7 @@ import sys
 import tempfile
 import urllib.error
 import uuid
+import hashlib
 
 HOME = Path.home()
 STATE = Path(os.environ.get("XDG_STATE_HOME", str(HOME / ".local/state"))) / "codexbridge-worker"
@@ -45,11 +46,35 @@ def test(checks: dict) -> None:
         checks["stage"] = "local_activation"
         return
 
+    # Compare deployed Gateway lease validator with the tested checkout.
+    # Execute only a read-only hash command; never copy any remote file or secret.
+    local_validator = Path(__file__).resolve().parents[1] / "gateway/app/services/worker_leases.py"
+    try:
+        local_sha = hashlib.sha256(local_validator.read_bytes()).hexdigest()
+        probe = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+             "-p", "2200", "esteban@frida.inovacaosistemas.com.br",
+             "sha256sum /opt/codex-bridge/gateway/app/services/worker_leases.py"],
+            capture_output=True, text=True, timeout=20)
+        if probe.returncode == 0:
+            remote_sha = probe.stdout.split()[0]
+            checks["deployed_gateway_validator_current"] = (remote_sha == local_sha)
+        else:
+            checks["deployed_gateway_validator_current"] = None
+            checks["deployment_probe"] = "ssh_failed"
+    except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+        checks["deployed_gateway_validator_current"] = None
+        checks["deployment_probe"] = "unavailable"
+    if checks.get("deployed_gateway_validator_current") is False:
+        checks["stage"] = "gateway_deployment_stale"
+        return
     try:
         from activate_worker_evidence import run as operator_activate
         auth_checks, lease = operator_activate(Path(".credentials/admin-password.txt"))
         checks["admin_sign_in"] = auth_checks.get("sign_in", "failed")
         checks["gateway_lease"] = auth_checks.get("activation", "failed")
+        if checks["gateway_lease"] == "http_409":
+            checks["gateway_lease_conflict"] = "existing_lease_or_capacity_conflict"
         if checks["gateway_lease"] == "ok":
             checks["gateway_lease_created"] = bool(lease.get("created"))
     except (ImportError, OSError, ValueError):
