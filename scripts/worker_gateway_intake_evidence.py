@@ -9,7 +9,11 @@ from datetime import datetime, timezone
 import importlib.util
 import json
 import os
+import socket
+import ssl
+import errno
 from pathlib import Path
+from urllib.parse import urlsplit
 import subprocess
 import sys
 import tempfile
@@ -86,6 +90,14 @@ def test(checks: dict) -> None:
     gateway_url = env.get("CODEXBRIDGE_GATEWAY_URL", "")
     token_path = env.get("CODEXBRIDGE_WORKER_TOKEN_FILE", "")
     checks["gateway_https_configured"] = gateway_url.startswith("https://")
+    if checks["gateway_https_configured"]:
+        try:
+            socket.getaddrinfo(urlsplit(gateway_url).hostname, 443, type=socket.SOCK_STREAM)
+            checks["gateway_dns"] = "resolved"
+        except socket.gaierror:
+            checks["gateway_dns"] = "failed"
+        except OSError:
+            checks["gateway_dns"] = "unavailable"
     checks["worker_token_readable"] = bool(
         token_path and Path(token_path).is_file()
         and os.access(token_path, os.R_OK))
@@ -104,6 +116,21 @@ def test(checks: dict) -> None:
     except urllib.error.HTTPError as exc:
         checks["stage"] = "gateway_intake"
         checks["gateway_http_status"] = exc.code
+    except urllib.error.URLError as exc:
+        checks["stage"] = "gateway_intake"
+        reason = exc.reason
+        if isinstance(reason, socket.gaierror):
+            checks["network_failure"] = "dns"
+        elif isinstance(reason, ssl.SSLError):
+            checks["network_failure"] = "tls"
+        elif isinstance(reason, (TimeoutError, socket.timeout)):
+            checks["network_failure"] = "timeout"
+        elif isinstance(reason, ConnectionRefusedError):
+            checks["network_failure"] = "connection_refused"
+        elif isinstance(reason, OSError) and reason.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+            checks["network_failure"] = "unreachable"
+        else:
+            checks["network_failure"] = "other_network_error"
     except Exception as exc:
         checks["stage"] = "gateway_intake"
         checks["failure_type"] = type(exc).__name__
