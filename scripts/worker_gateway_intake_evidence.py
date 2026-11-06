@@ -65,6 +65,9 @@ def test(checks: dict) -> None:
     except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
         checks["deployed_gateway_validator_current"] = None
         checks["deployment_probe"] = "unavailable"
+    if checks.get("deployed_gateway_validator_current") is False:
+        checks["stage"] = "gateway_deployment_stale"
+        return
     try:
         from activate_worker_evidence import run as operator_activate
         auth_checks, lease = operator_activate(Path(".credentials/admin-password.txt"))
