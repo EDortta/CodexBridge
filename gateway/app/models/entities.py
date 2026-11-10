@@ -966,6 +966,23 @@ class WorkerProjectLeaseModel(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class WorkerExecutionGrantModel(Base):
+    """Separate operator preauthorization to start read-only/test missions."""
+
+    __tablename__ = "worker_execution_grants"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    worker_id: Mapped[str] = mapped_column(String(128), ForeignKey("worker_identities.id"))
+    project_id: Mapped[str] = mapped_column(String(128), ForeignKey("projects.id"))
+    node_id: Mapped[str] = mapped_column(String(128), ForeignKey("nodes.id"))
+    repository: Mapped[str] = mapped_column(String(255))
+    modes_json: Mapped[str] = mapped_column(Text)
+    authorized_by: Mapped[str] = mapped_column(String(255))
+    enabled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class WorkerLeaseSerializationModel(Base):
     """Single DB row whose UPDATE serializes fleet-wide lease decisions."""
 
