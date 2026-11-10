@@ -74,3 +74,25 @@ as part of the normal release process before enabling this route.
 request digest, exact source commit and approved repository, node eligibility,
 new grant, and durable idempotent Mission correlation. Until those checks and
 the dispatch bridge are implemented there is no automatic Worker execution.
+
+
+## Durable correlation reservation (migration 0024)
+
+`worker_mission_correlations` has a unique `(project_id, request_id)`
+primary key and optional, uniquely indexed `mission_id`/`task_id`. The
+reservation service serializes competing writers using the established
+`worker_lease_serialization` guard; checks the admitted ledger's exact
+worker, payload digest, source SHA and operation; and requires a separate,
+active execution grant for the selected Node, repository and mode.
+
+Exact replays return the existing reservation even after grant expiry; a
+replay never renews permission. Changed scope is a conflict. A reserved row
+contains no Mission or Task and causes **no execution**.
+
+**Still blocked:** independent forge/branch-to-commit verification, active
+intake lease at execution time, Node/Executor/WorkspaceBinding/ProjectAuthorization
+revalidation, atomic Mission/Task creation and correlation finalization,
+recovery of abandoned reservations, and Executor-side pinned-commit checks.
+Do not expose this reservation as a dispatch endpoint or interpret the
+`reserved` state as execution approval. Apply migration 0024 only with
+the normal Gateway deployment process, after 0023.
