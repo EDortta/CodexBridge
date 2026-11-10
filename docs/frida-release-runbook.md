@@ -38,3 +38,36 @@ incident.
 **Remaining outside this deployment:** Worker credentials, local activation,
 operator-issued lease, Executor dispatch and result projection. Staging a
 Gateway release by itself does not make remote tasks operational.
+
+
+## Mandatory deployment-test evidence gate
+
+A deployment **validation** is not complete just because its test command exits
+zero. Every deployment-test script must either invoke
+`scripts/run_deploy_test_with_evidence.py` or implement the same remote ACK
+contract. The publisher is the sole Git writer for
+`EDortta/development-evidences`; its checked-out `main` branch is the
+publication destination. The **tested source** branch and exact commit are
+recorded inside the manifest and its branch-qualified path.
+
+Example (non-deploying local validation):
+
+```bash
+python3 scripts/run_deploy_test_with_evidence.py \
+  --feature worker-mission-correlation \
+  --target devel3 --phase deploy-test -- \
+  python3 -m pytest -q tests/unit/test_worker_mission_correlations.py
+```
+
+A pass requires both test exit code zero and publisher `flush` confirmation
+(`published=<relative_path>`). The runner prints
+`EVIDENCE_REPO`, `EVIDENCE_BRANCH`, `EVIDENCE_PATH` and `EVIDENCE_URL`
+for review. If tests fail, their failure is still published. If publication
+fails, exit code **2** blocks promotion even if the tests passed. Logs are
+kept locally with restricted permissions; stdout, stderr, credentials,
+workspace paths and command arguments are not sent in the manifest. Never
+pass credentials as command-line arguments.
+
+This gate does not authorize or trigger release application on Frida; staging
+and applying are still explicit separate operations. An operator must review
+the evidence link before claiming that a deployment validation passed.
