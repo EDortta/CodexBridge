@@ -3541,3 +3541,19 @@ tests/
 ### `docs/worker-dispatch.md`
 
 > Specifies staged intake-to-Mission/Executor dispatch gates, approval, idempotence and evidence contract.
+
+### `gateway/app/services/worker_execution_grants.py`
+
+> Serialized operator-only execution grants, valid for eight hours and restricted to analyze/test.
+
+### `gateway/app/api/routes/worker_execution_grants.py`
+
+> Human admin-only preauthorization and revocation, constrained by Node workspace binding, project policy and existing capability grants.
+
+### `tests/unit/test_worker_execution_grants.py`
+
+> SQLite-backed tests of issuance, repeat, expiry, revocation, scope and Worker lease enforcement.
+
+### `migrations/0023_worker_execution_grants.sql`
+
+> Persistent separate execution grants; never inferred from intake.
