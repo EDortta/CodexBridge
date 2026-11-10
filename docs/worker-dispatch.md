@@ -54,3 +54,23 @@ transport request to a **non-authorizing, immutable** candidate:
 **Next slice:** model operator execution approval and durable correlation,
 then wire the Gateway into the existing mission scheduler. No deployment,
 SSH access, daemon restart, or new control-branch request is part of this PR.
+
+## Execution grant implementation (2026-11-10)
+
+The independent eight-hour authorization is exposed by admin-only
+`POST /control/worker-execution-grants` and
+`POST /control/worker-execution-grants/{grant_id}/revoke`.
+The required JSON request is
+`{"workerId":"w1","projectId":"codexbridge","nodeId":"devel3","repository":"EDortta/CodexBridge","modes":["analyze","test"]}`.
+Before granting, the Gateway verifies operator admin identity, bound repository,
+enabled project/Node/Executor, active workspace binding, capabilities and
+project allowed modes. The transactional grant service also requires an
+active operator-issued intake lease, serializes grants, refuses conflicting
+active scopes and never extends a reissued grant. Revocation blocks future
+starts; it does not claim to stop already-running work. Apply migration 0023
+as part of the normal release process before enabling this route.
+
+**This does not authorize a task by itself:** dispatch still requires admitted
+request digest, exact source commit and approved repository, node eligibility,
+new grant, and durable idempotent Mission correlation. Until those checks and
+the dispatch bridge are implemented there is no automatic Worker execution.
