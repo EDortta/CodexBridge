@@ -3561,3 +3561,12 @@ tests/
 ### `tests/unit/test_worker_execution_grant_api.py`
 
 > Human-admin-only route checks, strict request schema and duplicate-mode rejection before database access.
+
+
+### `scripts/run_deploy_test_with_evidence.py`
+
+> Runs deployment validation commands and requires confirmed publication to the shared evidence repository before reporting success.
+
+### `tests/unit/test_deploy_test_evidence.py`
+
+> Regression tests for local-only logs, preserved exit status, publisher failure and exact remote acknowledgment.
