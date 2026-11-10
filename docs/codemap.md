@@ -3561,3 +3561,16 @@ tests/
 ### `tests/unit/test_worker_execution_grant_api.py`
 
 > Human-admin-only route checks, strict request schema and duplicate-mode rejection before database access.
+
+
+### `gateway/app/services/worker_mission_correlations.py`
+
+> Serialized, non-executing, exact-replay Worker request correlation reservations.
+
+### `migrations/0024_worker_mission_correlations.sql`
+
+> Durable request-to-Mission/Task correlation table and uniqueness constraints.
+
+### `tests/unit/test_worker_mission_correlations.py`
+
+> SQLite tests for reservation, replay, scope conflicts, expiry, revocation and admission identity.
