@@ -3557,3 +3557,7 @@ tests/
 ### `migrations/0023_worker_execution_grants.sql`
 
 > Persistent separate execution grants; never inferred from intake.
+
+### `tests/unit/test_worker_execution_grant_api.py`
+
+> Human-admin-only route checks, strict request schema and duplicate-mode rejection before database access.
