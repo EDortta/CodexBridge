@@ -3529,3 +3529,15 @@ tests/
 ### `tests/unit/test_worker_leases_sqlite.py`
 
 > Verifies the SQLite UTC lease round-trip, eight-hour expiry, timezone-aware clock and Worker identity binding.
+
+### `gateway/app/services/worker_dispatch_candidate.py`
+
+> Fail-closed, non-authorizing conversion of immutable Worker intake envelopes to single-Node analyze/test candidates. No dispatch.
+
+### `tests/unit/test_worker_dispatch_candidate.py`
+
+> Covers unsafe operations, ambiguous targets, injected parameters, immutable SHA, project binding and candidate immutability.
+
+### `docs/worker-dispatch.md`
+
+> Specifies staged intake-to-Mission/Executor dispatch gates, approval, idempotence and evidence contract.
