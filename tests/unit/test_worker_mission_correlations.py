@@ -119,5 +119,5 @@ async def test_no_admission_cannot_reserve(maker):
 async def test_unsupported_mode_does_not_query_database():
     with pytest.raises(CorrelationDenied, match="unsupported operation"):
         await reserve_worker_correlation(
-            None, **{**PARAMS, "mode": TaskMode.BUILD}, now=NOW
+            None, **{**PARAMS, "mode": TaskMode.REVIEW}, now=NOW
         )
