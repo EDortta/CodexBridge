@@ -26,26 +26,55 @@ def main() -> int:
         description="Create or update a CodexBridge user in the gateway registry."
     )
     parser.add_argument("--registry", default=DEFAULT_REGISTRY)
-    parser.add_argument("--user", required=True, dest="user_id")
-    parser.add_argument("--email", required=True)
+    parser.add_argument("--user", dest="user_id")
+    parser.add_argument("--email")
     parser.add_argument("--create", action="store_true")
     parser.add_argument("--admin", action="store_true")
+    parser.add_argument("--list", action="store_true", dest="list_users")
+    parser.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="read the password and confirmation from two stdin lines",
+    )
     args = parser.parse_args()
 
-    password = getpass.getpass("New CodexBridge password: ")
-    confirmation = getpass.getpass("Confirm password: ")
+    path = Path(args.registry)
+    if path.exists():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        original_stat = path.stat()
+        original_uid = original_stat.st_uid
+        original_gid = original_stat.st_gid
+    else:
+        if args.list_users:
+            raise SystemExit(f"ERROR: registry not found: {path}")
+        data = {"users": []}
+        original_uid = os.getuid()
+        original_gid = os.getgid()
+
+    if args.list_users:
+        if args.user_id or args.email or args.create or args.admin or args.password_stdin:
+            raise SystemExit("ERROR: --list cannot be combined with user options")
+        for user in data.get("users", []):
+            roles = ",".join(user.get("roles", [])) or "-"
+            enabled = "yes" if user.get("enabled", False) else "no"
+            print(f"{user.get('user_id', '')}\t{user.get('email', '')}\t{enabled}\t{roles}")
+        return 0
+
+    if not args.user_id or not args.email:
+        parser.error("--user and --email are required unless --list is used")
+
+    if args.password_stdin:
+        password = input()
+        confirmation = input()
+    else:
+        password = getpass.getpass("New CodexBridge password: ")
+        confirmation = getpass.getpass("Confirm password: ")
     if password != confirmation:
         raise SystemExit("ERROR: passwords do not match")
     if len(password) < 12:
         raise SystemExit("ERROR: password must contain at least 12 characters")
 
-    path = Path(args.registry)
-    if path.exists():
-        data = json.loads(path.read_text(encoding="utf-8"))
-        original_mode = path.stat().st_mode & 0o777
-    else:
-        data = {"users": []}
-        original_mode = 0o600
+    original_mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
 
     users = data.setdefault("users", [])
     matches = [
@@ -119,6 +148,7 @@ def main() -> int:
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(tmp_name, original_mode or 0o600)
+        os.chown(tmp_name, original_uid, original_gid)
         json.loads(Path(tmp_name).read_text(encoding="utf-8"))
         os.replace(tmp_name, path)
     finally:
