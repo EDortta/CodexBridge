@@ -1184,4 +1184,4 @@ async def agent_ws(
                 elif envelope.type == AgentMessageType.FORGE_OPERATION_RESULT:
                     await handle_forge_operation_result(session, envelope)
     except WebSocketDisconnect:
-        await hub.unregister(executor_id)
+        await hub.unregister(executor_id, websocket)
