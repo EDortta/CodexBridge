@@ -950,6 +950,32 @@ class WorkerRequestModel(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+
+
+class WorkerMissionCorrelationModel(Base):
+    """One durable reservation per admitted Worker request.
+
+    Reserving a correlation is never permission to execute. Mission/Task IDs
+    remain empty until a separately authorized dispatch transition commits.
+    """
+
+    __tablename__ = "worker_mission_correlations"
+
+    project_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    worker_id: Mapped[str] = mapped_column(String(128), ForeignKey("worker_identities.id"))
+    payload_sha256: Mapped[str] = mapped_column(String(64))
+    source_commit: Mapped[str] = mapped_column(String(40))
+    grant_id: Mapped[str] = mapped_column(String(128), ForeignKey("worker_execution_grants.id"))
+    node_id: Mapped[str] = mapped_column(String(128), ForeignKey("nodes.id"))
+    repository: Mapped[str] = mapped_column(String(255))
+    mode: Mapped[str] = mapped_column(String(32))
+    state: Mapped[str] = mapped_column(String(32))
+    mission_id: Mapped[str | None] = mapped_column(String(128), ForeignKey("missions.id"), nullable=True)
+    task_id: Mapped[str | None] = mapped_column(String(128), ForeignKey("tasks.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class WorkerProjectLeaseModel(Base):
     """Gateway-authorized, time-bounded project activation; never self-issued."""
 

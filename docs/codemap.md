@@ -3570,3 +3570,12 @@ tests/
 ### `tests/unit/test_deploy_test_evidence.py`
 
 > Regression tests for local-only logs, preserved exit status, publisher failure and exact remote acknowledgment.
+
+
+### `gateway/app/services/worker_mission_correlations.py`
+
+> Serializes durable, non-executing correlations between admitted Worker requests and future Mission/Task identities, rejecting inconsistent replays.
+
+### `tests/unit/test_worker_mission_correlations.py`
+
+> SQLite regression tests for exact replay, scope conflict, absent admission, grant expiry and revocation.
