@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": "2025-06-18",
+    "serverInfo": {
+      "name": "codex-bridge",
+      "version": "0.2.0"
+    },
+    "instructions": "Nunca envie caminhos de disco. Em start_development_task, use project para o projeto logico e node quando o operador nomear a maquina (por exemplo, 'em devel3'); use mode='analyze' para pedidos somente de leitura. Trate tarefas sensiveis como aprovacao pendente.",
+    "capabilities": {
+      "tools": {}
+    }
+  }
+}
