@@ -3563,14 +3563,10 @@ tests/
 > Human-admin-only route checks, strict request schema and duplicate-mode rejection before database access.
 
 
-### `gateway/app/services/worker_mission_correlations.py`
+### `scripts/run_deploy_test_with_evidence.py`
 
-> Serialized, non-executing, exact-replay Worker request correlation reservations.
+> Runs deployment validation commands and requires confirmed publication to the shared evidence repository before reporting success.
 
-### `migrations/0024_worker_mission_correlations.sql`
+### `tests/unit/test_deploy_test_evidence.py`
 
-> Durable request-to-Mission/Task correlation table and uniqueness constraints.
-
-### `tests/unit/test_worker_mission_correlations.py`
-
-> SQLite tests for reservation, replay, scope conflicts, expiry, revocation and admission identity.
+> Regression tests for local-only logs, preserved exit status, publisher failure and exact remote acknowledgment.
