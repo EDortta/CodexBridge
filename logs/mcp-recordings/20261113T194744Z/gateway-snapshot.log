@@ -1,0 +1,22 @@
+===== gateway journal =====
+2026-11-13T16:52:04-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "GET /.well-known/oauth-authorization-server HTTP/1.1" 200 OK
+2026-11-13T16:52:04-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "GET /.well-known/oauth-protected-resource/mcp HTTP/1.1" 200 OK
+2026-11-13T16:52:05-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "GET /oauth/authorize?response_type=code&client_id=chatgpt-codexbridge&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fcodexbridge-evidence&scope=codexbridge.read&state=[REDACTED] HTTP/1.1" 200 OK
+2026-11-13T16:52:05-0300 frida uvicorn[5491]: {"asctime": "2026-11-13 16:52:05,294", "levelname": "INFO", "name": "codexbridge.oauth", "message": "oauth_authorize_attempt client=ip:shared-untrusted client_id=chatgpt-codexbridge login_fp=0f83de146cdf1f86 registry=/etc/codex-bridge/auth/users.json registry_ok=True scope_count=1 pkce_method=S256", "correlation_id": null, "task_id": null, "executor_id": null}
+2026-11-13T16:52:16-0300 frida uvicorn[5491]: {"asctime": "2026-11-13 16:52:16,305", "levelname": "INFO", "name": "codexbridge.oauth", "message": "oauth_authorize_result client=ip:shared-untrusted client_id=chatgpt-codexbridge login_fp=0f83de146cdf1f86 outcome=accepted resolved_user_id=esteban enabled=True registry=/etc/codex-bridge/auth/users.json", "correlation_id": null, "task_id": null, "executor_id": null}
+2026-11-13T16:52:16-0300 frida uvicorn[5491]: {"asctime": "2026-11-13 16:52:16,310", "levelname": "INFO", "name": "codexbridge.oauth", "message": "oauth_authorize_grant client=ip:shared-untrusted client_id=chatgpt-codexbridge login_fp=0f83de146cdf1f86 user_id=esteban scope_count=1 redirect_host=chatgpt.com", "correlation_id": null, "task_id": null, "executor_id": null}
+2026-11-13T16:52:16-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "POST /oauth/authorize HTTP/1.1" 302 Found
+2026-11-13T16:52:16-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "POST /oauth/token HTTP/1.1" 200 OK
+2026-11-13T16:53:02-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "GET /.well-known/oauth-authorization-server HTTP/1.1" 200 OK
+2026-11-13T16:53:02-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "GET /.well-known/oauth-protected-resource/mcp HTTP/1.1" 200 OK
+2026-11-13T16:53:03-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "GET /oauth/authorize?response_type=code&client_id=chatgpt-codexbridge&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fcodexbridge-evidence&scope=codexbridge.read&state=[REDACTED] HTTP/1.1" 200 OK
+2026-11-13T16:53:03-0300 frida uvicorn[5491]: {"asctime": "2026-11-13 16:53:03,368", "levelname": "INFO", "name": "codexbridge.oauth", "message": "oauth_authorize_attempt client=ip:shared-untrusted client_id=chatgpt-codexbridge login_fp=0f83de146cdf1f86 registry=/etc/codex-bridge/auth/users.json registry_ok=True scope_count=1 pkce_method=S256", "correlation_id": null, "task_id": null, "executor_id": null}
+2026-11-13T16:53:14-0300 frida uvicorn[5491]: {"asctime": "2026-11-13 16:53:14,460", "levelname": "INFO", "name": "codexbridge.oauth", "message": "oauth_authorize_result client=ip:shared-untrusted client_id=chatgpt-codexbridge login_fp=0f83de146cdf1f86 outcome=accepted resolved_user_id=esteban enabled=True registry=/etc/codex-bridge/auth/users.json", "correlation_id": null, "task_id": null, "executor_id": null}
+2026-11-13T16:53:14-0300 frida uvicorn[5491]: {"asctime": "2026-11-13 16:53:14,463", "levelname": "INFO", "name": "codexbridge.oauth", "message": "oauth_authorize_grant client=ip:shared-untrusted client_id=chatgpt-codexbridge login_fp=0f83de146cdf1f86 user_id=esteban scope_count=1 redirect_host=chatgpt.com", "correlation_id": null, "task_id": null, "executor_id": null}
+2026-11-13T16:53:14-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "POST /oauth/authorize HTTP/1.1" 302 Found
+2026-11-13T16:53:14-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "POST /oauth/token HTTP/1.1" 200 OK
+2026-11-13T16:53:15-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "POST /mcp HTTP/1.1" 200 OK
+2026-11-13T16:53:15-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "POST /mcp HTTP/1.1" 400 Bad Request
+2026-11-13T16:53:15-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "POST /mcp HTTP/1.1" 200 OK
+2026-11-13T16:53:16-0300 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "POST /mcp HTTP/1.1" 200 OK
+===== nginx auth and MCP access =====
