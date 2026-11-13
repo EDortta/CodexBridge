@@ -1,0 +1,12 @@
+{
+  "MCP_ENDPOINT": "https://codexbridge.inovacaosistemas.com.br/mcp",
+  "OAUTH_STATUS": "/.well-known/oauth-authorization-server=200;/.well-known/oauth-protected-resource/mcp=200;authorize=302;token=200",
+  "INITIALIZE_STATUS": "HTTP 200;jsonrpc_result=True;session_id=absent",
+  "NOTIFICATIONS_INITIALIZED_STATUS": "HTTP 202",
+  "TOOLS_LIST_STATUS": "HTTP 200;jsonrpc_result=True",
+  "TOOLS_COUNT": "28",
+  "TOOLS_NAMES": "executor_status,list_executors,list_projects,submit_codex_task,get_task_status,get_task_logs,get_task_result,continue_codex_session,cancel_codex_task,approve_codex_task,start_development_task,resolve_issue_as_mission,bind_project_forge,create_project_issue,list_project_issues,comment_project_issue,close_project_issue,list_recent_tasks,create_epic,list_epics,update_epic,create_issue,list_issues,update_issue,move_issue_to_epic,publish_epic_to_repo,create_reminder,cancel_reminder",
+  "READ_TOOL_RESULT": "HTTP 200;tool=list_executors;structured_content=present",
+  "GATEWAY_REQUEST_IDS": "mcp-evidence-initialize,mcp-evidence-initialized,mcp-evidence-tools-list,mcp-evidence-tools-call",
+  "ERRORS": "none"
+}
