@@ -88,9 +88,17 @@ class AgentHub:
                     hub_envelope(executor_id, message_type.value, {"task_id": task.id}),
                 )
 
-    async def unregister(self, executor_id: str) -> None:
+    async def unregister(self, executor_id: str, websocket: WebSocket | None = None) -> None:
+        """Do not let a superseded socket disconnect the current session.
+
+        The socket identity is supplied by the receive loop. A reconnect may
+        register a replacement before the old loop observes its disconnect.
+        """
         async with self._lock:
-            self.connections.pop(executor_id, None)
+            current = self.connections.get(executor_id)
+            if current is None or (websocket is not None and current.websocket is not websocket):
+                return
+            self.connections.pop(executor_id)
         async with self.session_factory() as session:
             try:
                 await store.mark_executor_connected(session, executor_id, False)
