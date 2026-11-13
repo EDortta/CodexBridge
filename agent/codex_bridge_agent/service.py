@@ -411,6 +411,17 @@ class AgentService:
         # runner abstraction, so an unmodified gateway keeps dispatching
         # correctly against an upgraded executor.
         engine = envelope.payload.get("engine", "codex")
+        # Replayed dispatches while a task is active must not launch a
+        # second local process. Restart-safe deduplication is separate.
+        if self.runners.is_known(task_id):
+            await websocket.send(
+                self._envelope(
+                    AgentMessageType.TASK_ACK,
+                    {"task_id": task_id, "accepted": True,
+                     "state": TaskState.RUNNING.value},
+                ).model_dump_json()
+            )
+            return
         try:
             runner = self.runners.for_engine(engine)
         except EngineNotImplementedError as exc:
@@ -436,6 +447,14 @@ class AgentService:
         # from under it (issue #17 council round 2, "the second caller").
         self.runners.mark_dispatched(task_id, engine)
         try:
+            # The Gateway requires a valid state for accepted task ACKs.
+            await websocket.send(
+                self._envelope(
+                    AgentMessageType.TASK_ACK,
+                    {"task_id": task_id, "accepted": True,
+                     "state": TaskState.RUNNING.value},
+                ).model_dump_json()
+            )
             project = self.projects.get(project_id)
             if project is None and self.settings.auto_project_root:
                 # Opt-in fallback (see `AgentSettings.auto_project_root`'s own
