@@ -1,0 +1,22 @@
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "structuredContent": {
+      "executors": [
+        {
+          "executor_id": "devel3",
+          "display_name": "devel3",
+          "connected": true,
+          "last_seen_at": "2026-11-13T20:12:11.444727"
+        }
+      ]
+    },
+    "content": [
+      {
+        "type": "text",
+        "text": "Found 1 executors."
+      }
+    ]
+  }
+}
