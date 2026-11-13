@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -706,8 +706,43 @@ async def mcp_endpoint(
     if not allowed:
         metrics.RATE_LIMIT_REJECTIONS.inc()
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
-    body = await request.json()
+    try:
+        body = await request.json()
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        logging.getLogger("codexbridge.mcp").warning(
+            "mcp_parse_error content_length=%s", request.headers.get("content-length", "unknown")
+        )
+        return JSONResponse(
+            content={
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": "Parse error"},
+            },
+            status_code=400,
+        )
+    if not isinstance(body, dict):
+        return JSONResponse(
+            content={
+                "jsonrpc": "2.0",
+                "id": body.get("id") if isinstance(body, dict) else None,
+                "error": {"code": -32600, "message": "Invalid Request"},
+            },
+            status_code=400,
+        )
     principal = await authenticate_mcp_request(session, body, authorization)
+    if body.get("jsonrpc") != "2.0" or not isinstance(body.get("method"), str):
+        return JSONResponse(
+            content={
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "error": {"code": -32600, "message": "Invalid Request"},
+            },
+            status_code=400,
+        )
+    if "id" not in body:
+        if body["method"].startswith("notifications/"):
+            return Response(status_code=202)
+        return Response(status_code=202)
     payload = await handle_mcp_call(body, session, hub, principal)
     return Response(content=json.dumps(payload), media_type="application/json")
 

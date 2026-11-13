@@ -100,19 +100,29 @@ def main() -> int:
         if value and value not in request_ids:
             request_ids.append(value)
 
-    def mcp_call(name: str, payload: dict, request_id: str, token: str) -> tuple[int, dict[str, str], dict]:
+    def mcp_call(
+        name: str,
+        payload: dict,
+        request_id: str,
+        token: str,
+        *,
+        protocol_version: str | None = None,
+    ) -> tuple[int, dict[str, str], dict]:
         body = json.dumps(payload, separators=(",", ":")).encode()
+        request_headers = {
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "X-Request-Id": request_id,
+        }
+        if protocol_version:
+            request_headers["MCP-Protocol-Version"] = protocol_version
         status, headers, raw = request(
             opener,
             endpoint,
             method="POST",
             body=body,
-            headers={
-                "Accept": "application/json, text/event-stream",
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {token}",
-                "X-Request-Id": request_id,
-            },
+            headers=request_headers,
         )
         record_request_id(headers)
         write_json(args.output / f"{name}.json", json_body(raw))
@@ -222,6 +232,7 @@ def main() -> int:
         notification_headers = {"Content-Type": "application/json"}
         if session_id:
             notification_headers["MCP-Session-Id"] = session_id
+        notification_headers["MCP-Protocol-Version"] = "2025-06-18"
         notification_status, notification_response_headers, notification_body = request(
             opener,
             endpoint,
@@ -245,6 +256,7 @@ def main() -> int:
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
             "mcp-evidence-tools-list",
             token,
+            protocol_version="2025-06-18",
         )
         tools = list_body.get("result", {}).get("tools", [])
         names = [item.get("name") for item in tools if isinstance(item, dict) and item.get("name")]
@@ -264,6 +276,7 @@ def main() -> int:
             },
             "mcp-evidence-tools-call",
             token,
+            protocol_version="2025-06-18",
         )
         structured = read_body.get("result", {}).get("structuredContent")
         result["READ_TOOL_RESULT"] = f"HTTP {read_status};tool=list_executors;structured_content={'present' if structured is not None else 'absent'}"
