@@ -1,0 +1,22 @@
+Conectando a esteban@frida.inovacaosistemas.com.br:2200...
+Tente autenticar agora; Ctrl-C encerra o acompanhamento.
+
+===== estado inicial =====
+active
+● codex-bridge-gateway.service - Codex Bridge Gateway
+     Loaded: loaded (/etc/systemd/system/codex-bridge-gateway.service; enabled; preset: enabled)
+     Active: active (running) since Fri 2026-11-13 16:02:52 -03; 30min ago
+   Main PID: 5491 (uvicorn)
+      Tasks: 4 (limit: 256)
+        CPU: 2min 10.950s
+     CGroup: /system.slice/codex-bridge-gateway.service
+             └─5491 /opt/codex-bridge/.venv/bin/python3 /opt/codex-bridge/.venv/bin/uvicorn gateway.app.main:app --host 0.0.0.0 --port 18080
+
+Nov 13 16:30:20 frida uvicorn[5491]:   File "/usr/lib/python3.11/json/decoder.py", line 355, in raw_decode
+Nov 13 16:30:20 frida uvicorn[5491]:     raise JSONDecodeError("Expecting value", s, err.value) from None
+Nov 13 16:30:20 frida uvicorn[5491]: json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+Nov 13 16:30:20 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "GET /.well-known/oauth-protected-resource/mcp HTTP/1.1" 200 OK
+Nov 13 16:30:20 frida uvicorn[5491]: INFO:     192.168.71.50:0 - "GET /.well-known/oauth-authorization-server HTTP/1.1" 200 OK
+
+===== acompanhando gateway e Nginx =====
+[gateway] mensagens do serviço
