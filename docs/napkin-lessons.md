@@ -1946,3 +1946,24 @@ O mesmo vale para a timeline: o banco pode registrar eventos internos
 `mission.*`, mas a API pública ainda precisa preservar os eventos `task.*` que
 clientes e testes antigos consomem. Compatibilidade vive na DTO e na query
 paginada, não em payload bruto de auditoria.
+
+
+## 2026-10-16 — branch fora de development não significa funcionalidade ausente
+
+Antes de mesclar uma branch muito atrás, compare os commits exclusivos, procure equivalência de patch e acompanhe o histórico dos caminhos no branch de integração. Uma feature pode ter sido refeita e integrada com novos commits; o patch antigo pode parecer exclusivo e ainda assim regredir dezenas de arquivos. Commits marcados `parked, failed` e reversões de merges acidentais são evidência para parar, não convites para integração. Preserve a ref até que a limpeza de branches seja pedida separadamente.
+
+## 2026-10-16 — issue aberta não prova feature ausente (e vice-versa)
+
+Para avaliar `feature/gh-*`, confira a issue, o histórico de integração em
+`development`, a implementação atual e os critérios de aceite. O nome da branch
+identifica a issue, mas branch estacionada ou issue ainda aberta não diz, por si
+só, se o trabalho está ausente: uma implementação posterior pode estar
+integrada enquanto a issue ficou sem atualização. Registre separadamente o que
+existe, o que falta e quais testes existem; contagem de testes não é execução.
+
+## 2026-10-16 — commit documental com working tree compartilhada
+
+Quando o operador pede para publicar um artefato específico em checkout com
+outras mudanças locais, faça stage explícito por caminho e confira o diff
+staged antes do commit. Push confirmado não significa working tree limpa nem
+autoriza incluir as demais alterações.

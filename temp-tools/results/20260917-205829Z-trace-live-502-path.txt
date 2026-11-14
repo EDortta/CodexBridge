@@ -411,3 +411,6 @@ Connection: keep-alive
 2026/09/17 17:58:39 [error] 14810#14810: *38297 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /health?trace=cb60-20260917-205829Z-443 HTTP/1.1", upstream: "https://192.168.71.50:443/health?trace=cb60-20260917-205829Z-443", host: "codexbridge.inovacaosistemas.com.br"
 2026/09/17 17:58:40 [error] 14811#14811: *38299 upstream SSL certificate verify error: (20:unable to get local issuer certificate) while SSL handshaking to upstream, client: 187.10.45.41, server: codexbridge.inovacaosistemas.com.br, request: "GET /health?trace=cb60-20260917-205829Z-8443 HTTP/1.1", upstream: "https://192.168.71.50:443/health?trace=cb60-20260917-205829Z-8443", host: "codexbridge.inovacaosistemas.com.br:8443"
 CODEXBRIDGE_LIVE_502_TRACE_COMPLETE
+[development 0edd95f] results: 20260917-205829Z-trace-live-502-path
+ 1 file changed, 413 insertions(+)
+ create mode 100644 temp-tools/results/20260917-205829Z-trace-live-502-path.txt

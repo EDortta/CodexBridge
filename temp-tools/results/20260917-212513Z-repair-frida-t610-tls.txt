@@ -231,3 +231,8 @@ port_8443_oauth_canonical=ok
 187.10.45.41 - - [17/Sep/2026:18:25:27 -0300] "GET /health?trace=cb61-20260917-212513Z-8443 HTTP/1.1" 200 52 "-" "cb61-20260917-212513Z"
 CODEXBRIDGE_EXTERNAL_443_8443_OAUTH_READY
 exit_code=0
+[development c485a7f] results: 20260917-212513Z-repair-frida-t610-tls
+ 1 file changed, 233 insertions(+)
+ create mode 100644 temp-tools/results/20260917-212513Z-repair-frida-t610-tls.txt
+To https://github.com/EDortta/CodexBridge.git
+   7f61a37..c485a7f  development -> development

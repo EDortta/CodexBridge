@@ -60,3 +60,12 @@ scripts/agent-worktree.sh
 !.credentials/*.template
 !.credentials/*.dist
 # end AI-Agents kit
+
+# Local agent/session runtime state; never versioned.
+.claude-flow/
+.swarm/
+ruvector.db*
+*.db-wal
+*.db-shm
+claude-handoff-*.md
+coordination-status-*.txt

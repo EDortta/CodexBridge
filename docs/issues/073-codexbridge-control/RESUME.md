@@ -1,60 +1,29 @@
-# RESUME — WK-20260902-merge-thirteen-prs (epic #73)
+# RESUME — WK-20261016-gh-issue-implementation-audit (#73)
 
-- work_id: WK-20260902-merge-thirteen-prs
-- data: 2026-09-02
-- branch: `development` (`a40021c`, empurrado). Nada em `main`.
+- work_id: WK-20261016-gh-issue-implementation-audit
+- date: 2026-10-16
+- branch: `development` at `0e476b0`, pushed to `origin/development`; `main` unchanged
 
 ## Next Step (DO THIS FIRST)
 
-Aplicar as migrações `0012`–`0016` (`python3 scripts/apply_migrations.py`) e
-acrescentar a `location /control` ao nginx da frida — o bloco pronto está em
-`docs/operations.md` e já no `deploy/nginx/frida-codex-bridge.conf` versionado.
-O vhost é allowlist sem catch-all: sem essa entrada o painel dá 404 na borda,
-mesmo com a app servindo. Ambas são ação do operador; nenhum agente as executa.
+Decidir com o operador o destino de #5–#8 (aceite/fechamento ou follow-ups para
+as lacunas) e escolher o próximo recorte de #73 antes de iniciar implementação.
 
-Depois disso, a Stage 6 (Missions/Decisions/Audit convergindo no Control) é o
-próximo corte de código.
+## Estado atual
 
-## Current state
+- Relatório da auditoria publicado em
+  `docs/branch-issue-implementation-audit-2026-10-16.md` (commit `0e476b0`).
+- Issues #5–#8 e épico #73 estavam abertos no GitHub na consulta de 2026-10-16;
+  as APIs #5–#8 já estão em `development`, com #5/#7/#8 parciais e #6 cobrindo
+  seus critérios centrais por inspeção estática.
+- #73: Stages 1–4 implementadas, Stage 5 primeiro corte e Stages 6–7 sem
+  entrega demonstrada. `feature/gh-73` não tem patch exclusivo.
+- `/control/invite` chama o endpoint no código, mas inscrição real e deploy não
+  foram validados nesta sessão.
+- Nenhum teste foi executado nesta auditoria. Nenhum merge para `main` ou deploy.
 
-Stages 1–4 do épico entregues e mergeadas em `development`:
+## Working tree
 
-- **Stage 1** (domínio, `0009`) e **Stage 2** (visibilidade de frota, `/nodes`)
-  já estavam.
-- **Stage 3** — o node varre `AgentSettings.discovery_roots` e propõe
-  candidatos por `DISCOVERY_REPORT`; o painel adota ou nega
-  (`/api/v1/discovered-resources/{id}/adopt|deny`). `record_discovery_report`
-  escreve **só** `discovered_resources`: "o node propõe, o painel adota" é
-  estrutural, não convenção.
-- **Stage 4** — `effective_task_modes` faz uma autorização concedida gatear um
-  dispatch de verdade. Par sem `workspace_bindings` continua idêntico ao de
-  antes, permanentemente. O executor recusa por conta própria um modo que sua
-  configuração nunca ofereceu.
-- **Stage 5, primeiro corte** — CodexBridge Control: três telas HTML servidas
-  pelo próprio gateway.
-- **#76 (corte mínimo)** — token hasheado, invite/enroll/revoke, `registry.json`
-  vira semente.
-
-Contrato em **1.14.0**, publicado em `contract/1.14.0/`.
-
-## Checks
-
-`.venv/bin/python -m pytest -q`: **1371 passam, 9 skipped, 0 falham** (duas
-rodadas). `tests/contract/`: 145 passam.
-
-## NOT validated
-
-Nenhum deploy. Nenhum node real se inscreveu por um gateway vivo; o painel
-nunca abriu num navegador real; as migrações nunca rodaram contra MySQL; o
-bloco de nginx nunca passou por um nginx de verdade.
-
-## Watch for
-
-- `/control/invite` é a quarta tela e **não funciona**: a build do painel foi
-  cortada antes de `POST /api/v1/nodes/invite` existir na linhagem dela. O
-  endpoint está em `development` agora, então a tela precisa de uma PR curta
-  que a ligue — a página explica isso ao operador em vez de mostrar um
-  formulário que não posta para lugar nenhum.
-- `Decision.decisionType` ficou fora de `required` no contrato, embora o
-  servidor sempre o envie (ver `handoff.md`). Reversível na próxima mudança de
-  namespace.
+RESUME e `docs/napkin-lessons.md` têm alterações desta sessão ainda locais e não
+commitadas. Alterações preexistentes em `temp-tools/results/*` e artefatos
+não rastreados de coordenação/execução foram preservados fora do commit.
