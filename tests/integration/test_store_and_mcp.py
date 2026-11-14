@@ -402,6 +402,36 @@ async def test_startup_recovery_marks_running_as_lost(db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_startup_recovery_expires_waiting_human_mission(db_session: AsyncSession):
+    task = await store.create_task(
+        db_session,
+        SubmitTaskRequest(
+            executor_id="T610",
+            project_id="p1",
+            instruction="fazer deploy em production",
+            mode=TaskMode.IMPLEMENT,
+            timeout_seconds=300,
+            priority=TaskPriority.NORMAL,
+            run_when_available=True,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        ),
+        executor_online=False,
+    )
+    assert task.state == TaskState.AWAITING_APPROVAL.value
+    task.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await db_session.commit()
+
+    recovered = await store.recover_tasks_after_startup(db_session)
+
+    assert recovered["expired"] == 1
+    reloaded_task = await store.get_task(db_session, task.id)
+    assert reloaded_task.state == TaskState.EXPIRED.value
+    mission = await db_session.get(store.MissionModel, task.mission_id)
+    assert mission is not None
+    assert mission.state == "expired"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "pending_state",
     [TaskState.PAUSING, TaskState.PAUSED, TaskState.RESUMING, TaskState.RESTARTING],

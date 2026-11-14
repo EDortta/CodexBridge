@@ -102,6 +102,7 @@ LEGAL_MISSION_TRANSITIONS: dict[str, frozenset[str]] = {
             MissionState.RUNNING.value,
             MissionState.BLOCKED.value,
             MissionState.CANCELLED.value,
+            MissionState.EXPIRED.value,
         }
     ),
     MissionState.BLOCKED.value: frozenset(
