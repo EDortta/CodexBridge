@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 import sys
 from time import monotonic
@@ -34,7 +35,7 @@ def read_credentials(path: Path) -> tuple[str, str]:
     return username, password
 
 
-def request(url: str, *, body: bytes | None = None, token: str | None = None) -> tuple[int, dict, float]:
+def request(url: str, *, body: bytes | None = None, token: str | None = None) -> tuple[int, dict, float, str]:
     headers = {"Accept": "application/json"}
     if body is not None:
         headers["Content-Type"] = "application/json"
@@ -45,9 +46,11 @@ def request(url: str, *, body: bytes | None = None, token: str | None = None) ->
     try:
         with urlopen(req, timeout=TIMEOUT_SECONDS) as response:
             status = response.status
+            server_timing = response.headers.get("Server-Timing", "")
             payload = response.read(1024 * 1024)
     except HTTPError as exc:
         status = exc.code
+        server_timing = exc.headers.get("Server-Timing", "")
         payload = exc.read(1024 * 1024)
     elapsed = round(monotonic() - started, 3)
     try:
@@ -56,26 +59,35 @@ def request(url: str, *, body: bytes | None = None, token: str | None = None) ->
             document = {}
     except (ValueError, UnicodeDecodeError):
         document = {}
-    return status, document, elapsed
+    return status, document, elapsed, server_timing
 
 
 def diagnose(base: str, credential_file: Path) -> dict:
     username, password = read_credentials(credential_file)
     try:
-        status, response, seconds = request(
+        status, response, seconds, timings = request(
             base + "/api/v1/auth/sign-in",
             body=json.dumps({"username": username, "password": password}).encode("utf-8"),
         )
     finally:
         del password
     report: dict = {"sign_in": {"http_status": status, "duration_seconds": seconds}}
+    # Whitelist numeric durations only. Unknown or malformed timing headers
+    # are discarded instead of being published or logged.
+    measured = {}
+    for phase in ("password_verify", "grant_persist"):
+        match = re.search(r"(?:^|,)\\s*" + phase + r";dur=([0-9]+(?:\\.[0-9]+)?)\\s*(?:,|$)", timings)
+        if match:
+            measured[phase + "_ms"] = float(match.group(1))
+    if measured:
+        report["sign_in"]["server_timing"] = measured
     token = response.get("accessToken")
     if status != 200 or not isinstance(token, str) or not token:
         report["me"] = {"status": "not_attempted"}
         report["status"] = "failed"
         return report
     try:
-        me_status, _, me_seconds = request(base + "/api/v1/auth/me", token=token)
+        me_status, _, me_seconds, _ = request(base + "/api/v1/auth/me", token=token)
     finally:
         del token, response
     report["me"] = {"http_status": me_status, "duration_seconds": me_seconds}
