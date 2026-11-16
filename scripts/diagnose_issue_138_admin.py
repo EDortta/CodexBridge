@@ -76,7 +76,7 @@ def diagnose(base: str, credential_file: Path) -> dict:
     # are discarded instead of being published or logged.
     measured = {}
     for phase in ("password_verify", "grant_persist"):
-        match = re.search(r"(?:^|,)\\s*" + phase + r";dur=([0-9]+(?:\\.[0-9]+)?)\\s*(?:,|$)", timings)
+        match = re.search(r"(?:^|,)\s*" + phase + r";dur=([0-9]+(?:\.[0-9]+)?)\s*(?:,|$)", timings)
         if match:
             measured[phase + "_ms"] = float(match.group(1))
     if measured:
