@@ -203,8 +203,16 @@ def test_real_gateway_leaves_mcp_error_shape_untouched() -> None:
     with TestClient(gateway_app, raise_server_exceptions=False) as gateway_client:
         response = gateway_client.post("/mcp", json={"method": "tools/list"})
     assert response.status_code in {401, 403}
-    assert "detail" in response.json()
-    assert "requestId" not in response.json()
+    body = response.json()
+    # The MCP endpoint deliberately returns JSON-RPC even for transport-level
+    # authentication failures. The /api convention must not rewrap its body.
+    assert body["jsonrpc"] == "2.0"
+    assert body["error"]["data"]["http_status"] == response.status_code
+    assert body["error"]["data"]["detail"] in {
+        "missing_bearer_token", "invalid_bearer_token"
+    }
+    assert "detail" not in body
+    assert "requestId" not in body
 
 
 # --------------------------------------------------------------------------
