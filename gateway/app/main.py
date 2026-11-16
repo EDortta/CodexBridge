@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -661,7 +662,14 @@ async def oauth_authorize_submit(
         extra={"correlation_id": None, "task_id": None, "executor_id": None},
     )
 
+    auth_started = time.perf_counter()
     outcome = await authenticate_async(settings.user_registry_file, username, password)
+    auth_elapsed_ms = round((time.perf_counter() - auth_started) * 1000, 1)
+    auth_logger.info(
+        "oauth_authorize_timing phase=password_verify elapsed_ms=%s outcome=%s",
+        auth_elapsed_ms,
+        "ok" if outcome.ok else "rejected",
+    )
     user = outcome.user
     auth_logger.info(
         "oauth_authorize_result client=%s client_id=%s login_fp=%s outcome=%s resolved_user_id=%s enabled=%s registry=%s",
@@ -709,6 +717,7 @@ async def oauth_authorize_submit(
         redirect_uri.split("/", 3)[2] if "://" in redirect_uri else "invalid",
         extra={"correlation_id": None, "task_id": None, "executor_id": None},
     )
+    persistence_started = time.perf_counter()
     await store.create_oauth_authorization_code(
         session,
         code=code,
@@ -719,6 +728,10 @@ async def oauth_authorize_submit(
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method,
         expires_at=expires_in(settings.oauth_authorization_code_ttl_seconds),
+    )
+    auth_logger.info(
+        "oauth_authorize_timing phase=code_persist elapsed_ms=%s",
+        round((time.perf_counter() - persistence_started) * 1000, 1),
     )
     redirect = f"{redirect_uri}?code={code}"
     if state:
