@@ -1,0 +1,14 @@
+{
+  "resource": "https://codexbridge.inovacaosistemas.com.br/mcp",
+  "authorization_servers": [
+    "https://codexbridge.inovacaosistemas.com.br"
+  ],
+  "bearer_methods_supported": [
+    "header"
+  ],
+  "scopes_supported": [
+    "codexbridge.read",
+    "codexbridge.task.cancel",
+    "codexbridge.task.submit"
+  ]
+}
