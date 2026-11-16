@@ -204,7 +204,7 @@ def main() -> int:
             admin_rc, seconds = run_logged(
                 ["bash", "-c", 'source "$1" >/dev/null && test -n "$CODEXBRIDGE_ADMIN_TOKEN"',
                  "issue-138", str(helper)],
-                directory / "admin-login.log", timeout=60,
+                directory / "admin-login.log", timeout=60, cwd=helper.parent,
             )
             admin = {"status": "pass" if admin_rc == 0 else "failed",
                      "exit_code": admin_rc, "duration_seconds": seconds}
