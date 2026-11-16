@@ -1559,3 +1559,18 @@ async def test_the_administrative_action_describes_what_the_missions_list_endpoi
 
     assert reads_all(alice["accessToken"]) is False
     assert reads_all(admin["accessToken"]) is True
+
+
+def test_successful_sign_in_exposes_only_numeric_phase_timings(api) -> None:
+    """Issue #138: a real client can separate KDF from SQLite without secrets."""
+    import re
+
+    response = sign_in(api)
+    assert response.status_code == 200
+    timing = response.headers.get("Server-Timing", "")
+    assert re.fullmatch(
+        r"password_verify;dur=[0-9]+(?:\.[0-9]+)?, grant_persist;dur=[0-9]+(?:\.[0-9]+)?",
+        timing,
+    ), timing
+    assert PASSWORD not in timing
+    assert response.json()["accessToken"] not in timing
