@@ -723,7 +723,10 @@ async def oauth_authorize_submit(
     redirect = f"{redirect_uri}?code={code}"
     if state:
         redirect = f"{redirect}&state={state}"
-    return RedirectResponse(redirect, status@app.post("/oauth/token")
+    return RedirectResponse(redirect, status_code=302)
+
+
+@app.post("/oauth/token")
 async def oauth_token(
     response: Response,
     grant_type: str = Form(...),
