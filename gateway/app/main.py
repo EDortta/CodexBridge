@@ -836,6 +836,11 @@ async def oauth_token(
     if client_id in refresh_clients:
         refresh_token = generate_refresh_token()
         grant_id = generate_grant_id()
+        refresh_deadline = expires_in(settings.oauth_browser_refresh_ttl_seconds)
+        access_deadline = min(
+            expires_in(settings.oauth_access_token_ttl_seconds),
+            refresh_deadline,
+        )
         await store.issue_auth_grant(
             session,
             grant_id=grant_id,
@@ -844,8 +849,8 @@ async def oauth_token(
             client_id=client_id,
             user_id=item.user_id,
             scopes=scopes,
-            access_expires_at=expires_in(settings.oauth_access_token_ttl_seconds),
-            refresh_expires_at=expires_in(settings.oauth_browser_refresh_ttl_seconds),
+            access_expires_at=access_deadline,
+            refresh_expires_at=refresh_deadline,
             event_type="auth.signed_in",
         )
         return {
