@@ -54,6 +54,8 @@ allowlist exists to withhold. One token table, one ceiling.
 from __future__ import annotations
 
 import json
+import logging
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, Request, Response
@@ -169,7 +171,13 @@ async def sign_in(
     # no `await` in it. Called directly from this handler it holds the event
     # loop, and the limiter's 120/minute/bucket would then buy an unauthenticated
     # caller ~36 s of stalled gateway per minute per address.
+    sign_in_started = time.perf_counter()
     outcome = await authenticate_async(settings.user_registry_file, body.username, body.password)
+    password_verify_ms = round((time.perf_counter() - sign_in_started) * 1000, 1)
+    logging.getLogger("codexbridge.auth").info(
+        "auth_sign_in_timing phase=password_verify elapsed_ms=%s",
+        password_verify_ms,
+    )
 
     if not outcome.ok or outcome.user is None:
         # Recorded against the resolved user when there is one. The string the
@@ -195,6 +203,7 @@ async def sign_in(
     access_expires_at = expires_in(settings.oauth_access_token_ttl_seconds)
     refresh_expires_at = expires_in(settings.oauth_refresh_token_ttl_seconds)
 
+    persistence_started = time.perf_counter()
     await store.issue_auth_grant(
         session,
         grant_id=grant_id,
@@ -206,6 +215,10 @@ async def sign_in(
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
         event_type="auth.signed_in",
+    )
+    logging.getLogger("codexbridge.auth").info(
+        "auth_sign_in_timing phase=grant_persist elapsed_ms=%s",
+        round((time.perf_counter() - persistence_started) * 1000, 1),
     )
 
     _no_store(response)
