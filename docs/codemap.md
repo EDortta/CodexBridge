@@ -3579,3 +3579,62 @@ tests/
 ### `tests/unit/test_worker_mission_correlations.py`
 
 > SQLite regression tests for exact replay, scope conflict, absent admission, grant expiry and revocation.
+
+
+### `scripts/diagnose_mvp_gateway.py`
+
+- `run()`
+- `main()`
+
+### `scripts/run_agent_mvp_tests.py`
+
+- `git()`
+- `publisher_path()`
+- `publish()`
+- `main()`
+
+### `scripts/run_issue_138_evidence.py`
+
+- `git()`
+- `run_logged()`
+- `publisher_path()`
+- `publish()`
+- `network_probe()`
+- `main()`
+
+### `tests/integration/test_mcp_transport.py`
+
+- `_principal()`
+- `test_mcp_lifecycle_accepts_notifications_and_read_tool()`
+- `test_mcp_invalid_json_is_jsonrpc_parse_error()`
+- `test_mcp_non_object_json_is_jsonrpc_invalid_request()`
+- `test_mcp_authorization_refusals_are_structured_jsonrpc_errors()`
+- `test_mcp_configuration_http_exception_is_structured_without_http_500()`
+
+### `tests/unit/test_codexbridge_user.py`
+
+- `test_list_users_does_not_prompt_or_expose_password_hash()`
+
+### `tests/unit/test_db_session.py`
+
+- `test_sqlite_connection_waits_for_writers_and_uses_wal()`
+- `test_sqlite_memory_connection_keeps_memory_journal()`
+
+### `tests/unit/test_mvp_agent_ws_lifecycle.py`
+
+- `Socket()`
+- `Runner()`
+- `dispatch()`
+- `service_for()`
+- `test_dispatch_ack_precedes_result()`
+- `test_concurrent_duplicate_dispatch_does_not_restart_task()`
+
+### `tools/codexbridge-mcp-evidence.py`
+
+- `NoRedirect()`
+- `read_ini()`
+- `request()`
+- `json_body()`
+- `header()`
+- `write_json()`
+- `main()`
