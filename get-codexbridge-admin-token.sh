@@ -22,3 +22,7 @@ if [ -z "$CODEXBRIDGE_ADMIN_TOKEN" ]; then
 else
   echo "Login realizado; token recebido."
 fi
+
+curl -fsS \
+  -H "Authorization: Bearer $CODEXBRIDGE_ADMIN_TOKEN" \
+  "$BASE/api/v1/auth/me" | jq
