@@ -129,6 +129,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--environment", default="devel3")
     parser.add_argument("--base-url", default=DEFAULT_BASE)
+    parser.add_argument("--diagnostics-only", action="store_true",
+                        help="Only network and per-stage admin timing; skip pytest")
     parser.add_argument("--skip-admin-login", action="store_true",
                         help="Skip local admin-login timing if no credentials are available")
     parser.add_argument("--pytest-timeout", type=int, default=900)
@@ -165,26 +167,28 @@ def main() -> int:
     directory.mkdir(parents=True, exist_ok=False, mode=0o700)
     tests_log = directory / "pytest.log"
     print(f"RUN_ID={run_id}", flush=True)
-    print("CHECK=pytest_full_suite", flush=True)
-    pytest_rc, pytest_seconds = run_logged(
-        [sys.executable, "-m", "pytest", "-q", "--tb=short"],
-        tests_log, timeout=args.pytest_timeout,
-    )
-    raw = tests_log.read_text(encoding="utf-8", errors="replace")
-    counts = {}
-    for value, label in SUMMARY.findall(raw):
-        counts[label] = int(value)
-    failures = sorted(set(FAILURE.findall(raw)))
-    # Do not upload raw logs: test output can include stack traces, paths,
-    # user records and secrets. Only constrained test IDs leave the host.
-    tests = {
-        "exit_code": pytest_rc,
-        "duration_seconds": pytest_seconds,
-        "counts": counts,
-        "failed_test_ids": failures[:100],
-        "log_retained_locally": True,
-    }
-    print("PYTEST_RESULT=" + json.dumps(tests, sort_keys=True), flush=True)
+    if args.diagnostics_only:
+        pytest_rc = 0
+        tests = {"status": "not_run", "reason": "diagnostics_only"}
+    else:
+        print("CHECK=pytest_full_suite", flush=True)
+        pytest_rc, pytest_seconds = run_logged(
+            [sys.executable, "-m", "pytest", "-q", "--tb=short"],
+            tests_log, timeout=args.pytest_timeout,
+        )
+        raw = tests_log.read_text(encoding="utf-8", errors="replace")
+        counts = {}
+        for value, label in SUMMARY.findall(raw):
+            counts[label] = int(value)
+        failures = sorted(set(FAILURE.findall(raw)))
+        tests = {
+            "exit_code": pytest_rc,
+            "duration_seconds": pytest_seconds,
+            "counts": counts,
+            "failed_test_ids": failures[:100],
+            "log_retained_locally": True,
+        }
+        print("PYTEST_RESULT=" + json.dumps(tests, sort_keys=True), flush=True)
 
     print("CHECK=public_network_timing", flush=True)
     network_rc, network = network_probe(args.base_url, directory / "network.json")
@@ -224,7 +228,7 @@ def main() -> int:
         "schema": 1,
         "project": "CodexBridge",
         "feature": "issue-138-oauth-session",
-        "phase": "verification",
+        "phase": "diagnostics" if args.diagnostics_only else "verification",
         "branch": branch,
         "commit": commit,
         "timestamp_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -239,7 +243,7 @@ def main() -> int:
             "admin_login": admin,
             "remote_publication_required": True,
         },
-        "detail": "Sanitized verification metadata only; raw logs private on executor",
+        "detail": "Sanitized diagnostic metadata only; raw logs private on executor" if args.diagnostics_only else "Sanitized verification metadata only; raw logs private on executor",
     }
     relative = (
         "CodexBridge/issue-138-oauth-session/"
