@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     # deliberately not `task.requested_by_email`: see
     # `docs/required-reading.md`, "Fontes locais — fora do checkout".
     notification_to: str | None = None
+    # Explicit opt-in for OAuth clients eligible for rotating refresh tokens.
+    # Separate from the mobile refresh grant; empty disables browser refresh.
+    oauth_refresh_client_ids: str = "chatgpt-codexbridge"
+    oauth_browser_refresh_ttl_seconds: int = 604800
     oauth_access_token_ttl_seconds: int = 3600
     oauth_authorization_code_ttl_seconds: int = 600
     # Absolute lifetime of a mobile sign-in (issue #4). Rotation carries this
