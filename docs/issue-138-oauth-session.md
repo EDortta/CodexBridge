@@ -96,3 +96,54 @@ python3 scripts/run_issue_138_evidence.py --diagnostics-only
 The published manifest will include numeric `sign_in.server_timing` if
 the deployed gateway contains the instrumentation; absence of that field
 means no server phase attribution yet.
+
+
+## Frida: limited patch procedure, no migrations
+
+The dedicated scripts stage and apply only:
+`gateway/app/main.py`, `gateway/app/api/routes/auth.py`,
+`gateway/app/core/config.py`, `gateway/app/core/oauth.py`.
+They do not deploy the whole repository, perform migrations, restore a database
+or require Git on frida. Frida's live hashes **must exactly match**
+`origin/development` at staging time; otherwise `--check` and `--apply`
+refuse to modify the service. A mismatch requires inspecting the actual frida
+version, not bypassing the guard.
+
+After obtaining a successful central evidence manifest, stage from devel3:
+
+```bash
+cd /home/esteban/Sync/Projects/AI/CodexBridge-oauth-138
+git fetch origin
+git pull --ff-only origin fix/issue-138-oauth-session-ux
+bash -n scripts/stage-frida-issue-138.sh scripts/apply-frida-issue-138.sh
+bash scripts/stage-frida-issue-138.sh
+```
+
+Save the printed `STAGED_ONLY=issue138-YYYYMMDDTHHMMSSZ`, then use
+that ID **on frida** for read-only preflight:
+
+```bash
+cd "$HOME/codexbridge-staging/issue138-YYYYMMDDTHHMMSSZ"
+sudo bash ./apply-frida-issue-138.sh --check issue138-YYYYMMDDTHHMMSSZ
+```
+
+Only after `CHECK=ok` and operator review, apply separately:
+
+```bash
+cd "$HOME/codexbridge-staging/issue138-YYYYMMDDTHHMMSSZ"
+sudo bash ./apply-frida-issue-138.sh --apply issue138-YYYYMMDDTHHMMSSZ
+```
+
+The applicator creates a backup under
+`/var/backups/codexbridge/<release-id>/old`, validates individual SHA-256
+hashes and Python syntax, restarts the Gateway, and checks local HTTP health
+and OAuth discovery. Failure after modification automatically restores old
+files and restarts. No DB rollback: this procedure never migrates the DB.
+Rollback applies to the four code files only, not OAuth grants subsequently
+issued or browser sessions.
+
+After application, run central diagnostics again. `Server-Timing` should
+report `password_verify` and `grant_persist` for the administrative
+`/api/v1/auth/sign-in` endpoint. Independently test real ChatGPT OAuth
+refresh with client-side behavior; a healthy Gateway does not prove the
+external connector renewed credentials automatically.
