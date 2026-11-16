@@ -529,6 +529,7 @@ async def test_handle_dispatch_forgets_the_task_only_after_the_result_is_sent(tm
 
     assert calls == [
         "mark_dispatched:task-1",
+        "send:task.ack",
         "run_task:start:task-1",
         "run_task:end:task-1",
         "send:task.result",
