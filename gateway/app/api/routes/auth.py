@@ -216,9 +216,15 @@ async def sign_in(
         refresh_expires_at=refresh_expires_at,
         event_type="auth.signed_in",
     )
+    grant_persist_ms = round((time.perf_counter() - persistence_started) * 1000, 1)
     logging.getLogger("codexbridge.auth").info(
         "auth_sign_in_timing phase=grant_persist elapsed_ms=%s",
-        round((time.perf_counter() - persistence_started) * 1000, 1),
+        grant_persist_ms,
+    )
+    # Exposed only after a successful login; values are elapsed durations,
+    # not account identifiers, password details, credentials, or database data.
+    response.headers["Server-Timing"] = (
+        f"password_verify;dur={password_verify_ms}, grant_persist;dur={grant_persist_ms}"
     )
 
     _no_store(response)
