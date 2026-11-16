@@ -3638,3 +3638,20 @@ tests/
 - `header()`
 - `write_json()`
 - `main()`
+
+### `scripts/diagnose_issue_138_admin.py`
+
+> Read-only staged timing of administrative login and /auth/me; never publishes credentials.
+
+- `read_credentials(path)`
+- `request(url)`
+- `diagnose(base, credential_file)`
+- `main()`
+
+### `tests/unit/test_issue_138_diagnostics.py`
+
+> Deterministic sanitized timing and credential-redaction regression tests.
+
+- `test_credentials_use_existing_admin_ini_without_exposing_password()`
+- `test_report_has_only_status_and_per_stage_timings()`
+- `test_rejected_login_does_not_call_me()`
