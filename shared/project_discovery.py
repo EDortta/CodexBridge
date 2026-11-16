@@ -21,6 +21,7 @@ from pathlib import Path
 EXCLUDED_DIR_NAMES = frozenset(
     {
         ".git",
+        ".credentials",
         ".venv",
         "venv",
         "env",
@@ -82,9 +83,16 @@ def walk_for_git_repos(root: Path, max_depth: int) -> list[Path]:
         if has_git:
             found.append(directory)
         for entry in entries:
-            if not entry.is_dir() or entry.is_symlink():
-                continue
+            # Check the name before stat(): protected files inside excluded
+            # trees must never be inspected by the discovery scanner.
             if is_excluded(entry.name):
+                continue
+            try:
+                if entry.is_symlink() or not entry.is_dir():
+                    continue
+            except OSError:
+                # A single unreadable or disappearing entry must not abort
+                # discovery of otherwise accessible repositories.
                 continue
             _recurse(entry, depth + 1)
 

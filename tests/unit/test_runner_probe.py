@@ -33,7 +33,8 @@ class _FakeProcess:
     so nothing else needs faking.
     """
 
-    def __init__(self, stdout: bytes = b"", hang: bool = False) -> None:
+    def __init__(self, stdout: bytes = b"", hang: bool = False, returncode: int = 0) -> None:
+        self.returncode = returncode
         self._stdout = stdout
         self._hang = hang
         self.killed = False
@@ -93,6 +94,51 @@ async def test_probe_reports_available_and_the_parsed_version(monkeypatch, runne
 
     assert result.available is True
     assert result.version == "tool-version 9.9.9"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returncode,expected", [(0, True), (1, False)])
+async def test_codex_probe_checks_authentication_without_exposing_output(
+    monkeypatch, returncode, expected
+) -> None:
+    runner = CodexRunner(AgentSettings(codex_bin="codex", _env_file=None))
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/codex")
+    commands = []
+
+    async def fake_exec(*args, **_kwargs):
+        commands.append(args)
+        if args[-1] == "--version":
+            return _FakeProcess(stdout=b"codex-cli 0.166.0\n")
+        return _FakeProcess(
+            stdout=b"private account identity",
+            returncode=returncode,
+        )
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+    result = await runner.probe()
+    assert result.available is expected
+    assert result.version == "codex-cli 0.166.0"
+    assert commands == [("codex", "--version"), ("codex", "login", "status")]
+    assert "private account identity" not in str(result)
+    if not expected:
+        assert result.detail == "authentication required"
+
+
+@pytest.mark.asyncio
+async def test_codex_probe_authentication_timeout(monkeypatch) -> None:
+    runner = CodexRunner(AgentSettings(codex_bin="codex", _env_file=None))
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/codex")
+    monkeypatch.setattr(codex_module, "_PROBE_TIMEOUT_SECONDS", 0.01)
+
+    async def fake_exec(*args, **_kwargs):
+        if args[-1] == "--version":
+            return _FakeProcess(stdout=b"codex-cli 1.0\n")
+        return _FakeProcess(hang=True)
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+    result = await runner.probe()
+    assert result.available is False
+    assert result.detail == "authentication check timed out"
 
 
 @pytest.mark.asyncio
