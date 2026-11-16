@@ -331,6 +331,16 @@ def render_authorize_form(
         background: #2bcdb7; color: #041411; font-size: 15px; font-weight: 850; cursor: pointer;
       }}
       button:hover {{ filter: brightness(1.06); }}
+      button:disabled {{ opacity: .7; cursor: progress; }}
+      .auth-status {{ margin-top: 12px; color: #d1f5e9; font-size: 14px; min-height: 21px; }}
+      .spinner {{
+        display: none; width: 15px; height: 15px; vertical-align: -3px;
+        margin-right: 9px; border: 2px solid #0c4a45; border-top-color: transparent;
+        border-radius: 50%; animation: spin .7s linear infinite;
+      }}
+      button:disabled .spinner {{ display: inline-block; }}
+      @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+      @media (prefers-reduced-motion: reduce) {{ .spinner {{ animation: none; }} }}
       .alert {{
         margin: 0 0 16px; padding: 11px 12px; border-radius: 9px;
         color: #ffc3cb; background: #34171c; border: 1px solid #71333c; font-size: 14px;
@@ -345,7 +355,7 @@ def render_authorize_form(
       <p class="lead">Sign in to allow ChatGPT to use the CodexBridge tools available to your account.</p>
       <div class="client"><span class="dot"></span><span>Secure OAuth authorization · PKCE S256</span></div>
       {error_html}
-      <form method="post" action="/oauth/authorize">
+      <form id="oauth-login-form" method="post" action="/oauth/authorize">
         <input type="hidden" name="response_type" value="code" />
         <input type="hidden" name="client_id" value="{html.escape(client_id)}" />
         <input type="hidden" name="redirect_uri" value="{html.escape(redirect_uri)}" />
@@ -358,10 +368,39 @@ def render_authorize_form(
         <label for="password">Password</label>
         <input id="password" name="password" type="password" autocomplete="current-password" required />
         <div class="row"><a href="/oauth/password/forgot">Forgot password?</a></div>
-        <button type="submit">Continue to ChatGPT</button>
+        <button id="oauth-submit" type="submit"><span class="spinner" aria-hidden="true"></span><span id="oauth-submit-label">Continue to ChatGPT</span></button>
+        <div id="oauth-status" class="auth-status" role="status" aria-live="polite" aria-atomic="true"></div>
       </form>
       <p class="foot">Your password is handled by CodexBridge and is never shared with ChatGPT.</p>
     </main>
+    <script>
+      (() => {{
+        const form = document.getElementById('oauth-login-form');
+        const button = document.getElementById('oauth-submit');
+        const label = document.getElementById('oauth-submit-label');
+        const status = document.getElementById('oauth-status');
+        let submitted = false;
+        let warning;
+        form.addEventListener('submit', (event) => {{
+          if (submitted) {{ event.preventDefault(); return; }}
+          if (!form.reportValidity()) {{ event.preventDefault(); return; }}
+          submitted = true;
+          button.disabled = true;
+          label.textContent = 'Authenticating…';
+          status.textContent = 'Checking your credentials securely…';
+          warning = window.setTimeout(() => {{
+            status.textContent = 'Authentication is taking longer than expected. If the page does not change, check your connection and try again.';
+          }}, 15000);
+        }});
+        window.addEventListener('pageshow', () => {{
+          submitted = false;
+          button.disabled = false;
+          label.textContent = 'Continue to ChatGPT';
+          status.textContent = '';
+          window.clearTimeout(warning);
+        }});
+      }})();
+    </script>
   </body>
 </html>"""
     return HTMLResponse(body)
