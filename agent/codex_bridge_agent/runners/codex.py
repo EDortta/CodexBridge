@@ -95,7 +95,27 @@ class CodexRunner:
                 await process.wait()
                 return EngineProbe(available=False, detail="probe timed out")
             first_line = stdout.decode("utf-8", errors="replace").splitlines()[0] if stdout else ""
-            return EngineProbe(available=True, version=first_line.strip()[:200] or None)
+            version = first_line.strip()[:200] or None
+            # Version alone is insufficient: an installed CLI without
+            # credentials cannot execute a task. This command is local and
+            # must never forward its output (which may contain account data).
+            auth_process = await asyncio.create_subprocess_exec(
+                self.settings.codex_bin,
+                "login",
+                "status",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=filtered_environment(CODEX_ENV_ALLOWLIST),
+            )
+            try:
+                await asyncio.wait_for(auth_process.communicate(), timeout=_PROBE_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                auth_process.kill()
+                await auth_process.wait()
+                return EngineProbe(available=False, version=version, detail="authentication check timed out")
+            if auth_process.returncode != 0:
+                return EngineProbe(available=False, version=version, detail="authentication required")
+            return EngineProbe(available=True, version=version)
         except Exception:
             # Deliberately everything, not just `OSError`: see this method's
             # docstring. A probe that escapes costs the connection.
