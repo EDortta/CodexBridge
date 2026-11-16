@@ -65,7 +65,9 @@ def issuer_metadata() -> dict:
         "token_endpoint": f"{issuer}/oauth/token",
         "scopes_supported": sorted(settings.oauth_scopes()),
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code"],
+        "grant_types_supported": (["authorization_code", "refresh_token"]
+                                  if settings.oauth_refresh_client_ids.strip()
+                                  else ["authorization_code"]),
         "token_endpoint_auth_methods_supported": ["none"],
         "code_challenge_methods_supported": ["S256"],
     }
