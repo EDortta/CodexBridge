@@ -60,3 +60,39 @@ measurement has yet been recorded for this branch.**
 5. Deploy to frida with a rollback plan only after tests and explicit approval.
 
 No production change is implied by this branch.
+
+
+## Measured bottleneck and next production gate (2026-11-16)
+
+The centralized [run 203129-2ee7d7e7](https://github.com/EDortta/development-evidences/blob/main/CodexBridge/issue-138-oauth-session/fix-issue-138-oauth-session-ux/2026-11-16/203129-2ee7d7e7/manifest.json)
+records 11.092 seconds for `POST /api/v1/auth/sign-in` versus 0.296
+seconds for `GET /api/v1/auth/me`. The ~12-second problem is in the
+sign-in request, not discovery or /me. The current production gateway
+does not expose the internal password-versus-persistence timing.
+
+This branch now adds successful sign-in `Server-Timing` values for
+`password_verify` and `grant_persist` (milliseconds), and the
+credential-safe collector reads only these numeric values. They are
+**not available until this branch is deployed**.
+
+A controlled deploy to frida, with previous version available for
+rollback, is needed to establish whether the delay is the cost of the
+password KDF or database commit/lock contention. Do not weaken the
+constant-time account-enumeration protection or reduce KDF iterations
+based on network-only measurements.
+
+Fast validation after checkout (no deployment):
+
+```sh
+python3 -m pytest -q tests/unit/test_issue_138_diagnostics.py tests/integration/test_auth.py
+```
+
+After an approved deployment, use:
+
+```sh
+python3 scripts/run_issue_138_evidence.py --diagnostics-only
+```
+
+The published manifest will include numeric `sign_in.server_timing` if
+the deployed gateway contains the instrumentation; absence of that field
+means no server phase attribution yet.
