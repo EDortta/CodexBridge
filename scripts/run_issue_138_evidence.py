@@ -194,20 +194,29 @@ def main() -> int:
     admin_rc = 0
     if not args.skip_admin_login:
         helper = ROOT.parent / "CodexBridge-gateway" / "get-codexbridge-admin-token.sh"
-        if not helper.is_file():
-            admin = {"status": "unavailable", "reason": "admin_helper_missing"}
+        credentials = helper.parent / ".credentials" / "codex-bridge-initial-admin-password.ini"
+        if not credentials.is_file():
+            admin = {"status": "unavailable", "reason": "admin_credentials_missing"}
             admin_rc = 1
         else:
-            # The script's output stays private and is NOT published. The shell
-            # sources the helper, which exports CODEXBRIDGE_ADMIN_TOKEN.
-            print("CHECK=admin_login_timing", flush=True)
-            admin_rc, seconds = run_logged(
-                ["bash", "-c", 'source "$1" >/dev/null && test -n "$CODEXBRIDGE_ADMIN_TOKEN"',
-                 "issue-138", str(helper)],
-                directory / "admin-login.log", timeout=60, cwd=helper.parent,
+            print("CHECK=admin_login_phases", flush=True)
+            admin_log = directory / "admin-login.log"
+            admin_rc, duration = run_logged(
+                [sys.executable, str(ROOT / "scripts/diagnose_issue_138_admin.py"),
+                 "--credentials", str(credentials), "--base-url", args.base_url],
+                admin_log, timeout=65,
             )
-            admin = {"status": "pass" if admin_rc == 0 else "failed",
-                     "exit_code": admin_rc, "duration_seconds": seconds}
+            try:
+                # The diagnostic prints only whitelisted timings/status codes.
+                admin = json.loads(admin_log.read_text(encoding="utf-8"))
+                if not isinstance(admin, dict):
+                    raise ValueError("invalid diagnostic output")
+                if admin.get("status") != "pass":
+                    admin_rc = 1
+            except (OSError, ValueError, json.JSONDecodeError):
+                admin = {"status": "failed", "reason": "diagnostic_failed"}
+                admin_rc = 1
+            admin["total_duration_seconds"] = duration
     print("ADMIN_LOGIN_RESULT=" + json.dumps(admin, sort_keys=True), flush=True)
 
     status = "success" if not (pytest_rc or network_rc or admin_rc) else "failed"
