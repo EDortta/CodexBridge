@@ -39,7 +39,10 @@ from gateway.app.core.oauth import (
     expires_in,
     generate_access_token,
     generate_authorization_code,
+    generate_refresh_token,
+    generate_grant_id,
     issuer_metadata,
+    now_utc,
     pkce_challenge,
     protected_resource_metadata,
 )
@@ -720,21 +723,89 @@ async def oauth_authorize_submit(
     redirect = f"{redirect_uri}?code={code}"
     if state:
         redirect = f"{redirect}&state={state}"
-    return RedirectResponse(redirect, status_code=302)
-
-
-@app.post("/oauth/token")
+    return RedirectResponse(redirect, status@app.post("/oauth/token")
 async def oauth_token(
+    response: Response,
     grant_type: str = Form(...),
-    code: str = Form(...),
-    redirect_uri: str = Form(...),
     client_id: str = Form(...),
-    code_verifier: str = Form(...),
+    code: str | None = Form(default=None),
+    redirect_uri: str | None = Form(default=None),
+    code_verifier: str | None = Form(default=None),
+    refresh_token: str | None = Form(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    validate_oauth_client(client_id, redirect_uri)
+    # OAuth refresh is opt-in per registered public client, not a mobile
+    # refresh endpoint alias. Both share the single-use credential store,
+    # but never share a client identity or a refresh deadline.
+    refresh_clients = {
+        item.strip() for item in settings.oauth_refresh_client_ids.split(",") if item.strip()
+    } & settings.oauth_client_ids()
+    if grant_type == "refresh_token":
+        if client_id not in refresh_clients:
+            raise HTTPException(status_code=400, detail="unauthorized_client")
+        if not refresh_token:
+            raise HTTPException(status_code=400, detail="invalid_request")
+        status, item = await store.inspect_refresh_token(session, refresh_token)
+        # Client binding is checked before acting on replay. A different
+        # client cannot revoke another client's grant by presenting its token.
+        if item is not None and item.client_id != client_id:
+            raise HTTPException(status_code=400, detail="invalid_grant")
+        if status == store.REFRESH_REUSED and item is not None:
+            await store.revoke_auth_grant(
+                session, grant_id=item.grant_id, user_id=item.user_id,
+                reason="oauth_refresh_reuse",
+            )
+            raise HTTPException(status_code=400, detail="invalid_grant")
+        if status != store.REFRESH_VALID or item is None:
+            raise HTTPException(status_code=400, detail="invalid_grant")
+        user = lookup_user(settings.user_registry_file, item.user_id)
+        if user is None or not user.enabled:
+            await store.revoke_auth_grant(
+                session, grant_id=item.grant_id, user_id=item.user_id,
+                reason="account_unavailable",
+            )
+            raise HTTPException(status_code=400, detail="invalid_grant")
+        granted = set(json.loads(item.scopes_json or "[]"))
+        scopes = sorted(granted & set(user.scopes) & settings.oauth_scopes())
+        from datetime import timezone
+        deadline = item.expires_at
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        access_expires_at = min(
+            expires_in(settings.oauth_access_token_ttl_seconds), deadline
+        )
+        access_token = generate_access_token()
+        new_refresh_token = generate_refresh_token()
+        rotated = await store.issue_auth_grant(
+            session,
+            grant_id=item.grant_id,
+            access_token=access_token,
+            refresh_token=new_refresh_token,
+            client_id=client_id,
+            user_id=item.user_id,
+            scopes=scopes,
+            access_expires_at=access_expires_at,
+            refresh_expires_at=deadline,
+            event_type="auth.token_refreshed",
+            rotated_from_hash=item.token_hash,
+        )
+        if not rotated:
+            raise HTTPException(status_code=400, detail="invalid_grant")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        return {
+            "access_token": access_token,
+            "refresh_token": new_refresh_token,
+            "token_type": "Bearer",
+            "expires_in": max(0, int((access_expires_at - now_utc()).total_seconds())),
+            "scope": " ".join(scopes),
+        }
+
     if grant_type != "authorization_code":
         raise HTTPException(status_code=400, detail="unsupported_grant_type")
+    if not code or not redirect_uri or not code_verifier:
+        raise HTTPException(status_code=400, detail="invalid_request")
+    validate_oauth_client(client_id, redirect_uri)
     item = await store.consume_oauth_authorization_code(session, code)
     if item is None:
         raise HTTPException(status_code=400, detail="invalid_grant")
@@ -744,6 +815,30 @@ async def oauth_token(
         raise HTTPException(status_code=400, detail="invalid_grant")
     scopes = json.loads(item.scopes_json or "[]")
     access_token = generate_access_token()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    if client_id in refresh_clients:
+        refresh_token = generate_refresh_token()
+        grant_id = generate_grant_id()
+        await store.issue_auth_grant(
+            session,
+            grant_id=grant_id,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            client_id=client_id,
+            user_id=item.user_id,
+            scopes=scopes,
+            access_expires_at=expires_in(settings.oauth_access_token_ttl_seconds),
+            refresh_expires_at=expires_in(settings.oauth_browser_refresh_ttl_seconds),
+            event_type="auth.signed_in",
+        )
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "Bearer",
+            "expires_in": settings.oauth_access_token_ttl_seconds,
+            "scope": " ".join(scopes),
+        }
     await store.create_oauth_access_token(
         session,
         token=access_token,
@@ -757,6 +852,8 @@ async def oauth_token(
         "token_type": "Bearer",
         "expires_in": settings.oauth_access_token_ttl_seconds,
         "scope": " ".join(scopes),
+    }
+opes),
     }
 
 
