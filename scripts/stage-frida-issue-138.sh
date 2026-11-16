@@ -50,7 +50,11 @@ ssh -o BatchMode=yes -p "$PORT" "$HOST" "mkdir -m 700 -p ~/codexbridge-staging/$
 for name in checksums.txt patch.tar.gz patch.sha256 source.txt; do
   scp -q -P "$PORT" "$TMP/$name" "$HOST:codexbridge-staging/$RELEASE_ID/$name"
 done
-ssh -o BatchMode=yes -p "$PORT" "$HOST" "cd ~/codexbridge-staging/$RELEASE_ID && test \"\$(sha256sum patch.tar.gz | cut -d' ' -f1)\" = \"\$(cat patch.sha256)\""
+# Apply script is staged, never executed by the staging command.
+sha256sum scripts/apply-frida-issue-138.sh | cut -d' ' -f1 > "$TMP/apply.sha256"
+scp -q -P "$PORT" scripts/apply-frida-issue-138.sh "$HOST:codexbridge-staging/$RELEASE_ID/apply-frida-issue-138.sh"
+scp -q -P "$PORT" "$TMP/apply.sha256" "$HOST:codexbridge-staging/$RELEASE_ID/apply.sha256"
+ssh -o BatchMode=yes -p "$PORT" "$HOST" "cd ~/codexbridge-staging/$RELEASE_ID && test \"\$(sha256sum patch.tar.gz | cut -d' ' -f1)\" = \"\$(cat patch.sha256)\" && test \"\$(sha256sum apply-frida-issue-138.sh | cut -d' ' -f1)\" = \"\$(cat apply.sha256)\""
 printf 'STAGED_ONLY=%s\n' "$RELEASE_ID"
 printf 'SOURCE_COMMIT=%s\n' "$(git rev-parse HEAD)"
 printf 'APPLY_NOT_EXECUTED=1\n'
