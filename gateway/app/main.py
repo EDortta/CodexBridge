@@ -857,7 +857,7 @@ async def oauth_token(
             "access_token": access_token,
             "refresh_token": refresh_token,
             "token_type": "Bearer",
-            "expires_in": settings.oauth_access_token_ttl_seconds,
+            "expires_in": max(0, int((access_deadline - now_utc()).total_seconds())),
             "scope": " ".join(scopes),
         }
     await store.create_oauth_access_token(
