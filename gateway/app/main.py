@@ -856,8 +856,6 @@ async def oauth_token(
         "expires_in": settings.oauth_access_token_ttl_seconds,
         "scope": " ".join(scopes),
     }
-opes),
-    }
 
 
 @app.post("/mcp")
