@@ -446,3 +446,49 @@ def test_browser_refresh_opt_out_and_metadata(browser, monkeypatch) -> None:
     issued = _browser_oauth_tokens(browser)
     assert "refresh_token" not in issued
     assert "refresh_token" not in browser.get("/.well-known/oauth-authorization-server").json()["grant_types_supported"]
+
+
+def test_mobile_endpoint_cannot_redeem_browser_refresh(browser) -> None:
+    issued = _browser_oauth_tokens(browser)
+    response = browser.post("/api/v1/auth/refresh", json={
+        "refreshToken": issued["refresh_token"]
+    })
+    assert response.status_code == 401
+    # Refusal must not consume the browser's token.
+    valid = browser.post("/oauth/token", data={
+        "grant_type": "refresh_token",
+        "client_id": "chatgpt-codexbridge",
+        "refresh_token": issued["refresh_token"],
+    })
+    assert valid.status_code == 200, valid.text
+
+
+def test_browser_refresh_respects_absolute_deadline(browser, monkeypatch) -> None:
+    from gateway.app.core.config import settings
+    monkeypatch.setattr(settings, "oauth_browser_refresh_ttl_seconds", 1)
+    issued = _browser_oauth_tokens(browser)
+    # Avoid wall-clock sleeps: expire the stored credential deterministically.
+    from gateway.app.models.entities import OAuthRefreshTokenModel
+    from shared.security import hash_token
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import update
+    from gateway.app.db.session import get_session
+    override = app.dependency_overrides[get_session]
+
+    async def expire() -> None:
+        async for session in override():
+            await session.execute(
+                update(OAuthRefreshTokenModel)
+                .where(OAuthRefreshTokenModel.token_hash == hash_token(issued["refresh_token"]))
+                .values(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+            )
+            await session.commit()
+
+    asyncio.run(expire())
+    response = browser.post("/oauth/token", data={
+        "grant_type": "refresh_token",
+        "client_id": "chatgpt-codexbridge",
+        "refresh_token": issued["refresh_token"],
+    })
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_grant"
