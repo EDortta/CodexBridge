@@ -340,3 +340,109 @@ def test_no_module_outside_the_registry_verifies_a_password_itself() -> None:
         "these call sites check a password without the constant-cost guard; "
         f"use users.authenticate instead: {offenders}"
     )
+
+
+# Issue #138 — browser OAuth refresh is distinct from the mobile grant.
+def _browser_oauth_tokens(browser, verifier: str = "codexbridge-issue-138-verifier") -> dict:
+    from urllib.parse import parse_qs, urlparse
+
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()
+    ).decode().rstrip("=")
+    form = _form("alice", PASSWORD)
+    form["code_challenge"] = challenge
+    authorization = browser.post("/oauth/authorize", data=form, follow_redirects=False)
+    assert authorization.status_code == 302, authorization.text
+    code = parse_qs(urlparse(authorization.headers["location"]).query)["code"][0]
+    exchanged = browser.post(
+        "/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": form["client_id"],
+            "redirect_uri": form["redirect_uri"],
+            "code_verifier": verifier,
+        },
+    )
+    assert exchanged.status_code == 200, exchanged.text
+    return exchanged.json()
+
+
+def test_browser_login_shows_progress_and_avoids_duplicate_submits(browser) -> None:
+    response = browser.get("/oauth/authorize", params={
+        "response_type": "code",
+        "client_id": "chatgpt-codexbridge",
+        "redirect_uri": "https://chatgpt.com/callback",
+        "code_challenge": "test-challenge",
+    })
+    assert response.status_code == 200
+    assert 'aria-live="polite"' in response.text
+    assert "Authenticating…" in response.text
+    assert "button.disabled = true" in response.text
+    assert "if (submitted)" in response.text
+    assert "15000" in response.text
+
+
+def test_browser_oauth_issues_rotating_refresh_grant(browser) -> None:
+    issued = _browser_oauth_tokens(browser)
+    assert issued["refresh_token"]
+    assert issued["token_type"] == "Bearer"
+    response = browser.post("/oauth/token", data={
+        "grant_type": "refresh_token",
+        "client_id": "chatgpt-codexbridge",
+        "refresh_token": issued["refresh_token"],
+    })
+    assert response.status_code == 200, response.text
+    rotated = response.json()
+    assert rotated["refresh_token"] != issued["refresh_token"]
+    assert rotated["access_token"] != issued["access_token"]
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_browser_oauth_refresh_replay_revokes_grant(browser) -> None:
+    issued = _browser_oauth_tokens(browser)
+    rotate = lambda token: browser.post("/oauth/token", data={
+        "grant_type": "refresh_token",
+        "client_id": "chatgpt-codexbridge",
+        "refresh_token": token,
+    })
+    second = rotate(issued["refresh_token"])
+    assert second.status_code == 200
+    replay = rotate(issued["refresh_token"])
+    assert replay.status_code == 400
+    assert replay.json()["detail"] == "invalid_grant"
+    rejected = rotate(second.json()["refresh_token"])
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"] == "invalid_grant"
+
+
+def test_browser_refresh_cannot_cross_client_or_expand_scopes(browser, monkeypatch) -> None:
+    from gateway.app.core.config import settings
+    issued = _browser_oauth_tokens(browser)
+    monkeypatch.setattr(settings, "oauth_allowed_client_ids", "chatgpt-codexbridge,other-client")
+    monkeypatch.setattr(settings, "oauth_refresh_client_ids", "chatgpt-codexbridge,other-client")
+    other = browser.post("/oauth/token", data={
+        "grant_type": "refresh_token",
+        "client_id": "other-client",
+        "refresh_token": issued["refresh_token"],
+    })
+    assert other.status_code == 400
+    assert other.json()["detail"] == "invalid_grant"
+
+    monkeypatch.setattr(settings, "oauth_default_scopes", "codexbridge.read")
+    valid = browser.post("/oauth/token", data={
+        "grant_type": "refresh_token",
+        "client_id": "chatgpt-codexbridge",
+        "refresh_token": issued["refresh_token"],
+    })
+    assert valid.status_code == 200, valid.text
+    assert valid.json()["scope"] == "codexbridge.read"
+
+
+def test_browser_refresh_opt_out_and_metadata(browser, monkeypatch) -> None:
+    from gateway.app.core.config import settings
+    assert "refresh_token" in browser.get("/.well-known/oauth-authorization-server").json()["grant_types_supported"]
+    monkeypatch.setattr(settings, "oauth_refresh_client_ids", "")
+    issued = _browser_oauth_tokens(browser)
+    assert "refresh_token" not in issued
+    assert "refresh_token" not in browser.get("/.well-known/oauth-authorization-server").json()["grant_types_supported"]
