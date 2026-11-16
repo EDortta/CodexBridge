@@ -240,6 +240,10 @@ async def refresh(
       account take a month.
     """
     status, item = await store.inspect_refresh_token(session, body.refresh_token)
+    # A browser OAuth refresh credential must never be redeemed by the
+    # first-party mobile endpoint (or revoke a browser grant via replay).
+    if item is not None and item.client_id != MOBILE_CLIENT_ID:
+        raise unauthenticated(_CREDENTIAL_REJECTED)
 
     if status == store.REFRESH_REUSED and item is not None:
         await store.revoke_auth_grant(
