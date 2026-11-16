@@ -2,10 +2,11 @@
 # Explicitly invoked ON frida via sudo. No Git, no migrations, no DB restoration.
 # Update is restricted to four OAuth files; failure automatically restores them.
 set -Eeuo pipefail
-if (( EUID != 0 )) || [[ "$#" -ne 2 || "$1" != "--apply" ]]; then
-  echo "Usage: sudo bash apply-frida-issue-138.sh --apply issue138-YYYYMMDDTHHMMSSZ" >&2
+if (( EUID != 0 )) || [[ "$#" -ne 2 || ( "$1" != "--apply" && "$1" != "--check" ) ]]; then
+  echo "Usage: sudo bash apply-frida-issue-138.sh --check|--apply issue138-YYYYMMDDTHHMMSSZ" >&2
   exit 2
 fi
+MODE="$1"
 ID="$2"
 [[ "$ID" =~ ^issue138-[0-9]{8}T[0-9]{6}Z$ ]] || { echo "Invalid patch ID" >&2; exit 2; }
 DEPLOY_USER="${SUDO_USER:-}"
@@ -34,7 +35,7 @@ systemctl is-active --quiet "$SERVICE" || { echo "Gateway not active" >&2; exit 
 curl -fsS --max-time 5 http://127.0.0.1:18080/health >/dev/null || exit 2
 # Guard against silently overwriting a different production baseline.
 for file in "${FILES[@]}"; do
-  read -r observed expected_before expected_after < <(grep -F -x -m 1 "$(grep -F "$file " "$STAGE/checksums.txt")" "$STAGE/checksums.txt")
+  read -r observed expected_before expected_after < <(grep -F "$file " "$STAGE/checksums.txt")
   [[ "$observed" == "$file" ]] || { echo "Missing manifest entry: $file" >&2; exit 2; }
   [[ -f "$TARGET/$file" && ! -L "$TARGET/$file" ]] || { echo "Target missing or symlinked: $file" >&2; exit 2; }
   [[ "$(sha256sum "$TARGET/$file" | cut -d' ' -f1)" == "$expected_before" ]] || {
@@ -46,6 +47,18 @@ done
 EXPECTED="$(printf 'patch/%s\n' "${FILES[@]}" | LC_ALL=C sort)"
 ACTUAL="$(tar -tzf "$STAGE/patch.tar.gz" | grep -v '/$' | LC_ALL=C sort)"
 [[ "$ACTUAL" == "$EXPECTED" ]] || { echo "Unexpected archive contents" >&2; exit 2; }
+# Verify candidate bytes from signed-off manifest, not only outer archive hash.
+while read -r file _before candidate_sha; do
+  [[ "$file" == "ISSUE_138_PATCH_V1" ]] && continue
+  staged_sha="$(tar -xzOf "$STAGE/patch.tar.gz" "patch/$file" | sha256sum | cut -d' ' -f1)"
+  [[ "$staged_sha" == "$candidate_sha" ]] || {
+    echo "Candidate file hash mismatch: $file" >&2; exit 2;
+  }
+done < "$STAGE/checksums.txt"
+if [[ "$MODE" == "--check" ]]; then
+  printf 'CHECK=ok\\nBASELINE=matched\\nARCHIVE=verified\\nLIVE_FILES_UNCHANGED=1\\n'
+  exit 0
+fi
 umask 077
 [[ ! -e "$BACKUP" ]] || { echo "Backup target exists: $BACKUP" >&2; exit 2; }
 mkdir -p "$BACKUP/old" "$BACKUP/new"
