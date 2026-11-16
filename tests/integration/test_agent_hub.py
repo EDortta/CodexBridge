@@ -75,6 +75,26 @@ async def _make_task(factory, *, instruction: str, state: TaskState) -> str:
 
 
 @pytest.mark.asyncio
+async def test_stale_disconnect_does_not_unregister_reconnected_executor(factory) -> None:
+    hub = AgentHub(factory)
+    previous = DummyWebSocket()
+    replacement = DummyWebSocket()
+    await hub.register("E1", previous)
+    await hub.register("E1", replacement)
+
+    await hub.unregister("E1", previous)
+    assert hub.is_connected("E1")
+    assert hub.connections["E1"].websocket is replacement
+    async with factory() as session:
+        assert (await session.get(store.ExecutorModel, "E1")).connected is True
+
+    await hub.unregister("E1", replacement)
+    assert not hub.is_connected("E1")
+    async with factory() as session:
+        assert (await session.get(store.ExecutorModel, "E1")).connected is False
+
+
+@pytest.mark.asyncio
 async def test_register_replays_pending_cancel_before_dispatch(factory) -> None:
     cancelled_id = await _make_task(factory, instruction="cancel me", state=TaskState.CANCELLED)
     await _make_task(factory, instruction="queued next", state=TaskState.WAITING_EXECUTOR)

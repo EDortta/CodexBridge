@@ -200,6 +200,55 @@ async def test_scan_root_finds_a_nested_submodule_as_its_own_candidate(tmp_path:
     assert {c.suggested_name for c in report.candidates} == {"monorepo", "web"}
 
 
+
+async def test_scan_root_skips_protected_credential_tree_without_stat(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A protected credential entry must be excluded before is_dir/stat."""
+    from shared import project_discovery
+
+    repo = tmp_path / "project"
+    _init_repo(repo)
+    secret_dir = repo / ".credentials"
+    secret_dir.mkdir()
+    (secret_dir / "admin-password.txt").write_text("fixture only", encoding="utf-8")
+
+    original_is_dir = Path.is_dir
+
+    def _protected_is_dir(path: Path) -> bool:
+        if path.name == ".credentials":
+            raise PermissionError("protected credential directory")
+        return original_is_dir(path)
+
+    monkeypatch.setattr(project_discovery.Path, "is_dir", _protected_is_dir)
+
+    report = await AgentService(AgentSettings())._scan_root(str(tmp_path))
+    assert report is not None
+    assert [candidate.suggested_name for candidate in report.candidates] == ["project"]
+
+
+async def test_scan_root_continues_past_unreadable_entry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """PermissionError on an individual stat does not discard other repos."""
+    from shared import project_discovery
+
+    _init_repo(tmp_path / "valid")
+    (tmp_path / "unreadable").mkdir()
+    original_is_dir = Path.is_dir
+
+    def _unreadable_is_dir(path: Path) -> bool:
+        if path.name == "unreadable":
+            raise PermissionError("inaccessible entry")
+        return original_is_dir(path)
+
+    monkeypatch.setattr(project_discovery.Path, "is_dir", _unreadable_is_dir)
+
+    report = await AgentService(AgentSettings())._scan_root(str(tmp_path))
+    assert report is not None
+    assert [candidate.suggested_name for candidate in report.candidates] == ["valid"]
+
+
 async def test_scan_root_returns_none_when_the_walk_itself_fails(tmp_path: Path, monkeypatch) -> None:
     """A scan failure (e.g. a permission error surfacing as an exception
 

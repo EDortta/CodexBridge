@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -226,6 +226,36 @@ app.include_router(worker_intake_routes.router, dependencies=[Depends(RateLimitD
 def oauth_www_authenticate_header() -> str:
     resource_metadata = f'{settings.effective_oauth_issuer()}/.well-known/oauth-protected-resource'
     return f'Bearer realm="codex-bridge", resource_metadata="{resource_metadata}"'
+
+
+MCP_SERVER_ERROR = -32000
+
+
+def _mcp_error_payload(rpc_id: object, detail: object, *, http_status: int | None = None) -> dict:
+    """Render gateway authorization/configuration failures as JSON-RPC errors.
+
+    `/mcp` is a JSON-RPC transport, so `HTTPException` and the typed admission
+    failures from the store must not escape to Starlette as an unstructured
+    HTTP 500.  Keep the stable machine-readable reason in `error.data.code`;
+    the original detail remains available for operator-facing diagnostics but
+    never includes a workspace path.
+    """
+    text = str(detail)
+    code, _, context = text.partition(":")
+    data = {"code": code, "detail": text}
+    if context:
+        data["context"] = context
+    if http_status is not None:
+        data["http_status"] = http_status
+    return {
+        "jsonrpc": "2.0",
+        "id": rpc_id,
+        "error": {
+            "code": MCP_SERVER_ERROR,
+            "message": text,
+            "data": data,
+        },
+    }
 
 
 def validate_oauth_client(client_id: str, redirect_uri: str) -> None:
@@ -706,9 +736,74 @@ async def mcp_endpoint(
     if not allowed:
         metrics.RATE_LIMIT_REJECTIONS.inc()
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
-    body = await request.json()
-    principal = await authenticate_mcp_request(session, body, authorization)
-    payload = await handle_mcp_call(body, session, hub, principal)
+    try:
+        body = await request.json()
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        logging.getLogger("codexbridge.mcp").warning(
+            "mcp_parse_error content_length=%s", request.headers.get("content-length", "unknown")
+        )
+        return JSONResponse(
+            content={
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": "Parse error"},
+            },
+            status_code=400,
+        )
+    if not isinstance(body, dict):
+        return JSONResponse(
+            content={
+                "jsonrpc": "2.0",
+                "id": body.get("id") if isinstance(body, dict) else None,
+                "error": {"code": -32600, "message": "Invalid Request"},
+            },
+            status_code=400,
+        )
+    try:
+        principal = await authenticate_mcp_request(session, body, authorization)
+    except HTTPException as exc:
+        # Authentication failures still use their HTTP status (and challenge
+        # headers), but the response body remains valid JSON-RPC.
+        return JSONResponse(
+            content=_mcp_error_payload(body.get("id"), exc.detail, http_status=exc.status_code),
+            status_code=exc.status_code,
+            headers=dict(exc.headers or {}),
+        )
+    if body.get("jsonrpc") != "2.0" or not isinstance(body.get("method"), str):
+        return JSONResponse(
+            content={
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "error": {"code": -32600, "message": "Invalid Request"},
+            },
+            status_code=400,
+        )
+    if "id" not in body:
+        if body["method"].startswith("notifications/"):
+            return Response(status_code=202)
+        return Response(status_code=202)
+    try:
+        payload = await handle_mcp_call(body, session, hub, principal)
+    except HTTPException as exc:
+        # Tool-level authorization/configuration failures are application
+        # errors in JSON-RPC. Returning them with HTTP 200 prevents MCP
+        # clients from treating a deterministic admission refusal as a broken
+        # gateway and retrying it as though it were transient.
+        payload = _mcp_error_payload(body.get("id"), exc.detail, http_status=exc.status_code)
+    except ValueError as exc:
+        # `require_active_node_project_authorization` reports its four
+        # fail-closed reasons as ValueError for the store/MCP boundary. They
+        # are expected policy outcomes, not server faults.
+        known_prefixes = (
+            "workspace_binding_required:",
+            "workspace_binding_inactive:",
+            "project_authorization_required:",
+            "project_authorization_revoked:",
+            "capability_not_authorized_for_mode:",
+        )
+        if not str(exc).startswith(known_prefixes):
+            raise
+        payload = _mcp_error_payload(body.get("id"), str(exc))
     return Response(content=json.dumps(payload), media_type="application/json")
 
 
@@ -1184,4 +1279,4 @@ async def agent_ws(
                 elif envelope.type == AgentMessageType.FORGE_OPERATION_RESULT:
                     await handle_forge_operation_result(session, envelope)
     except WebSocketDisconnect:
-        await hub.unregister(executor_id)
+        await hub.unregister(executor_id, websocket)
