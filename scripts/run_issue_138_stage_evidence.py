@@ -72,10 +72,10 @@ def main() -> int:
                     rc = contract.returncode
                 else:
                     stage = subprocess.run(
-                    ["bash", "scripts/stage-frida-issue-138.sh"],
-                    cwd=ROOT, stdin=subprocess.DEVNULL, stdout=stream,
-                    stderr=subprocess.STDOUT, timeout=180,
-                )
+                        ["bash", "scripts/stage-frida-issue-138.sh"],
+                        cwd=ROOT, stdin=subprocess.DEVNULL, stdout=stream,
+                        stderr=subprocess.STDOUT, timeout=180,
+                    )
                     rc = stage.returncode
         except (OSError, subprocess.TimeoutExpired):
             rc = 125
