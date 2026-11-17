@@ -61,12 +61,22 @@ def main() -> int:
             if syntax.returncode:
                 rc = syntax.returncode
             else:
-                stage = subprocess.run(
+                contract = subprocess.run(
+                    [sys.executable, "-m", "pytest", "-q",
+                     "tests/unit/test_issue_138_stage_evidence.py",
+                     "tests/unit/test_issue_138_baseline_evidence.py"],
+                    cwd=ROOT, stdin=subprocess.DEVNULL, stdout=stream,
+                    stderr=subprocess.STDOUT, timeout=120,
+                )
+                if contract.returncode:
+                    rc = contract.returncode
+                else:
+                    stage = subprocess.run(
                     ["bash", "scripts/stage-frida-issue-138.sh"],
                     cwd=ROOT, stdin=subprocess.DEVNULL, stdout=stream,
                     stderr=subprocess.STDOUT, timeout=180,
                 )
-                rc = stage.returncode
+                    rc = stage.returncode
         except (OSError, subprocess.TimeoutExpired):
             rc = 125
     duration = round(time.monotonic() - started, 3)
