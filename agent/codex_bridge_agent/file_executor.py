@@ -128,6 +128,12 @@ def process_once(inbox: Path, config: dict) -> list[dict]:
             ident = path.stem
             if not IDENTIFIER.fullmatch(ident):
                 continue
+            # A completed request ID is immutable: never execute a replay.
+            if (inbox / "results" / (ident + ".json")).exists():
+                os.replace(path, inbox / (ident + "[DONE].json"))
+                results.append({"requestId": ident, "status": "failed",
+                                "reason": "duplicate_request", "exitCode": None})
+                continue
             claimed = inbox / (ident + ".running")
             os.replace(path, claimed)
             started = _utc()
