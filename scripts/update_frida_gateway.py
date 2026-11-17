@@ -81,9 +81,15 @@ def create_package(directory: Path, *, source_commit: str) -> dict:
             ))
             if name == "gateway/app/main.py" and baseline_hash != HISTORICAL_MAIN_SHA:
                 raise ValueError("historical_baseline_mismatch")
+            # An already-applied #138 release is a valid predecessor for
+            # a new OAuth policy. Never overwrite unrelated unknown bytes.
+            previous_release = sha(git_file(
+                "6aa91e84e03776901f7557f026c47bfd34de4233", name
+            ))
             items.append({
                 "path": name,
                 "expected_sha256": baseline_hash,
+                "allowed_previous_sha256": [previous_release],
                 "target_sha256": target_hash,
             })
             info = tarfile.TarInfo(name)
@@ -133,7 +139,9 @@ def classify_installed(items: list[dict], hashes: dict[str, str]) -> list[str]:
     for item in items:
         name = item["path"]
         current = hashes.get(name, "")
-        if current not in {item["expected_sha256"], item["target_sha256"]}:
+        allowed = {item["expected_sha256"], item["target_sha256"]}
+        allowed.update(item.get("allowed_previous_sha256", []))
+        if current not in allowed:
             raise ValueError("unknown_installed_baseline:" + name)
         if current != item["target_sha256"]:
             changes.append(name)
@@ -188,6 +196,10 @@ def operate_remote(stage: Path, *, check_only: bool = False) -> dict:
             raw = package.extractfile(member).read()
             if not HEX64.fullmatch(item.get("expected_sha256", "")) or not HEX64.fullmatch(item.get("target_sha256", "")):
                 raise ValueError("invalid_file_digest")
+            predecessors = item.get("allowed_previous_sha256", [])
+            if (not isinstance(predecessors, list) or len(predecessors) > 4 or
+                any(not isinstance(value, str) or not HEX64.fullmatch(value) for value in predecessors)):
+                raise ValueError("invalid_predecessor_digest")
             if sha(raw) != item["target_sha256"]:
                 raise ValueError("candidate_digest_mismatch")
             desired[name] = raw
