@@ -3748,3 +3748,14 @@ tests/
 ### `tests/unit/test_file_ws_adapter.py`
 
 > Tests the real AgentService dispatch path to the file executor using WebSocket envelope types, file receipts, replay and denials.
+
+### `scripts/run_file_ws_evidence.py`
+
+> Runs a bounded command with private logs and writes a sanitized manifest for success, failed exit, timeout, and spawn failure; queues the envelope through the existing development-evidences publisher.
+
+- `run_evidenced(command, *, feature, timeout, state_root, publisher)` — Execute and retain evidence regardless of subprocess exit status.
+- `main(argv=None)` — CLI interface for evidenced verification.
+
+### `tests/unit/test_file_ws_evidence.py`
+
+> Regression tests verifying local success, failed subprocess and timeout always produce a manifest and preserve the failure status.
