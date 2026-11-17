@@ -33,6 +33,7 @@ FILES = (
     "gateway/app/api/routes/auth.py",
     "gateway/app/core/config.py",
     "gateway/app/core/oauth.py",
+    "gateway/app/services/agent_hub.py",
 )
 # Recorded by the read-only frida baseline evidence 141902-d9e5a470.
 HISTORICAL_MAIN = "196de250b9dc323f0cd7a1047b22aabed36ffc37"
@@ -75,10 +76,12 @@ def create_package(directory: Path, *, source_commit: str) -> dict:
         for name in FILES:
             content = git_file(source_commit, name)
             target_hash = sha(content)
-            baseline_hash = sha(git_file(
-                HISTORICAL_MAIN if name == "gateway/app/main.py" else
-                "origin/development", name
-            ))
+            baseline_ref = (
+                HISTORICAL_MAIN if name in {
+                    "gateway/app/main.py", "gateway/app/services/agent_hub.py"
+                } else "origin/development"
+            )
+            baseline_hash = sha(git_file(baseline_ref, name))
             if name == "gateway/app/main.py" and baseline_hash != HISTORICAL_MAIN_SHA:
                 raise ValueError("historical_baseline_mismatch")
             # An already-applied #138 release is a valid predecessor for
