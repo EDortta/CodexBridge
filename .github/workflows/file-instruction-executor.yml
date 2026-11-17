@@ -26,15 +26,17 @@ jobs:
         env:
           XDG_STATE_HOME: ${{ runner.temp }}/codexbridge-state
         run: |
-          python scripts/run_file_ws_evidence.py --no-publish -- \\
-            python -m pytest -q tests/unit/test_file_executor.py \\
+          python scripts/run_file_ws_evidence.py --no-publish -- \
+            python -m pytest -q tests/unit/test_file_executor.py \
             tests/unit/test_file_ws_adapter.py tests/unit/test_file_ws_evidence.py
       - name: Upload verification manifest even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: file-ws-verification-manifests
-          path: ${{ runner.temp }}/codexbridge-state/codexbridge/file-instruction-ws-bridge/
+          path: |
+            ${{ runner.temp }}/codexbridge-state/codexbridge/file-instruction-ws-bridge/*/manifest.json
+            ${{ runner.temp }}/codexbridge-state/codexbridge/file-instruction-ws-bridge/*/publication.json
           if-no-files-found: warn
       - name: Produce local executor receipt
         env:
