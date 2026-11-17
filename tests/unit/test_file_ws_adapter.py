@@ -32,6 +32,7 @@ def workspace(tmp_path):
             "timeout_seconds": 5,
         }},
     }), encoding="utf-8")
+    config.chmod(0o600)  # Enforce the same private operator config contract on every umask.
     inbox = tmp_path / "inbox"
     inbox.mkdir(mode=0o700)
     settings = AgentSettings(
