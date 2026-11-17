@@ -3719,3 +3719,21 @@ tests/
 - `test_partial_update_only_changes_outdated_files()`
 - `test_unknown_remote_baseline_blocks_every_update()`
 - `test_package_has_exact_allowlisted_paths_and_hashes()`
+
+### `agent/codex_bridge_agent/file_executor.py`
+
+> Deterministic, operator-profile-only local instruction file executor; atomic claims, bounded results and fail-closed crash recovery.
+
+- `process_once(inbox, config)` — Process pending files under an exclusive lock.
+- `main(argv=None)` — CLI entry point.
+
+### `tests/unit/test_file_executor.py`
+
+> Executes real, bounded subprocesses in disposable Git repositories to verify DONE, failure, timeout, deduplication, branch validation, recovery and concurrency.
+
+
+### `scripts/prove_file_executor.py`
+
+> Produces sanitized evidence after invoking the actual local file executor CLI twice, proving terminal DONE and no duplicate execution.
+
+- `main()` — Execute and verify the local file transport proof.
