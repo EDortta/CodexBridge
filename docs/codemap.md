@@ -3696,3 +3696,26 @@ tests/
 - `classify(raw)`
 - `inspect_remote()`
 - `main()`
+
+### `scripts/update_frida_gateway.py`
+
+> Idempotent one-command Gateway OAuth updater: deterministic tests, package transfer, remote baseline validation, backup, restart, rollback, health and published evidence.
+
+- `sha()`
+- `git()`
+- `git_file()`
+- `create_package()`
+- `run()`
+- `publish()`
+- `classify_installed()`
+- `operate_remote()`
+- `main()`
+
+### `tests/unit/test_update_frida_gateway.py`
+
+> Contract tests for idempotency, partial upgrades, baseline refusal and allowlisted Git package construction.
+
+- `test_no_restart_when_all_files_already_current()`
+- `test_partial_update_only_changes_outdated_files()`
+- `test_unknown_remote_baseline_blocks_every_update()`
+- `test_package_has_exact_allowlisted_paths_and_hashes()`
