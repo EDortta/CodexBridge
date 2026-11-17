@@ -207,3 +207,25 @@ authorization for up to one year until revoked, despite single-use rotation.
 No additional scope or access-token lifetime is granted; user revocation and
 replay detection must remain active. Confirm whether ChatGPT preserves
 refresh tokens across reconnects before claiming the login UX is solved.
+
+## Gateway/AgentHub compatibility fix (2026-11-17)
+
+A code-only OAuth deployment exposed a cross-module mismatch during a planned
+Gateway restart: `main.py` called `AgentHub.unregister(executor_id, websocket)`,
+but the installed `agent_hub.py` still implemented
+`unregister(executor_id)`. When Uvicorn closed live agent sockets with WebSocket
+code `1012` (service restart), cleanup raised `TypeError`. The newly
+restarted Gateway recovered and accepted the agent's WebSocket connections.
+
+The idempotent updater's versioned OAuth profile now includes
+`gateway/app/services/agent_hub.py` as its fifth, explicitly protected file.
+It recognizes the byte-identical historical AgentHub baseline from commit
+`196de250`, validates candidate hashes, and deploys the newer method with
+socket identity protection. The test
+`tests/unit/test_update_frida_gateway.py::test_websocket_gateway_and_agent_hub_contract_are_deployed_together`
+prevents another release that updates the caller without the callee.
+
+Note: the 365-day browser refresh policy was deployed successfully with one
+changed file (published evidence run 152033-dbdcbc47). That health check did
+not exercise a live agent WebSocket shutdown; we must not equate health 200
+with end-to-end WS contract coverage.
