@@ -21,7 +21,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 SUMMARY = re.compile(r"(\d+) (passed|failed|skipped|errors?|warnings?)\b")
-FAILED = re.compile(r"^FAILED (tests/[A-Za-z0-9_./\[\]-]+)", re.MULTILINE)
+FAILED = re.compile(r"^FAILED (tests/[A-Za-z0-9_./:\[\]-]+)", re.MULTILINE)
 
 
 def _git(*args: str) -> str:
