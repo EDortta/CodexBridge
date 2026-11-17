@@ -25,8 +25,8 @@ def test_report_has_only_status_and_per_stage_timings(monkeypatch, tmp_path: Pat
     def fake_request(url, *, body=None, token=None):
         calls.append((url, body, token))
         if url.endswith("/sign-in"):
-            return 200, {"accessToken": "secret-access", "refreshToken": "secret-refresh"}, 10.125, "password_verify;dur=9898.2, grant_persist;dur=122.3", "password_verify;dur=9000.0, grant_persist;dur=300.0"
-        return 200, {"email": "sensitive@example.com"}, 0.221, "", ""
+            return 200, {"accessToken": "secret-access", "refreshToken": "secret-refresh"}, 10.125, "password_verify;dur=9000.0, grant_persist;dur=300.0"
+        return 200, {"email": "sensitive@example.com"}, 0.221, ""
 
     monkeypatch.setattr(diagnostic, "request", fake_request)
     report = diagnostic.diagnose("https://gateway.example", ini)
@@ -49,7 +49,7 @@ def test_rejected_login_does_not_call_me(monkeypatch, tmp_path: Path) -> None:
 
     def reject(url, *, body=None, token=None):
         calls.append(url)
-        return 401, {"detail": "invalid_credentials"}, 0.1, "", ""
+        return 401, {"detail": "invalid_credentials"}, 0.1, ""
 
     monkeypatch.setattr(diagnostic, "request", reject)
     report = diagnostic.diagnose("https://gateway.example", ini)
