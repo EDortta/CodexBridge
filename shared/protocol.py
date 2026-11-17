@@ -50,7 +50,7 @@ class AgentEngine(str, Enum):
 # else in `AgentEngine` is a declared candidate with no code behind it yet --
 # checked by the executor's `RunnerPool`, not by this module (the gateway
 # accepts any `AgentEngine` value; only the executor knows what it can run).
-IMPLEMENTED_ENGINES = frozenset({AgentEngine.CODEX.value, AgentEngine.CLAUDE.value, AgentEngine.FILE.value})
+IMPLEMENTED_ENGINES = frozenset({AgentEngine.CODEX.value, AgentEngine.CLAUDE.value})
 
 
 class TaskMode(str, Enum):
