@@ -367,7 +367,7 @@ def main() -> int:
                 match = re.match(
                     r"^FAILED (tests/(?:integration/test_oauth_authorize|"
                     r"unit/test_issue_138_diagnostics|unit/test_update_frida_gateway)"
-                    r"\\.py::[A-Za-z0-9_]+)",
+                    r"\.py::[A-Za-z0-9_]+)",
                     line,
                 )
                 if match and match.group(1) not in failed_tests:
