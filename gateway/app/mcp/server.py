@@ -90,6 +90,16 @@ def _safe_task_result_projection(raw: object) -> dict:
                 for item in value
                 if isinstance(item, str)
             ]
+    receipt = raw.get("file_receipt")
+    if isinstance(receipt, dict):
+        # Expose evidence metadata, never command output or executable paths.
+        allowed = {"requestId", "status", "exitCode", "instructionSha256",
+                   "startedAt", "finishedAt", "timedOut", "reason"}
+        projected["file_receipt"] = {
+            k: redact_sensitive_text(v) if isinstance(v, str) else v
+            for k, v in receipt.items()
+            if k in allowed and (v is None or type(v) in (str, int, bool))
+        }
     return projected
 
 
