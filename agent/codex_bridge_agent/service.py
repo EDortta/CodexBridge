@@ -21,6 +21,7 @@ from agent.codex_bridge_agent.config import (
 )
 from agent.codex_bridge_agent.forge.base import ForgeOutcome
 from agent.codex_bridge_agent.forge.github import run_forge_operation
+from agent.codex_bridge_agent.file_ws_adapter import dispatch_file_task
 from agent.codex_bridge_agent.git_delivery import deliver_changes
 from agent.codex_bridge_agent.git_tools import run_git
 from agent.codex_bridge_agent.instructions import IssueResolutionError, build_task_instruction, resolve_issue_text
@@ -140,6 +141,7 @@ class AgentService:
         # defaulting to "codex" for a payload that predates the `engine`
         # field so an unmodified gateway keeps dispatching correctly.
         self.runners = RunnerPool(settings)
+        self._file_tasks_in_flight: set[str] = set()
 
     async def run_forever(self) -> None:
         delay = self.settings.reconnect_min_seconds
@@ -411,6 +413,10 @@ class AgentService:
         # runner abstraction, so an unmodified gateway keeps dispatching
         # correctly against an upgraded executor.
         engine = envelope.payload.get("engine", "codex")
+        # Deterministic test instructions do not enter a coding LLM runner.
+        if engine == "file":
+            await self._handle_file_dispatch(websocket, envelope)
+            return
         # Replayed dispatches while a task is active must not launch a
         # second local process. Restart-safe deduplication is separate.
         if self.runners.is_known(task_id):
@@ -959,6 +965,57 @@ class AgentService:
                 repo_identity=operation.repo_identity,
             )
         await send_result(outcome)
+
+    async def _handle_file_dispatch(self, websocket, envelope: AgentEnvelope) -> None:
+        """Handle the existing authenticated task.dispatch, not a second socket."""
+        payload = envelope.payload
+        task_id = payload.get("task_id")
+        project_id = payload.get("project_id")
+        if not isinstance(task_id, str) or not task_id:
+            return
+        if task_id in self._file_tasks_in_flight:
+            await websocket.send(self._envelope(AgentMessageType.TASK_ACK, {
+                "task_id": task_id, "accepted": True, "state": TaskState.RUNNING.value
+            }).model_dump_json())
+            return
+        self._file_tasks_in_flight.add(task_id)
+        try:
+            # Mirror the machine-side and per-project gate before accepting.
+            project = self.projects.get(project_id)
+            if (project is None or payload.get("mode") != TaskMode.TEST.value
+                    or TaskMode.TEST not in capabilities_to_modes(_configured_capabilities(self.settings))):
+                raise ValueError("file_task_project_or_capability_denied")
+            await websocket.send(self._envelope(AgentMessageType.TASK_ACK, {
+                "task_id": task_id, "accepted": True, "state": TaskState.RUNNING.value
+            }).model_dump_json())
+            receipt = await dispatch_file_task(
+                payload, config_path=self.settings.file_executor_config_file,
+                inbox_path=self.settings.file_executor_inbox,
+                approved_project_root=project.path,
+            )
+            succeeded = receipt.get("status") == "success"
+            result = {
+                "task_id": task_id,
+                "final_state": TaskState.COMPLETED.value if succeeded else TaskState.FAILED.value,
+                "return_code": receipt.get("exitCode"),
+                "last_message": "file_instruction:" + str(receipt.get("requestId", "")),
+                "file_receipt": {key: receipt.get(key) for key in (
+                    "requestId", "status", "exitCode", "instructionSha256",
+                    "startedAt", "finishedAt", "timedOut", "reason"
+                )},
+                "no_changes": True,
+                "tests_ran": [receipt.get("profile")] if receipt.get("profile") else [],
+            }
+        except Exception as exc:
+            # Do not leak paths, secrets or untrusted command output over WS.
+            result = {
+                "task_id": task_id, "final_state": TaskState.FAILED.value,
+                "error": "file_dispatch:" + type(exc).__name__,
+                "return_code": -1,
+            }
+        finally:
+            self._file_tasks_in_flight.discard(task_id)
+        await websocket.send(self._envelope(AgentMessageType.TASK_RESULT, result).model_dump_json())
 
     def _envelope(self, message_type: AgentMessageType, payload: dict) -> AgentEnvelope:
         return AgentEnvelope(
