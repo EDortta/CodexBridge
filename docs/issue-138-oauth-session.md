@@ -183,3 +183,27 @@ The previous failed `issue138-20261117T143058Z` deploy left the service healthy
 and all four bytes unchanged, as confirmed by the published post-failure read-only
 manifest. The failed deploy's original cause remained unclassified and must
 not be reported as resolved merely because another updater succeeds.
+
+## Twelve-month browser session policy (2026-11-17)
+
+Operator-approved policy for the ChatGPT OAuth client:
+`oauth_browser_refresh_ttl_seconds=31536000` (365 days absolute),
+`oauth_access_token_ttl_seconds=3600` (1 hour), and single-use refresh
+rotation with reuse revocation unchanged. Mobile first-party refresh grants
+retain their independent 30-day lifetime. The longer deadline applies to
+**new** authorization-code exchanges; it cannot extend existing persisted
+grants retroactively. Browser reconnection is still dependent on the client
+retaining and using the refresh token; OAuth discovery by itself is not proof.
+
+The idempotent `scripts/update_frida_gateway.py` recognizes the hashes of
+the previously deployed 6aa91e8 four-file patch as safe predecessors, so
+updating only the config does not require reverting the deployed release.
+A deployment-level environment variable `CODEX_BRIDGE_OAUTH_BROWSER_REFRESH_TTL_SECONDS`
+may override the code default; the updater does not edit `/etc/codex-bridge/env`.
+Actual runtime policy must be verified without revealing environment secrets.
+
+Security cost: a stolen refresh token can potentially renew an account's
+authorization for up to one year until revoked, despite single-use rotation.
+No additional scope or access-token lifetime is granted; user revocation and
+replay detection must remain active. Confirm whether ChatGPT preserves
+refresh tokens across reconnects before claiming the login UX is solved.
