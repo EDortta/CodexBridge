@@ -147,3 +147,39 @@ report `password_verify` and `grant_persist` for the administrative
 `/api/v1/auth/sign-in` endpoint. Independently test real ChatGPT OAuth
 refresh with client-side behavior; a healthy Gateway does not prove the
 external connector renewed credentials automatically.
+
+## One-command idempotent Gateway updater (supersedes manual stage/apply)
+
+The legacy issue-specific staging and remote apply steps remain for audit history,
+but **the supported operator entrypoint for this patch is now one command**:
+
+```bash
+cd /home/esteban/Sync/Projects/AI/CodexBridge-oauth-138
+git pull --ff-only origin fix/issue-138-oauth-session-ux
+python3 scripts/update_frida_gateway.py
+```
+
+For a no-mutation rehearsal use `python3 scripts/update_frida_gateway.py --check`.
+Both modes publish an immutable sanitized GitHub manifest using the shared
+`development-evidences` publisher, with an explicit publication ACK; the command
+returns 2 if publication cannot be confirmed. The updater performs, in order:
+local deterministic tests, exactly scoped Git packaging, transfer to frida,
+baseline hash verification, idempotency check, backup of the four existing code
+files, syntax verification, service restart, HTTP health check, OAuth discovery
+check, and automatic code rollback if update or acceptance fails.
+
+A second run on the same code returns `already_current` without restarting the
+service. A partially updated instance can be completed when every file matches
+either the verified baseline or desired content. Unknown file hashes stop the
+update rather than overwrite unrecognized changes.
+
+The current update profile is explicitly `oauth-138` (four Python modules).
+The entrypoint and mechanism are permanent, but other Gateway file groups and
+schema migrations need their own reviewed profile; this command does **not**
+silently perform migrations or update the whole repository. An all-code release
+must not pretend it is safe merely because the OAuth-only profile passed.
+
+The previous failed `issue138-20261117T143058Z` deploy left the service healthy
+and all four bytes unchanged, as confirmed by the published post-failure read-only
+manifest. The failed deploy's original cause remained unclassified and must
+not be reported as resolved merely because another updater succeeds.
