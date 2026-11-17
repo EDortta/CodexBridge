@@ -338,7 +338,27 @@ def main() -> int:
     work.mkdir(parents=True, exist_ok=False, mode=0o700)
     result: dict = {"status": "failed", "failure_class": "not_started"}
     started = time.monotonic()
+    local_tests_rc = None
     try:
+        # A failed local gate prevents ANY remote mutation. The raw pytest
+        # output remains mode 0600 on devel3, never in the shared manifest.
+        test_log = work / "pytest.log"
+        with test_log.open("wb") as output:
+            os.chmod(test_log, 0o600)
+            try:
+                tests = subprocess.run(
+                    [sys.executable, "-m", "pytest", "-q",
+                     "tests/integration/test_oauth_authorize.py",
+                     "tests/unit/test_issue_138_diagnostics.py",
+                     "tests/unit/test_update_frida_gateway.py"],
+                    cwd=ROOT, stdin=subprocess.DEVNULL, stdout=output,
+                    stderr=subprocess.STDOUT, timeout=180, check=False,
+                )
+                local_tests_rc = tests.returncode
+            except (OSError, subprocess.TimeoutExpired):
+                local_tests_rc = 125
+        if local_tests_rc:
+            raise RuntimeError("local_tests_failed")
         create_package(work, source_commit=commit)
         # Remote first-party staging directory is private to the SSH user.
         remote_stage = f"codexbridge-staging/{stage_id}"
@@ -401,6 +421,7 @@ def main() -> int:
             "profile": "oauth-138",
             "stage_id": stage_id,
             "read_only": args.check,
+            "local_tests_exit_code": local_tests_rc,
             "outcome": published_result,
             "remote_publication_required": True,
         },
