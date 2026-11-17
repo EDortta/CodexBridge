@@ -3731,3 +3731,9 @@ tests/
 
 > Executes real, bounded subprocesses in disposable Git repositories to verify DONE, failure, timeout, deduplication, branch validation, recovery and concurrency.
 
+
+### `scripts/prove_file_executor.py`
+
+> Produces sanitized evidence after invoking the actual local file executor CLI twice, proving terminal DONE and no duplicate execution.
+
+- `main()` — Execute and verify the local file transport proof.
