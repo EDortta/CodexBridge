@@ -1,0 +1,24 @@
+name: File instruction executor MVP
+
+on:
+  push:
+    branches: [feature/file-instruction-executor-mvp]
+  pull_request:
+    paths:
+      - 'agent/codex_bridge_agent/file_executor.py'
+      - 'tests/unit/test_file_executor.py'
+      - '.github/workflows/file-instruction-executor.yml'
+  workflow_dispatch:
+
+jobs:
+  deterministic-executor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pytest
+      - run: python -m pytest -q tests/unit/test_file_executor.py
