@@ -29,7 +29,18 @@ printf 'ISSUE_138_PATCH_V1\n' > "$TMP/checksums.txt"
 for file in "${FILES[@]}"; do
   git cat-file -e "origin/development:$file"
   git cat-file -e "HEAD:$file"
-  baseline="$(git show "origin/development:$file" | sha256sum | cut -d' ' -f1)"
+  # Frida is currently running this exact historical main.py blob, verified
+  # by the published read-only baseline evidence (2026-11-17, run 141902).
+  # Preserve fail-closed checks for every other module.
+  if [[ "$file" == "gateway/app/main.py" ]]; then
+    baseline="$(git show "196de250b9dc323f0cd7a1047b22aabed36ffc37:$file" | sha256sum | cut -d' ' -f1)"
+    [[ "$baseline" == "9bc3f8a693c14ed77badc0d4b360b7cdd8f55ea0881657996acbe4cd52578086" ]] || {
+      echo "Historical main.py baseline is not the verified remote blob" >&2
+      exit 2
+    }
+  else
+    baseline="$(git show "origin/development:$file" | sha256sum | cut -d' ' -f1)"
+  fi
   candidate="$(git show "HEAD:$file" | sha256sum | cut -d' ' -f1)"
   printf '%s %s %s\n' "$file" "$baseline" "$candidate" >> "$TMP/checksums.txt"
 done
