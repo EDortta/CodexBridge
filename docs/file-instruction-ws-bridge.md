@@ -91,3 +91,32 @@ python3 -m pytest -q tests/unit/test_file_executor.py tests/unit/test_file_ws_ad
 
 If `git status --short` is not empty, do **not** switch until those changes
 have been preserved in their original branch. No force, reset, or clean.
+
+## Mandatory evidence for every verification command
+
+Do not invoke `pytest` or a verification script bare. Wrap it with
+`scripts/run_file_ws_evidence.py`, which ALWAYS records a local execution
+log and sanitized JSON manifest, even when the command exits nonzero, times
+out or cannot be spawned. It uses the already configured
+`development-evidences/publisher.py` enqueue/flush interface. The command
+exit code is preserved; a successful check with unsuccessful publication
+returns nonzero to avoid false acceptance.
+
+```bash
+cd /home/esteban/Sync/Projects/AI/CodexBridge-agent
+git pull --ff-only
+python3 scripts/run_file_ws_evidence.py --timeout 300 -- \
+  python3 -m pytest -q tests/unit/test_file_executor.py \
+  tests/unit/test_file_ws_adapter.py tests/unit/test_file_ws_evidence.py
+```
+
+Output shows `STATUS`, `EXIT_CODE`, `EVIDENCE_DIR`,
+`EVIDENCE_PUBLICATION` and `EVIDENCE_URL` only when actual publication
+is confirmed. Raw `execution.log` stays private, with `0600` permissions.
+A failed run gets `status=failed`, not a missing record.
+
+GitHub Actions sets `--no-publish` because it has no authorized evidence
+publisher credentials. Its `always()` artifact step uploads sanitized
+manifest and publication status on both success and failure; never raw logs.
+That CI-specific opt-out is not the command to run on devel3. It is not
+proof that the shared Git repository was updated by the CI runner.
