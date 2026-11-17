@@ -127,6 +127,19 @@ def publish(relative_path: str, report: dict) -> bool:
     return True
 
 
+def classify_installed(items: list[dict], hashes: dict[str, str]) -> list[str]:
+    """Fail closed on unrecognized remote bytes; return only files needing update."""
+    changes = []
+    for item in items:
+        name = item["path"]
+        current = hashes.get(name, "")
+        if current not in {item["expected_sha256"], item["target_sha256"]}:
+            raise ValueError("unknown_installed_baseline:" + name)
+        if current != item["target_sha256"]:
+            changes.append(name)
+    return changes
+
+
 def operate_remote(stage: Path, *, check_only: bool = False) -> dict:
     """Runs under sudo on frida. Strict allowlist; never reads private env."""
     import pwd
@@ -183,19 +196,16 @@ def operate_remote(stage: Path, *, check_only: bool = False) -> dict:
     if not active() or not health():
         raise ValueError("gateway_not_healthy_before_update")
     existing = {}
-    changes = []
+    current_hashes = {}
     for item in items:
         name = item["path"]
         current = target / name
         if not current.is_file() or current.is_symlink():
             raise ValueError("missing_or_symlinked_target:" + name)
         current_bytes = current.read_bytes()
-        current_hash = sha(current_bytes)
-        if current_hash not in {item["expected_sha256"], item["target_sha256"]}:
-            raise ValueError("unknown_installed_baseline:" + name)
+        current_hashes[name] = sha(current_bytes)
         existing[name] = (current_bytes, current.stat())
-        if current_hash != item["target_sha256"]:
-            changes.append(name)
+    changes = classify_installed(items, current_hashes)
     if not changes:
         return {"status": "already_current", "changed_count": 0,
                 "service_active": True, "health_ok": True}
@@ -213,11 +223,6 @@ def operate_remote(stage: Path, *, check_only: bool = False) -> dict:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(existing[name][0])
         dest.chmod(0o600)
-    subprocess.run(
-        [sys.executable, "-B", "-m", "py_compile",
-         *[str(stage / "syntax" / name) for name in []]],
-        check=True,
-    ) if False else None
     # Syntax validation is performed on all candidate files before the stop.
     for name in FILES:
         compile(desired[name], name, "exec")
