@@ -62,3 +62,27 @@ def test_package_has_exact_allowlisted_paths_and_hashes(tmp_path: Path, monkeypa
         (tmp_path / "package.tar.gz").read_bytes()
     )
     assert manifest["files"][0]["expected_sha256"] == updater.sha(b"historical main")
+
+
+
+def test_previously_deployed_release_is_a_valid_upgrade_baseline() -> None:
+    items = [{
+        "path": "gateway/app/core/config.py",
+        "expected_sha256": "a" * 64,
+        "allowed_previous_sha256": ["b" * 64],
+        "target_sha256": "c" * 64,
+    }]
+    assert updater.classify_installed(items, {
+        "gateway/app/core/config.py": "b" * 64,
+    }) == ["gateway/app/core/config.py"]
+    assert updater.classify_installed(items, {
+        "gateway/app/core/config.py": "c" * 64,
+    }) == []
+
+
+def test_browser_refresh_policy_keeps_short_access_tokens() -> None:
+    from gateway.app.core.config import Settings
+    fields = Settings.model_fields
+    assert fields["oauth_browser_refresh_ttl_seconds"].default == 365 * 24 * 3600
+    assert fields["oauth_access_token_ttl_seconds"].default == 3600
+    assert fields["oauth_refresh_token_ttl_seconds"].default == 30 * 24 * 3600
