@@ -89,3 +89,36 @@ def test_duplicate_result_never_executes_twice(tmp_path):
     assert result["status"] == "failed"
     assert result["reason"] == "duplicate_request"
     assert (inbox / "results/task1.json").read_text() == original
+
+def test_two_processes_share_atomic_claim(tmp_path):
+    """Actual multiprocessing: a single instruction is executed once."""
+    from multiprocessing import get_context
+    import time
+    inbox, config = setup(tmp_path)
+    marker = tmp_path / "executed.txt"
+    config["profiles"]["count"] = {
+        "argv": [sys.executable, "-c",
+                 "from pathlib import Path; import time; "
+                 "p=Path(" + repr(str(marker)) + "); "
+                 "p.open('a').write('once\\n'); time.sleep(0.2)"],
+        "timeout_seconds": 5,
+    }
+    add(inbox, profile="count")
+    ctx = get_context("fork")
+    workers = [ctx.Process(target=process_once, args=(inbox, config)) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=10)
+        assert worker.exitcode == 0
+    assert marker.read_text().splitlines() == ["once"]
+    assert (inbox / "task1[DONE].json").is_file()
+
+
+def test_wrong_checkout_branch_refused(tmp_path):
+    inbox, config = setup(tmp_path)
+    add(inbox)
+    subprocess.run(["git", "-C", config["root"], "checkout", "-q", "-b", "other"], check=True)
+    result, = process_once(inbox, config)
+    assert result["status"] == "failed"
+    assert result["reason"] == "ValueError"
