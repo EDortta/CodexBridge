@@ -375,6 +375,49 @@ async def handle_mcp_call(
             ]
         }
         result = _text_result(f"Found {len(payload['projects'])} projects.", payload)
+    elif tool_name == "submit_file_instruction":
+        # Reuse the existing TaskModel queue and gateway authorization gate.
+        # There is NO request for edit/implement and NO arbitrary command field.
+        require_scope("codexbridge.task.submit")
+        raw = arguments["instruction"]
+        if not isinstance(raw, str) or len(raw.encode("utf-8")) > 16384:
+            raise HTTPException(status_code=422, detail="file_instruction_invalid")
+        try:
+            envelope = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="file_instruction_invalid") from exc
+        if (not isinstance(envelope, dict) or set(envelope) != {
+            "schemaVersion", "requestId", "project", "branch", "profile"
+        } or envelope.get("schemaVersion") != 1 or
+                envelope.get("project") != arguments["project_id"] or
+                not all(isinstance(envelope.get(field), str) for field in (
+                    "requestId", "project", "branch", "profile"
+                ))):
+            raise HTTPException(status_code=422, detail="file_instruction_invalid")
+        request = SubmitTaskRequest(
+            executor_id=arguments["executor_id"],
+            project_id=arguments["project_id"],
+            instruction=raw, mode=TaskMode.TEST,
+            engine=AgentEngine.FILE,
+            timeout_seconds=arguments["timeout_seconds"],
+            priority=TaskPriority.NORMAL, run_when_available=True,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        )
+        if principal is not None and not principal.can_access_project(request.project_id):
+            raise HTTPException(status_code=403, detail="project_access_denied")
+        task = await store.create_task(
+            session, request, hub.is_connected(request.executor_id),
+            requested_by_user_id=principal.user_id if principal else None,
+            requested_by_email=principal.email if principal else None,
+            can_approve_push=False,
+        )
+        task = await store.get_task(session, task.id)
+        if task.state == TaskState.QUEUED.value:
+            await hub.dispatch_available(task.executor_id)
+        result = _text_result("File instruction admitted to authorized TEST task queue.", {
+            "task_id": task.id, "state": task.state,
+            "project_id": task.project_id, "executor_id": task.executor_id,
+        })
     elif tool_name == "submit_codex_task":
         require_scope("codexbridge.task.submit")
         request = SubmitTaskRequest.model_validate(arguments)
