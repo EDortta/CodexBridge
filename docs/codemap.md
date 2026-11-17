@@ -3655,3 +3655,12 @@ tests/
 - `test_credentials_use_existing_admin_ini_without_exposing_password()`
 - `test_report_has_only_status_and_per_stage_timings()`
 - `test_rejected_login_does_not_call_me()`
+
+### `scripts/run_issue_138_baseline_evidence.py`
+
+> Publish read-only frida OAuth file hashes and historical Git baseline classifications through the shared development-evidences publisher.
+
+- `git()`
+- `parse_diagnostic()`
+- `publish()`
+- `main()`
