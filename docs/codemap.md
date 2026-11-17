@@ -3674,3 +3674,17 @@ tests/
 - `test_diagnostic_missing_file_is_rejected()`
 - `test_incomplete_or_invalid_hash_is_rejected()`
 - `test_historical_version_requires_commit_id()`
+
+### `scripts/run_issue_138_stage_evidence.py`
+
+> Stages the guarded four-file OAuth patch and publishes the exact release ID through the central evidence publisher.
+
+- `parse_stage_output()`
+- `main()`
+
+### `tests/unit/test_issue_138_stage_evidence.py`
+
+> Validates complete staging provenance and rejects incomplete or duplicate release identifiers.
+
+- `test_stage_output_reports_single_release_and_commit()`
+- `test_stage_output_refuses_missing_or_multiple_provenance()`
