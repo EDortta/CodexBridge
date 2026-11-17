@@ -73,7 +73,9 @@ class Settings(BaseSettings):
     # Explicit opt-in for OAuth clients eligible for rotating refresh tokens.
     # Separate from the mobile refresh grant; empty disables browser refresh.
     oauth_refresh_client_ids: str = "chatgpt-codexbridge"
-    # 365-day absolute browser authorization lifetime; refresh rotation retains\n    # the original deadline. Access tokens remain short-lived (1 hour).\n    oauth_browser_refresh_ttl_seconds: int = 31536000
+    # 365-day absolute browser authorization lifetime; refresh rotation retains
+    # the original deadline. Access tokens remain short-lived (1 hour).
+    oauth_browser_refresh_ttl_seconds: int = 31536000
     oauth_access_token_ttl_seconds: int = 3600
     oauth_authorization_code_ttl_seconds: int = 600
     # Absolute lifetime of a mobile sign-in (issue #4). Rotation carries this
