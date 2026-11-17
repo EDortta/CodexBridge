@@ -86,3 +86,31 @@ def test_browser_refresh_policy_keeps_short_access_tokens() -> None:
     assert fields["oauth_browser_refresh_ttl_seconds"].default == 365 * 24 * 3600
     assert fields["oauth_access_token_ttl_seconds"].default == 3600
     assert fields["oauth_refresh_token_ttl_seconds"].default == 30 * 24 * 3600
+
+
+
+def test_websocket_gateway_and_agent_hub_contract_are_deployed_together() -> None:
+    """Prevent the exact frida 1012 shutdown TypeError seen on 2026-11-17."""
+    import ast
+    assert "gateway/app/main.py" in updater.FILES
+    assert "gateway/app/services/agent_hub.py" in updater.FILES
+
+    root = Path(__file__).resolve().parents[2]
+    hub_file = root / "gateway/app/services/agent_hub.py"
+    main_file = root / "gateway/app/main.py"
+    tree = ast.parse(hub_file.read_text(encoding="utf-8"))
+    hub = next(x for x in tree.body if isinstance(x, ast.ClassDef) and x.name == "AgentHub")
+    unregister = next(x for x in hub.body if isinstance(x, ast.AsyncFunctionDef) and x.name == "unregister")
+    positional = [arg.arg for arg in unregister.args.args]
+    assert positional[:3] == ["self", "executor_id", "websocket"]
+
+    main = ast.parse(main_file.read_text(encoding="utf-8"))
+    calls = [
+        x for x in ast.walk(main)
+        if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)
+        and x.func.attr == "unregister"
+        and isinstance(x.func.value, ast.Name)
+        and x.func.value.id == "hub"
+    ]
+    assert calls
+    assert all(len(x.args) == 2 for x in calls)
