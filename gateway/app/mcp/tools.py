@@ -36,6 +36,22 @@ def tool_definitions(default_engine: str = "claude") -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "submit_file_instruction",
+            "title": "Submit deterministic file instruction",
+            "description": "Enqueue an authorized test profile by JSON instruction; no coding LLM, edit or implement.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "executor_id": {"type": "string"},
+                    "project_id": {"type": "string"},
+                    "instruction": {"type": "string", "description": "Strict JSON file instruction schema v1"},
+                    "timeout_seconds": {"type": "integer", "minimum": 30, "maximum": 600}
+                },
+                "required": ["executor_id", "project_id", "instruction", "timeout_seconds"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "submit_codex_task",
             "title": "Submit Codex task",
             "description": "Criar uma tarefa para o Codex CLI em um projeto autorizado.",
