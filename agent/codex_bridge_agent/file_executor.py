@@ -130,7 +130,13 @@ def process_once(inbox: Path, config: dict) -> list[dict]:
                 continue
             # A completed request ID is immutable: never execute a replay.
             if (inbox / "results" / (ident + ".json")).exists():
-                os.replace(path, inbox / (ident + "[DONE].json"))
+                # Preserve the original completed instruction and result.
+                replay = inbox / (ident + "[REPLAY][DONE].json")
+                suffix = 1
+                while replay.exists():
+                    replay = inbox / (ident + "[REPLAY-" + str(suffix) + "][DONE].json")
+                    suffix += 1
+                os.replace(path, replay)
                 results.append({"requestId": ident, "status": "failed",
                                 "reason": "duplicate_request", "exitCode": None})
                 continue
