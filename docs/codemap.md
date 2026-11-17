@@ -3688,3 +3688,11 @@ tests/
 
 - `test_stage_output_reports_single_release_and_commit()`
 - `test_stage_output_refuses_missing_or_multiple_provenance()`
+
+### `scripts/run_issue_138_apply_diagnosis.py`
+
+> Publish sanitized failure classification from the previous apply attempt and read-only remote Gateway health and OAuth module hashes.
+
+- `classify(raw)`
+- `inspect_remote()`
+- `main()`
