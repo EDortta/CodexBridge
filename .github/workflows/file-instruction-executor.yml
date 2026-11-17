@@ -22,3 +22,13 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install pytest
       - run: python -m pytest -q tests/unit/test_file_executor.py
+      - name: Produce local executor receipt
+        env:
+          CODEXBRIDGE_FILE_PROOF_OUTPUT: ${{ runner.temp }}/file-executor-proof.json
+        run: python scripts/prove_file_executor.py
+      - name: Upload sanitized proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: file-executor-proof
+          path: ${{ runner.temp }}/file-executor-proof.json
+          if-no-files-found: error
