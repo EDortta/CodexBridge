@@ -339,6 +339,7 @@ def main() -> int:
     result: dict = {"status": "failed", "failure_class": "not_started"}
     started = time.monotonic()
     local_tests_rc = None
+    failed_tests: list[str] = []
     try:
         # A failed local gate prevents ANY remote mutation. The raw pytest
         # output remains mode 0600 on devel3, never in the shared manifest.
@@ -358,6 +359,21 @@ def main() -> int:
             except (OSError, subprocess.TimeoutExpired):
                 local_tests_rc = 125
         if local_tests_rc:
+            # Only pytest node IDs are exported: no traceback, parameters,
+            # credentials, stdout, or environment details. Filter to the
+            # statically known test modules and bounded safe characters.
+            raw_log = test_log.read_text(encoding="utf-8", errors="replace")
+            for line in raw_log.splitlines():
+                match = re.match(
+                    r"^FAILED (tests/(?:integration/test_oauth_authorize|"
+                    r"unit/test_issue_138_diagnostics|unit/test_update_frida_gateway)"
+                    r"\\.py::[A-Za-z0-9_]+)",
+                    line,
+                )
+                if match and match.group(1) not in failed_tests:
+                    failed_tests.append(match.group(1))
+                if len(failed_tests) >= 20:
+                    break
             raise RuntimeError("local_tests_failed")
         create_package(work, source_commit=commit)
         # Remote first-party staging directory is private to the SSH user.
@@ -422,6 +438,7 @@ def main() -> int:
             "stage_id": stage_id,
             "read_only": args.check,
             "local_tests_exit_code": local_tests_rc,
+            "failed_tests": failed_tests,
             "outcome": published_result,
             "remote_publication_required": True,
         },
