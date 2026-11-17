@@ -43,13 +43,14 @@ class AgentEngine(str, Enum):
     GEMINI = "gemini"
     OPENCODE = "opencode"
     AIDER = "aider"
+    FILE = "file"  # deterministic, operator-profile-only test executor
 
 
 # Engines with a real `Runner` implementation as of this migration. Anything
 # else in `AgentEngine` is a declared candidate with no code behind it yet --
 # checked by the executor's `RunnerPool`, not by this module (the gateway
 # accepts any `AgentEngine` value; only the executor knows what it can run).
-IMPLEMENTED_ENGINES = frozenset({AgentEngine.CODEX.value, AgentEngine.CLAUDE.value})
+IMPLEMENTED_ENGINES = frozenset({AgentEngine.CODEX.value, AgentEngine.CLAUDE.value, AgentEngine.FILE.value})
 
 
 class TaskMode(str, Enum):
