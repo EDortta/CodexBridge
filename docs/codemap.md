@@ -3664,3 +3664,13 @@ tests/
 - `parse_diagnostic()`
 - `publish()`
 - `main()`
+
+### `tests/unit/test_issue_138_baseline_evidence.py`
+
+> Contract tests for sanitized, read-only frida baseline evidence parsing.
+
+- `report()`
+- `test_complete_report_parses_only_known_fields()`
+- `test_diagnostic_missing_file_is_rejected()`
+- `test_incomplete_or_invalid_hash_is_rejected()`
+- `test_historical_version_requires_commit_id()`
