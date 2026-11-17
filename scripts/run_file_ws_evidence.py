@@ -20,8 +20,8 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-SUMMARY = re.compile(r"(\\d+) (passed|failed|skipped|errors?|warnings?)\\b")
-FAILED = re.compile(r"^FAILED (tests/[A-Za-z0-9_./\\[\\]-]+)", re.MULTILINE)
+SUMMARY = re.compile(r"(\d+) (passed|failed|skipped|errors?|warnings?)\b")
+FAILED = re.compile(r"^FAILED (tests/[A-Za-z0-9_./\[\]-]+)", re.MULTILINE)
 
 
 def _git(*args: str) -> str:
@@ -53,10 +53,10 @@ def run_evidenced(command: list[str], *, feature: str, timeout: int,
             rc = process.returncode
         except subprocess.TimeoutExpired:
             rc, failure = 124, "timeout"
-            output.write(b"\\nTIMEOUT\\n")
+            output.write(b"\nTIMEOUT\n")
         except OSError:
             rc, failure = 125, "spawn_failed"
-            output.write(b"\\nSPAWN_FAILED\\n")
+            output.write(b"\nSPAWN_FAILED\n")
     raw = log.read_bytes()
     text = raw.decode("utf-8", errors="replace")
     counts: dict[str, int] = {}
@@ -84,10 +84,10 @@ def run_evidenced(command: list[str], *, feature: str, timeout: int,
     relative = f"CodexBridge/{feature}/{safe_branch}/{started:%Y-%m-%d}/{run_id}/manifest.json"
     envelope = {"relative_path": relative, "report": report}
     (directory / "manifest.json").write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\\n", encoding="utf-8"
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     queue = directory / "publisher-envelope.json"
-    queue.write_text(json.dumps(envelope, sort_keys=True) + "\\n", encoding="utf-8")
+    queue.write_text(json.dumps(envelope, sort_keys=True) + "\n", encoding="utf-8")
     publication = "unavailable"
     if publisher is not None and publisher.is_file():
         try:
@@ -108,7 +108,7 @@ def run_evidenced(command: list[str], *, feature: str, timeout: int,
         except (OSError, subprocess.TimeoutExpired):
             publication = "publisher_error"
     (directory / "publication.json").write_text(
-        json.dumps({"status": publication, "relative_path": relative}) + "\\n", encoding="utf-8"
+        json.dumps({"status": publication, "relative_path": relative}) + "\n", encoding="utf-8"
     )
     print("STATUS=" + status, flush=True)
     print("EXIT_CODE=" + str(rc), flush=True)
