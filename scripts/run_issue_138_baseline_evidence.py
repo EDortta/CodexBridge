@@ -112,6 +112,19 @@ def main() -> int:
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     logfile = directory / (run_id + ".log")
     started = time.monotonic()
+    test_log = directory / (run_id + "-pytest.log")
+    with test_log.open("wb") as stream:
+        os.chmod(test_log, 0o600)
+        try:
+            tests = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q",
+                 "tests/unit/test_issue_138_baseline_evidence.py"],
+                cwd=ROOT, stdin=subprocess.DEVNULL, stdout=stream,
+                stderr=subprocess.STDOUT, timeout=90, check=False,
+            )
+            tests_rc = tests.returncode
+        except (OSError, subprocess.TimeoutExpired):
+            tests_rc = 125
     with logfile.open("wb") as stream:
         os.chmod(logfile, 0o600)
         try:
@@ -133,6 +146,10 @@ def main() -> int:
             rc, error = 1, "invalid_diagnostic_output"
     else:
         error = "remote_probe_failed"
+    probe_rc = rc
+    rc = 0 if probe_rc == 0 and tests_rc == 0 else 1
+    if tests_rc != 0:
+        error = "local_contract_tests_failed"
     status = "pass" if rc == 0 else "fail"
     safe_branch = re.sub(r"[^A-Za-z0-9_.-]", "-", branch)
     relative = (
@@ -152,7 +169,9 @@ def main() -> int:
         "exit_code": rc,
         "duration_seconds": duration,
         "error_category": error,
-        "checks": {"read_only": True, "live_files_unchanged": rc == 0,
+        "checks": {"read_only": True, "live_files_unchanged": probe_rc == 0,
+                   "baseline_probe_exit_code": probe_rc,
+                   "baseline_parser_tests_exit_code": tests_rc,
                    "files": data, "evidence_publication_required": True},
         "detail": "Read-only hashes and Git revisions only; raw diagnostic retained locally",
     }
