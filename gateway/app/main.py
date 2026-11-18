@@ -1414,6 +1414,10 @@ async def agent_ws(
                         envelope.payload["stream"],
                         sanitize_log_line(envelope.payload["line"]),
                     )
+                elif envelope.type == AgentMessageType.EVIDENCE_RESULT:
+                    # Only the socket authenticated as executor_id can complete
+                    # its outstanding correlation; unsolicited results ignored.
+                    hub.accept_evidence_result(executor_id, envelope.payload)
                 elif envelope.type == AgentMessageType.TASK_RESULT:
                     final_state = TaskState(envelope.payload["final_state"])
                     task = await store.store_result(session, envelope.payload["task_id"], envelope.payload, final_state)
