@@ -22,6 +22,7 @@ from agent.codex_bridge_agent.config import (
 from agent.codex_bridge_agent.forge.base import ForgeOutcome
 from agent.codex_bridge_agent.forge.github import run_forge_operation
 from agent.codex_bridge_agent.file_ws_adapter import dispatch_file_task
+from agent.codex_bridge_agent.evidence_reader import list_evidence
 from agent.codex_bridge_agent.git_delivery import deliver_changes
 from agent.codex_bridge_agent.git_tools import run_git
 from agent.codex_bridge_agent.instructions import IssueResolutionError, build_task_instruction, resolve_issue_text
@@ -199,6 +200,8 @@ class AgentService:
                     envelope = AgentEnvelope.model_validate_json(raw)
                     if envelope.type == AgentMessageType.TASK_DISPATCH:
                         asyncio.create_task(self._handle_dispatch(websocket, envelope))
+                    elif envelope.type == AgentMessageType.EVIDENCE_QUERY:
+                        asyncio.create_task(self._handle_evidence_query(websocket, envelope))
                     elif envelope.type == AgentMessageType.ISSUE_MATERIALIZE:
                         asyncio.create_task(self._handle_materialize(websocket, envelope))
                     elif envelope.type == AgentMessageType.FORGE_OPERATION:
@@ -771,6 +774,30 @@ class AgentService:
         except Exception:
             logger.warning("Failed to build full node announcement; sending minimal fallback", exc_info=True)
             return NodeAnnouncement(agent_version=AGENT_VERSION)
+    async def _handle_evidence_query(self, websocket, envelope: AgentEnvelope) -> None:
+        """Manifest-only query; no subprocess and no arbitrary filesystem path."""
+        payload = envelope.payload
+        request_id = payload.get("request_id")
+        project_id = payload.get("project_id")
+        feature = payload.get("feature")
+        limit = payload.get("limit", 5)
+        data: dict = {"status": "denied", "items": []}
+        if (isinstance(request_id, str) and len(request_id) == 36 and
+                isinstance(project_id, str) and project_id in self.projects and
+                isinstance(feature, str) and type(limit) is int and 1 <= limit <= 20):
+            try:
+                data = await asyncio.to_thread(
+                    list_evidence,
+                    state_root=Path(self.settings.evidence_state_root),
+                    project_id=project_id, feature=feature, limit=limit
+                )
+            except (OSError, ValueError):
+                data = {"status": "evidence_read_failed", "items": []}
+        if isinstance(request_id, str) and len(request_id) == 36:
+            await websocket.send(self._envelope(AgentMessageType.EVIDENCE_RESULT, {
+                "request_id": request_id, "data": data
+            }).model_dump_json())
+
     async def _handle_materialize(self, websocket, envelope: AgentEnvelope) -> None:
         """Writes one epic's rendered markdown to disk -- issue #78, Commit 2c.
 
