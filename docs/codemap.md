@@ -3737,3 +3737,35 @@ tests/
 > Produces sanitized evidence after invoking the actual local file executor CLI twice, proving terminal DONE and no duplicate execution.
 
 - `main()` — Execute and verify the local file transport proof.
+
+### `agent/codex_bridge_agent/file_ws_adapter.py`
+
+> Converts an authorized Gateway WebSocket `task.dispatch` in TEST mode into a local deterministic file instruction; persists receipts and replays without rerunning.
+
+- `execute_file_dispatch(payload, *, config_path, inbox_path, approved_project_root)` — Gate, spool, execute and read the receipt.
+- `dispatch_file_task(payload, *, config_path, inbox_path, approved_project_root)` — Async adapter, executes off the event loop.
+
+### `tests/unit/test_file_ws_adapter.py`
+
+> Tests the real AgentService dispatch path to the file executor using WebSocket envelope types, file receipts, replay and denials.
+
+### `scripts/run_file_ws_evidence.py`
+
+> Runs a bounded command with private logs and writes a sanitized manifest for success, failed exit, timeout, and spawn failure; queues the envelope through the existing development-evidences publisher.
+
+- `run_evidenced(command, *, feature, timeout, state_root, publisher)` — Execute and retain evidence regardless of subprocess exit status.
+- `main(argv=None)` — CLI interface for evidenced verification.
+
+### `tests/unit/test_file_ws_evidence.py`
+
+> Regression tests verifying local success, failed subprocess and timeout always produce a manifest and preserve the failure status.
+
+### `agent/codex_bridge_agent/evidence_reader.py`
+
+> Returns sanitized, bounded file-run evidence manifests from a private local state root without exposing raw logs, private paths or arbitrary filenames.
+
+- `list_evidence(*, state_root, project_id, feature, limit)` — Read project-specific recent evidence and locally claimed publication status.
+
+### `tests/unit/test_evidence_query.py`
+
+> Verifies manifest sanitization, traversal denial, evidence.query roundtrip, and matching gateway correlation.

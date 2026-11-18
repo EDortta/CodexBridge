@@ -100,7 +100,7 @@ def _record(inbox: Path, result: dict, filename: str):
     _atomic_json(inbox / "results" / (filename + ".json"), result)
 
 
-def process_once(inbox: Path, config: dict) -> list[dict]:
+def process_once(inbox: Path, config: dict, *, only_id: str | None = None) -> list[dict]:
     """Serialize all processes for one inbox; restart fails closed."""
     inbox.mkdir(parents=True, exist_ok=True)
     results: list[dict] = []
@@ -109,6 +109,8 @@ def process_once(inbox: Path, config: dict) -> list[dict]:
         fcntl.flock(lockfile, fcntl.LOCK_EX)
         (inbox / "results").mkdir(exist_ok=True)
         for path in sorted(inbox.iterdir()):
+            if only_id is not None and path.name != only_id + ".running":
+                continue
             if path.name.endswith(".running"):
                 ident = path.name[:-8]
                 existing = inbox / "results" / (ident + ".json")
@@ -123,6 +125,8 @@ def process_once(inbox: Path, config: dict) -> list[dict]:
                 os.replace(path, inbox / (ident + "[DONE].json"))
                 results.append(outcome)
         for path in sorted(inbox.glob("*.json")):
+            if only_id is not None and path.name != only_id + ".json":
+                continue
             if path.name.endswith("[DONE].json") or path.is_symlink():
                 continue
             ident = path.stem

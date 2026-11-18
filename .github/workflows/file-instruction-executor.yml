@@ -2,11 +2,13 @@ name: File instruction executor MVP
 
 on:
   push:
-    branches: [feature/file-instruction-executor-mvp]
+    branches: [feature/file-instruction-executor-mvp, feature/file-instruction-ws-bridge]
   pull_request:
     paths:
       - 'agent/codex_bridge_agent/file_executor.py'
       - 'tests/unit/test_file_executor.py'
+      - 'tests/unit/test_file_ws_adapter.py'
+      - 'tests/unit/test_evidence_query.py'
       - '.github/workflows/file-instruction-executor.yml'
   workflow_dispatch:
 
@@ -20,8 +22,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install pytest
-      - run: python -m pytest -q tests/unit/test_file_executor.py
+      - run: python -m pip install -e '.[test]'
+      - name: Evidenced tests (success or failure)
+        env:
+          XDG_STATE_HOME: ${{ runner.temp }}/codexbridge-state
+        run: |
+          python scripts/run_file_ws_evidence.py --no-publish -- \
+            python -m pytest -q tests/unit/test_file_executor.py \
+            tests/unit/test_file_ws_adapter.py tests/unit/test_file_ws_evidence.py \
+            tests/unit/test_evidence_query.py
+      - name: Upload verification manifest even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: file-ws-verification-manifests
+          path: |
+            ${{ runner.temp }}/codexbridge-state/codexbridge/file-instruction-ws-bridge/*/manifest.json
+            ${{ runner.temp }}/codexbridge-state/codexbridge/file-instruction-ws-bridge/*/publication.json
+          if-no-files-found: warn
       - name: Produce local executor receipt
         env:
           CODEXBRIDGE_FILE_PROOF_OUTPUT: ${{ runner.temp }}/file-executor-proof.json
