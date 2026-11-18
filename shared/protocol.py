@@ -245,6 +245,8 @@ class AgentMessageType(str, Enum):
     # mixing the two would make every reconnect drag that whole inventory
     # along with it. See `DiscoveryReport`'s own docstring.
     DISCOVERY_REPORT = "discovery.report"
+    EVIDENCE_QUERY = "evidence.query"
+    EVIDENCE_RESULT = "evidence.result"
 
 
 class ApprovalDecision(str, Enum):
