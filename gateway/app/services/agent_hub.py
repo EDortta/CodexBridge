@@ -52,6 +52,7 @@ class AgentHub:
         self.connections: dict[str, AgentConnection] = {}
         self.running_tasks: dict[str, set[str]] = {}
         self._lock = asyncio.Lock()
+        self._evidence_waiters: dict[str, tuple[str, asyncio.Future]] = {}
 
     def is_connected(self, executor_id: str) -> bool:
         return executor_id in self.connections
@@ -154,6 +155,45 @@ class AgentHub:
     async def send(self, executor_id: str, envelope: AgentEnvelope) -> None:
         connection = self.connections[executor_id]
         await connection.websocket.send_json(envelope.model_dump(mode="json"))
+
+    async def query_evidence(self, executor_id: str, project_id: str,
+                             feature: str, limit: int = 5) -> dict:
+        """A bounded read request over an existing authenticated agent socket."""
+        if executor_id not in self.connections:
+            return {"status": "executor_offline", "items": []}
+        request_id = str(uuid4())
+        pending = asyncio.get_running_loop().create_future()
+        self._evidence_waiters[request_id] = (executor_id, pending)
+        try:
+            await self.send(executor_id, hub_envelope(
+                executor_id, AgentMessageType.EVIDENCE_QUERY.value, {
+                    "request_id": request_id, "project_id": project_id,
+                    "feature": feature, "limit": limit,
+                },
+            ))
+            return await asyncio.wait_for(pending, timeout=12)
+        except asyncio.TimeoutError:
+            return {"status": "agent_timeout", "items": []}
+        except (KeyError, RuntimeError, OSError):
+            return {"status": "executor_disconnected", "items": []}
+        finally:
+            self._evidence_waiters.pop(request_id, None)
+
+    def accept_evidence_result(self, executor_id: str, payload: dict) -> bool:
+        request_id = payload.get("request_id")
+        if not isinstance(request_id, str):
+            return False
+        slot = self._evidence_waiters.get(request_id)
+        if slot is None or slot[0] != executor_id:
+            return False
+        future = slot[1]
+        if future.done():
+            return False
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            data = {"status": "invalid_agent_response", "items": []}
+        future.set_result(data)
+        return True
 
     async def dispatch_next(self, executor_id: str) -> dict[str, Any] | None:
         if executor_id not in self.connections:
