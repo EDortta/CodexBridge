@@ -81,6 +81,13 @@ KNOWN_ENGINES: dict[str, EngineRegistration] = {
 
 # Candidate engines - may have adapters but no implementation yet
 CANDIDATE_ENGINES: dict[str, EngineRegistration] = {
+    # This engine is handled in AgentService before RunnerPool; no LLM
+    # runner is instantiated. Keep the registry explicit for introspection.
+    AgentEngine.FILE.value: EngineRegistration(
+        engine=AgentEngine.FILE.value,
+        implemented=False, adapter=None, installed=False,
+        probe_available=False, authenticated=False,
+    ),
     AgentEngine.CURSOR_AGENT.value: EngineRegistration(
         engine=AgentEngine.CURSOR_AGENT.value,
         implemented=False,
