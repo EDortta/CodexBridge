@@ -120,3 +120,41 @@ publisher credentials. Its `always()` artifact step uploads sanitized
 manifest and publication status on both success and failure; never raw logs.
 That CI-specific opt-out is not the command to run on devel3. It is not
 proof that the shared Git repository was updated by the CI runner.
+
+## MCP read-only execution evidence
+
+New tool: `list_execution_evidence(executor_id, project_id, feature, limit=5)`.
+Requires OAuth `codexbridge.read`, project-level access and the
+project enabled on the executor. It sends a bounded `evidence.query` over
+the existing authenticated reverse WebSocket, and returns a correlated
+`evidence.result` (12-second timeout). This tool does **not** submit an
+execution, start a coding CLI, read arbitrary files, or share raw logs.
+
+For the initial version the local reader only supports project ID
+`codexbridge` with runs produced by `run_file_ws_evidence.py` under
+`<state-root>/codexbridge/<feature>/<run-id>/manifest.json`. The private
+evidence root is configured on the Agent through
+`CODEX_BRIDGE_AGENT_EVIDENCE_STATE_ROOT`, defaulting to the Agent's own
+`~/.local/state`. When tests run as a different Unix user from the
+systemd agent, provision an explicitly shared **read-only** evidence
+directory or run the publisher under the agent user; do not grant
+arbitrary broad filesystem visibility to the gateway.
+
+The result is intentionally sanitised: feature, branch, commit, status,
+exit code, timestamps, test counts, failed test IDs, log SHA256,
+publication status and a GitHub evidence URL only when the **local**
+publisher reported `published`. `verified_remote: false` is always
+returned, because that is not an independent GitHub lookup. Missing
+evidence, disconnected executor and timeout are distinct statuses.
+A successful local file read is **not** proof of deployed gateway code.
+
+Example MCP arguments (after Gateway and Agent are deployed):
+
+```json
+{"executor_id":"devel3","project_id":"codexbridge","feature":"file-instruction-ws-bridge","limit":5}
+```
+
+**Rollout gate:** Both ends must be updated, and the new MCP schema must
+be reloaded by the connected plugin. No production restart or deployment
+was performed by this branch commit. CI exercises a captured WebSocket
+and reader but cannot prove the live frida/devel3 network roundtrip.
