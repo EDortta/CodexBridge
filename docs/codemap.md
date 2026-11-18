@@ -3759,3 +3759,13 @@ tests/
 ### `tests/unit/test_file_ws_evidence.py`
 
 > Regression tests verifying local success, failed subprocess and timeout always produce a manifest and preserve the failure status.
+
+### `agent/codex_bridge_agent/evidence_reader.py`
+
+> Returns sanitized, bounded file-run evidence manifests from a private local state root without exposing raw logs, private paths or arbitrary filenames.
+
+- `list_evidence(*, state_root, project_id, feature, limit)` — Read project-specific recent evidence and locally claimed publication status.
+
+### `tests/unit/test_evidence_query.py`
+
+> Verifies manifest sanitization, traversal denial, evidence.query roundtrip, and matching gateway correlation.
