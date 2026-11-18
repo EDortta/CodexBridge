@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -385,6 +386,30 @@ async def handle_mcp_call(
             ]
         }
         result = _text_result(f"Found {len(payload['projects'])} projects.", payload)
+    elif tool_name == "list_execution_evidence":
+        require_scope("codexbridge.read")
+        executor_id = arguments.get("executor_id")
+        project_id = arguments.get("project_id")
+        feature = arguments.get("feature")
+        limit = arguments.get("limit", 5)
+        if (not isinstance(executor_id, str) or not isinstance(project_id, str)
+                or not isinstance(feature, str) or
+                not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", feature) or
+                type(limit) is not int or not 1 <= limit <= 20):
+            raise HTTPException(status_code=422, detail="invalid_evidence_query")
+        if principal is not None and not principal.can_access_project(project_id):
+            raise HTTPException(status_code=403, detail="project_access_denied")
+        executor = await session.get(ExecutorModel, executor_id)
+        if executor is None or not executor.enabled:
+            raise HTTPException(status_code=404, detail="unknown_executor")
+        allowed = await store.list_projects_for_executor(session, executor_id)
+        if not any(p.id == project_id and p.enabled for p in allowed):
+            raise HTTPException(status_code=403, detail="project_not_allowed_for_executor")
+        data = await hub.query_evidence(executor_id, project_id, feature, limit)
+        result = _text_result("Read-only execution evidence query completed.", {
+            "executor_id": executor_id, "project_id": project_id,
+            "feature": feature, **data
+        })
     elif tool_name == "submit_file_instruction":
         # Reuse the existing TaskModel queue and gateway authorization gate.
         # There is NO request for edit/implement and NO arbitrary command field.
