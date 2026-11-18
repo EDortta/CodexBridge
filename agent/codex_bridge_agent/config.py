@@ -29,6 +29,8 @@ class AgentSettings(BaseSettings):
     # This engine never accepts an executable or worktree path from ChatGPT.
     file_executor_config_file: str | None = None
     file_executor_inbox: str | None = None
+    # Evidence root shared with scripts/run_file_ws_evidence.py; read-only.
+    evidence_state_root: str = str(Path.home() / ".local/state")
     # WK-20260830-chatgpt-entry-provider-and-delivery. Opt-in, unset by
     # default: when set, a `project_id` not found in `allowed_projects_file`
     # is looked up as a real git repository somewhere under this root
