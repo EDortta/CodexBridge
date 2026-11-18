@@ -36,6 +36,22 @@ def tool_definitions(default_engine: str = "claude") -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "list_execution_evidence",
+            "title": "List execution evidence",
+            "description": "Read recent sanitized execution manifests on an authorized connected executor; no commands or private logs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "executor_id": {"type": "string"},
+                    "project_id": {"type": "string"},
+                    "feature": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+                },
+                "required": ["executor_id", "project_id", "feature"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "submit_file_instruction",
             "title": "Submit deterministic file instruction",
             "description": "Enqueue an authorized test profile by JSON instruction; no coding LLM, edit or implement.",
