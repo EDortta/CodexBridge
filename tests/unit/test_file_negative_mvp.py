@@ -149,6 +149,6 @@ def test_interrupted_running_request_is_not_reexecuted(harness):
     assert result["reason"] == "interrupted"
     assert not harness["marker"].exists()
     # A retry cannot restart an interrupted run.
-    again = dispatch(harness, request)
-    assert again == result
+    with pytest.raises(FileDispatchDenied, match="request_id_collision"):
+        dispatch(harness, request)
     assert not harness["marker"].exists()
