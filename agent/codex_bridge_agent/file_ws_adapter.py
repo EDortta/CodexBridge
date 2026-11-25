@@ -83,8 +83,13 @@ def execute_file_dispatch(payload: dict, *, config_path: str | None,
     target = inbox / (request_id + ".json")
     completed = inbox / "results" / (request_id + ".json")
     if completed.exists():
-        # The original result is immutable, including its failure status.
-        return json.loads(completed.read_text(encoding="utf-8"))
+        # Replay is permitted only for the exact original instruction.
+        # A reused requestId with different bytes must never inherit an
+        # unrelated successful receipt (even after process restart).
+        existing = json.loads(completed.read_text(encoding="utf-8"))
+        if existing.get("instructionSha256") != _digest:
+            raise FileDispatchDenied("request_id_collision")
+        return existing
     done = inbox / (request_id + "[DONE].json")
     if done.exists():
         raise FileDispatchDenied("completed_without_receipt")
