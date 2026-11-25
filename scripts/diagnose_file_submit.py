@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import sys
 
@@ -56,7 +57,7 @@ def main() -> int:
         "-p", str(args.port), args.host,
         "cd /opt/codex-bridge && "
         "sudo -n -u codexbridge /opt/codex-bridge/.venv/bin/python -c "
-        + _shell_quote(REMOTE),
+        + shlex.quote(REMOTE),
     ]
     try:
         proc = subprocess.run(command, text=True, capture_output=True, timeout=35)
@@ -86,10 +87,6 @@ def main() -> int:
         return 0
     print("DIAG_STATUS=missing_registration")
     return 3
-
-
-def _shell_quote(text: str) -> str:
-    return "'" + text.replace("'", "'\\''") + "'"
 
 
 if __name__ == "__main__":
