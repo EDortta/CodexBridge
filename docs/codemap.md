@@ -3749,6 +3749,12 @@ tests/
 
 > Tests the real AgentService dispatch path to the file executor using WebSocket envelope types, file receipts, replay and denials.
 
+### `scripts/align_file_agent_workspace.py`
+
+> Aligns only the already authorized CodexBridge project path in the live user Agent allowlist with the approved deterministic file-test workspace; private backup and strict branch/root checks.
+
+- `main()` — Verify the effective systemd Agent settings, restrict the target to the current worktree, and atomically update the existing project path.
+
 ### `scripts/repair_unit_tests_profile.py`
 
 > Provisions an isolated local pytest interpreter and binds the existing operator-approved unit-tests profile without weakening the executor environment.
