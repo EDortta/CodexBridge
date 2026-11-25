@@ -3749,6 +3749,12 @@ tests/
 
 > Tests the real AgentService dispatch path to the file executor using WebSocket envelope types, file receipts, replay and denials.
 
+### `scripts/verify_file_dispatch_local.py`
+
+> Executes the locally approved file test profile through the real adapter and publishes a sanitized result for MVP troubleshooting.
+
+- `main()` — Reproduce deterministic file dispatch using the user's Agent settings and preserve evidence.
+
 ### `scripts/diagnose_file_dispatch.py`
 
 > Read-only validation of the live user Agent's file-executor configuration, with sanitized results published to development-evidences.
