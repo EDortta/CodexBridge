@@ -19,6 +19,32 @@ import sys
 REMOTE = r'''
 import asyncio
 import json
+import os
+from pathlib import Path
+import subprocess
+
+# Reconstruct the running Gateway's environment and cwd BEFORE importing Settings.
+# Read in memory only; no secrets, database URL or paths leave frida.
+pid = subprocess.check_output(
+    ["systemctl", "show", "-p", "MainPID", "--value", "codex-bridge-gateway.service"],
+    text=True,
+).strip()
+if not pid.isdigit() or int(pid) <= 0:
+    print(json.dumps({"status": "gateway_not_running"}))
+    raise SystemExit(4)
+proc = Path("/proc") / pid
+try:
+    env_entries = (proc / "environ").read_bytes().split(b"\\0")
+    for entry in env_entries:
+        if not entry.startswith(b"CODEX_BRIDGE_") or b"=" not in entry:
+            continue
+        key, value = entry.split(b"=", 1)
+        os.environ[key.decode()] = value.decode()
+    os.chdir(os.readlink(proc / "cwd"))
+except (OSError, UnicodeError):
+    print(json.dumps({"status": "gateway_environment_unavailable"}))
+    raise SystemExit(4)
+
 from gateway.app.db.session import SessionLocal
 from gateway.app.models.entities import ExecutorModel, ProjectModel
 from gateway.app.services.store import effective_task_modes
@@ -51,7 +77,7 @@ print(json.dumps(asyncio.run(inspect()), sort_keys=True))
 
 def publish_diagnostic(result: dict) -> str:
     """Publish strictly projected policy facts; do not publish remote stderr."""
-    if result.get("status") not in {"ok", "test_denied", "missing_registration"}:
+    if result.get("status") not in {"ok", "test_denied", "missing_registration", "gateway_not_running", "gateway_environment_unavailable"}:
         return "invalid"
     safe = {"status": result["status"]}
     for key in ("executor_enabled", "project_enabled", "test_allowed",
@@ -131,7 +157,7 @@ def main() -> int:
         print("DIAG_STATUS=remote_read_failed")
         print("SSH_EXIT_CODE=" + str(proc.returncode))
         # Stderr might include sensitive diagnostic values: never publish it.
-        print("HINT=Check SSH access and sudo -n -u codexbridge authorization")
+        print("HINT=Check SSH access, Gateway service identity and process environment read access")
         return 2
     try:
         result = json.loads(proc.stdout.strip().splitlines()[-1])
