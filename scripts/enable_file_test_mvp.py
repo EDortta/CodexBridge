@@ -34,7 +34,7 @@ pid = subprocess.check_output(
 if not pid.isdecimal() or int(pid) < 1:
     print(json.dumps({"status": "gateway_not_running"})); raise SystemExit(2)
 proc = Path("/proc") / pid
-for entry in (proc / "environ").read_bytes().split(b"\\0"):
+for entry in (proc / "environ").read_bytes().split(bytes([0])):
     if entry.startswith(b"CODEX_BRIDGE_") and b"=" in entry:
         key, value = entry.split(b"=", 1)
         os.environ[key.decode()] = value.decode()
