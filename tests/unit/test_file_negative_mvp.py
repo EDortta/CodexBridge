@@ -165,7 +165,7 @@ def test_reconnect_recovers_orphan_running_without_reexecution(harness):
     ).hexdigest()
     assert (harness["inbox"] / "reconnect-orphan[DONE].json").is_file()
     assert not list(harness["inbox"].glob("*.running"))
-    assert not list(harness["inbox"].glob("*.json"))
+    assert not (harness["inbox"] / "reconnect-orphan.json").exists()
     assert not harness["marker"].exists()
     assert dispatch(harness, request) == receipt
     assert not harness["marker"].exists()
