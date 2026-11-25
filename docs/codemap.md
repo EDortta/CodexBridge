@@ -3749,6 +3749,12 @@ tests/
 
 > Tests the real AgentService dispatch path to the file executor using WebSocket envelope types, file receipts, replay and denials.
 
+### `scripts/repair_unit_tests_profile.py`
+
+> Provisions an isolated local pytest interpreter and binds the existing operator-approved unit-tests profile without weakening the executor environment.
+
+- `main()` — Verify local runtime, provision missing dependencies, and atomically update only the profile interpreter.
+
 ### `scripts/verify_file_dispatch_local.py`
 
 > Executes the locally approved file test profile through the real adapter and publishes a sanitized result for MVP troubleshooting.
