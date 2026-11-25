@@ -8,6 +8,8 @@ on:
       - 'agent/codex_bridge_agent/file_executor.py'
       - 'tests/unit/test_file_executor.py'
       - 'tests/unit/test_file_ws_adapter.py'
+      - 'tests/unit/test_file_negative_mvp.py'
+      - 'agent/codex_bridge_agent/file_ws_adapter.py'
       - 'tests/unit/test_evidence_query.py'
       - '.github/workflows/file-instruction-executor.yml'
   workflow_dispatch:
@@ -29,7 +31,8 @@ jobs:
         run: |
           python scripts/run_file_ws_evidence.py --no-publish -- \
             python -m pytest -q tests/unit/test_file_executor.py \
-            tests/unit/test_file_ws_adapter.py tests/unit/test_file_ws_evidence.py \
+            tests/unit/test_file_ws_adapter.py tests/unit/test_file_negative_mvp.py \
+            tests/unit/test_file_ws_evidence.py \
             tests/unit/test_evidence_query.py
       - name: Upload verification manifest even on failure
         if: always()
