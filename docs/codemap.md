@@ -3745,6 +3745,10 @@ tests/
 - `execute_file_dispatch(payload, *, config_path, inbox_path, approved_project_root)` — Gate, spool, execute and read the receipt.
 - `dispatch_file_task(payload, *, config_path, inbox_path, approved_project_root)` — Async adapter, executes off the event loop.
 
+### `tests/unit/test_file_negative_mvp.py`
+
+> Negative MVP acceptance tests: unauthorized modes and profiles, mismatched workspaces, unsafe configuration, exact replay, request ID collision, and interrupted-run fail-closed behavior.
+
 ### `tests/unit/test_file_ws_adapter.py`
 
 > Tests the real AgentService dispatch path to the file executor using WebSocket envelope types, file receipts, replay and denials.
