@@ -16,7 +16,11 @@ import stat
 import subprocess
 import sys
 
+INSPECTION_STAGE = "initial"
+
 def inspect_config() -> tuple[list[str], bool, bool]:
+    global INSPECTION_STAGE
+    INSPECTION_STAGE = "systemd_environment"
     env = subprocess.run(
         ["systemctl", "--user", "show", "codex-bridge-agent.service",
          "--property=Environment", "--value"],
@@ -28,27 +32,33 @@ def inspect_config() -> tuple[list[str], bool, bool]:
     for key, val in settings.items():
         if key.startswith("CODEX_BRIDGE_AGENT_"):
             os.environ[key] = val
+    INSPECTION_STAGE = "imports"
     from agent.codex_bridge_agent.config import AgentSettings, load_agent_projects
     from agent.codex_bridge_agent.service import _configured_capabilities
     from shared.protocol import Capability
+    INSPECTION_STAGE = "settings"
     config = AgentSettings()
     problems = []
     def check(condition: bool, label: str):
         if not condition:
             problems.append(label)
+    INSPECTION_STAGE = "projects"
     projects = load_agent_projects(config.allowed_projects_file)
     project = projects.get("codexbridge")
     check(project is not None, "project_not_allowlisted")
     if project is not None:
         check("test" in [str(m.value if hasattr(m, "value") else m)
                          for m in project.allowed_modes], "local_test_not_allowed")
+    INSPECTION_STAGE = "capabilities"
     check(Capability.TEST in _configured_capabilities(config),
           "local_test_capability_missing")
+    INSPECTION_STAGE = "file_executor_paths"
     conf = Path(config.file_executor_config_file) if config.file_executor_config_file else None
     inbox = Path(config.file_executor_inbox) if config.file_executor_inbox else None
     check(conf is not None, "executor_config_unset")
     check(inbox is not None, "executor_inbox_unset")
     data = None
+    INSPECTION_STAGE = "operator_configuration"
     if conf is not None:
         check(conf.is_file() and not conf.is_symlink(), "executor_config_missing_or_link")
         if conf.is_file() and not conf.is_symlink():
@@ -65,6 +75,7 @@ def inspect_config() -> tuple[list[str], bool, bool]:
         if project is not None:
             check(Path(data.get("root", "/unlikely")).resolve() ==
                   Path(project.path).resolve(), "workspace_mismatch")
+    INSPECTION_STAGE = "inbox_permissions"
     if inbox is not None:
         check(inbox.is_dir() and not inbox.is_symlink(), "inbox_missing_or_link")
         if inbox.is_dir():
@@ -86,6 +97,7 @@ def main() -> int:
         "status": "success" if not problems else "failed",
         "diagnostic": {"checks_failed": problems,
                        "exception_type": exception_type,
+                       "exception_stage": INSPECTION_STAGE if exception_type else None,
                        "service_config_detected": service_detected,
                        "project_allowlisted": project_allowlisted}
     }
