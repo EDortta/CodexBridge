@@ -1039,6 +1039,13 @@ class AgentService:
                 "task_id": task_id, "final_state": TaskState.FAILED.value,
                 "error": "file_dispatch:" + type(exc).__name__,
                 "return_code": -1,
+                # Safe failure category, surfaced by the existing MCP receipt projection.
+                # Never include exception messages, source paths, or process output.
+                "file_receipt": {
+                    "status": "failed",
+                    "reason": "file_dispatch:" + type(exc).__name__,
+                    "exitCode": -1,
+                },
             }
         finally:
             self._file_tasks_in_flight.discard(task_id)
