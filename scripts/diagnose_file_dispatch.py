@@ -16,6 +16,11 @@ import stat
 import subprocess
 import sys
 
+# When invoked as "python scripts/..." Python puts scripts/ first on sys.path.
+# Prefer this checkout, not a possibly older editable installation elsewhere.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
 INSPECTION_STAGE = "initial"
 
 def inspect_config() -> tuple[list[str], bool, bool]:
@@ -53,8 +58,14 @@ def inspect_config() -> tuple[list[str], bool, bool]:
     check(Capability.TEST in _configured_capabilities(config),
           "local_test_capability_missing")
     INSPECTION_STAGE = "file_executor_paths"
-    conf = Path(config.file_executor_config_file) if config.file_executor_config_file else None
-    inbox = Path(config.file_executor_inbox) if config.file_executor_inbox else None
+    config_path = getattr(config, "file_executor_config_file", None)
+    inbox_path = getattr(config, "file_executor_inbox", None)
+    if not hasattr(config, "file_executor_config_file"):
+        problems.append("missing_agent_setting_config_file")
+    if not hasattr(config, "file_executor_inbox"):
+        problems.append("missing_agent_setting_inbox")
+    conf = Path(config_path) if config_path else None
+    inbox = Path(inbox_path) if inbox_path else None
     check(conf is not None, "executor_config_unset")
     check(inbox is not None, "executor_inbox_unset")
     data = None
