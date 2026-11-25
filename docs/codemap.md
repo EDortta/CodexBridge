@@ -3737,3 +3737,76 @@ tests/
 > Produces sanitized evidence after invoking the actual local file executor CLI twice, proving terminal DONE and no duplicate execution.
 
 - `main()` — Execute and verify the local file transport proof.
+
+### `agent/codex_bridge_agent/file_ws_adapter.py`
+
+> Converts an authorized Gateway WebSocket `task.dispatch` in TEST mode into a local deterministic file instruction; persists receipts and replays without rerunning.
+
+- `execute_file_dispatch(payload, *, config_path, inbox_path, approved_project_root)` — Gate, spool, execute and read the receipt.
+- `dispatch_file_task(payload, *, config_path, inbox_path, approved_project_root)` — Async adapter, executes off the event loop.
+
+### `tests/unit/test_file_negative_mvp.py`
+
+> Negative MVP acceptance tests: unauthorized modes and profiles, mismatched workspaces, unsafe configuration, exact replay, request ID collision, and interrupted-run fail-closed behavior.
+
+### `tests/unit/test_file_ws_adapter.py`
+
+> Tests the real AgentService dispatch path to the file executor using WebSocket envelope types, file receipts, replay and denials.
+
+### `scripts/align_file_agent_workspace.py`
+
+> Aligns only the already authorized CodexBridge project path in the live user Agent allowlist with the approved deterministic file-test workspace; private backup and strict branch/root checks.
+
+- `main()` — Verify the effective systemd Agent settings, restrict the target to the current worktree, and atomically update the existing project path.
+
+### `scripts/repair_unit_tests_profile.py`
+
+> Provisions an isolated local pytest interpreter and binds the existing operator-approved unit-tests profile without weakening the executor environment.
+
+- `main()` — Verify local runtime, provision missing dependencies, and atomically update only the profile interpreter.
+
+### `scripts/verify_file_dispatch_local.py`
+
+> Executes the locally approved file test profile through the real adapter and publishes a sanitized result for MVP troubleshooting.
+
+- `main()` — Reproduce deterministic file dispatch using the user's Agent settings and preserve evidence.
+
+### `scripts/diagnose_file_dispatch.py`
+
+> Read-only validation of the live user Agent's file-executor configuration, with sanitized results published to development-evidences.
+
+- `main()` — Inspect project allowlist, test capability, config, inbox permissions and workspace binding without running commands.
+
+### `scripts/enable_file_test_mvp.py`
+
+> Controlled pre-MVP Gateway authorization of TEST mode for codexbridge/devel3. Reads the active Gateway process database, grants only TEST, and publishes sanitized evidence.
+
+- `main()` — Apply minimal scoped authorization and enqueue evidence publication.
+
+### `scripts/diagnose_file_submit.py`
+
+> Read-only authorization diagnostic for Gateway TEST-mode submission. Publishes a sanitized authorization snapshot through development-evidences; it does not run the feature's unit tests.
+
+- `publish_diagnostic(result)` — Publish a filtered authorization result using the shared evidence publisher.
+- `main()` — Query effective permissions through SSH and report diagnostic status.
+
+### `scripts/run_file_ws_evidence.py`
+
+> Runs a bounded command with private logs and writes a sanitized manifest for success, failed exit, timeout, and spawn failure; queues the envelope through the existing development-evidences publisher.
+
+- `run_evidenced(command, *, feature, timeout, state_root, publisher)` — Execute and retain evidence regardless of subprocess exit status.
+- `main(argv=None)` — CLI interface for evidenced verification.
+
+### `tests/unit/test_file_ws_evidence.py`
+
+> Regression tests verifying local success, failed subprocess and timeout always produce a manifest and preserve the failure status.
+
+### `agent/codex_bridge_agent/evidence_reader.py`
+
+> Returns sanitized, bounded file-run evidence manifests from a private local state root without exposing raw logs, private paths or arbitrary filenames.
+
+- `list_evidence(*, state_root, project_id, feature, limit)` — Read project-specific recent evidence and locally claimed publication status.
+
+### `tests/unit/test_evidence_query.py`
+
+> Verifies manifest sanitization, traversal denial, evidence.query roundtrip, and matching gateway correlation.

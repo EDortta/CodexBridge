@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -90,6 +91,16 @@ def _safe_task_result_projection(raw: object) -> dict:
                 for item in value
                 if isinstance(item, str)
             ]
+    receipt = raw.get("file_receipt")
+    if isinstance(receipt, dict):
+        # Expose evidence metadata, never command output or executable paths.
+        allowed = {"requestId", "status", "exitCode", "instructionSha256",
+                   "startedAt", "finishedAt", "timedOut", "reason"}
+        projected["file_receipt"] = {
+            k: redact_sensitive_text(v) if isinstance(v, str) else v
+            for k, v in receipt.items()
+            if k in allowed and (v is None or type(v) in (str, int, bool))
+        }
     return projected
 
 
@@ -375,6 +386,73 @@ async def handle_mcp_call(
             ]
         }
         result = _text_result(f"Found {len(payload['projects'])} projects.", payload)
+    elif tool_name == "list_execution_evidence":
+        require_scope("codexbridge.read")
+        executor_id = arguments.get("executor_id")
+        project_id = arguments.get("project_id")
+        feature = arguments.get("feature")
+        limit = arguments.get("limit", 5)
+        if (not isinstance(executor_id, str) or not isinstance(project_id, str)
+                or not isinstance(feature, str) or
+                not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", feature) or
+                type(limit) is not int or not 1 <= limit <= 20):
+            raise HTTPException(status_code=422, detail="invalid_evidence_query")
+        if principal is not None and not principal.can_access_project(project_id):
+            raise HTTPException(status_code=403, detail="project_access_denied")
+        executor = await session.get(ExecutorModel, executor_id)
+        if executor is None or not executor.enabled:
+            raise HTTPException(status_code=404, detail="unknown_executor")
+        allowed = await store.list_projects_for_executor(session, executor_id)
+        if not any(p.id == project_id and p.enabled for p in allowed):
+            raise HTTPException(status_code=403, detail="project_not_allowed_for_executor")
+        data = await hub.query_evidence(executor_id, project_id, feature, limit)
+        result = _text_result("Read-only execution evidence query completed.", {
+            "executor_id": executor_id, "project_id": project_id,
+            "feature": feature, **data
+        })
+    elif tool_name == "submit_file_instruction":
+        # Reuse the existing TaskModel queue and gateway authorization gate.
+        # There is NO request for edit/implement and NO arbitrary command field.
+        require_scope("codexbridge.task.submit")
+        raw = arguments["instruction"]
+        if not isinstance(raw, str) or len(raw.encode("utf-8")) > 16384:
+            raise HTTPException(status_code=422, detail="file_instruction_invalid")
+        try:
+            envelope = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="file_instruction_invalid") from exc
+        if (not isinstance(envelope, dict) or set(envelope) != {
+            "schemaVersion", "requestId", "project", "branch", "profile"
+        } or envelope.get("schemaVersion") != 1 or
+                envelope.get("project") != arguments["project_id"] or
+                not all(isinstance(envelope.get(field), str) for field in (
+                    "requestId", "project", "branch", "profile"
+                ))):
+            raise HTTPException(status_code=422, detail="file_instruction_invalid")
+        request = SubmitTaskRequest(
+            executor_id=arguments["executor_id"],
+            project_id=arguments["project_id"],
+            instruction=raw, mode=TaskMode.TEST,
+            engine=AgentEngine.FILE,
+            timeout_seconds=arguments["timeout_seconds"],
+            priority=TaskPriority.NORMAL, run_when_available=True,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        )
+        if principal is not None and not principal.can_access_project(request.project_id):
+            raise HTTPException(status_code=403, detail="project_access_denied")
+        task = await store.create_task(
+            session, request, hub.is_connected(request.executor_id),
+            requested_by_user_id=principal.user_id if principal else None,
+            requested_by_email=principal.email if principal else None,
+            can_approve_push=False,
+        )
+        task = await store.get_task(session, task.id)
+        if task.state == TaskState.QUEUED.value:
+            await hub.dispatch_available(task.executor_id)
+        result = _text_result("File instruction admitted to authorized TEST task queue.", {
+            "task_id": task.id, "state": task.state,
+            "project_id": task.project_id, "executor_id": task.executor_id,
+        })
     elif tool_name == "submit_codex_task":
         require_scope("codexbridge.task.submit")
         request = SubmitTaskRequest.model_validate(arguments)
