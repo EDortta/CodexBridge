@@ -93,6 +93,22 @@ def execute_file_dispatch(payload: dict, *, config_path: str | None,
     done = inbox / (request_id + "[DONE].json")
     if done.exists():
         raise FileDispatchDenied("completed_without_receipt")
+    # On reconnect after an Agent process restart, a claimed instruction may
+    # be left as .running. Recover it under the executor's exclusive lock:
+    # never spawn the operator command a second time. The resulting failed
+    # receipt is returned to the Gateway when it replays this task.
+    running = inbox / (request_id + ".running")
+    if running.exists():
+        if running.is_symlink() or not running.is_file():
+            raise FileDispatchDenied("request_id_collision")
+        if running.read_bytes() != raw.encode("utf-8"):
+            raise FileDispatchDenied("request_id_collision")
+        recovered = process_once(inbox, config, only_id=request_id)
+        if recovered:
+            return recovered[0]
+        if completed.is_file():
+            return json.loads(completed.read_text(encoding="utf-8"))
+        raise FileDispatchDenied("execution_not_recorded")
     _write_if_absent(target, raw)
     outcomes = process_once(inbox, config, only_id=request_id)
     if outcomes:
