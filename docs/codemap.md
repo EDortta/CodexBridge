@@ -3749,6 +3749,12 @@ tests/
 
 > Tests the real AgentService dispatch path to the file executor using WebSocket envelope types, file receipts, replay and denials.
 
+### `scripts/enable_file_test_mvp.py`
+
+> Controlled pre-MVP Gateway authorization of TEST mode for codexbridge/devel3. Reads the active Gateway process database, grants only TEST, and publishes sanitized evidence.
+
+- `main()` — Apply minimal scoped authorization and enqueue evidence publication.
+
 ### `scripts/diagnose_file_submit.py`
 
 > Read-only authorization diagnostic for Gateway TEST-mode submission. Publishes a sanitized authorization snapshot through development-evidences; it does not run the feature's unit tests.
