@@ -83,7 +83,7 @@ def publish_diagnostic(result: dict) -> str:
         return "publisher_unavailable"
     envelope_path = Path.home() / ".local/state/codexbridge/file-submit-diagnostic.json"
     envelope_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    envelope_path.write_text(json.dumps(envelope, sort_keys=True) + "\\n")
+    envelope_path.write_text(json.dumps(envelope, sort_keys=True) + "\n")
     envelope_path.chmod(0o600)
     try:
         put = subprocess.run(
