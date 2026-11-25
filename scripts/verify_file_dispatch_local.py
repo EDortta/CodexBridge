@@ -69,6 +69,17 @@ def main() -> int:
             reason = str(exc)
             diag["reason"] = reason if isinstance(exc, FileDispatchDenied) and reason in safe_denials else type(exc).__name__
 
+    # Report only a fixed category; never publish raw test output.
+    output = receipt.get("output", "") if "receipt" in locals() else ""
+    if isinstance(output, str):
+        if "No module named pytest" in output:
+            diag["reason"] = "pytest_missing_from_profile_interpreter"
+        elif "no tests ran" in output:
+            diag["reason"] = "no_tests_collected"
+        elif "ERROR collecting" in output or "ImportError while importing test module" in output:
+            diag["reason"] = "pytest_collection_error"
+        elif " failed" in output and " passed" in output:
+            diag["reason"] = "pytest_assertions_failed"
     allowed = {"requestId", "status", "exitCode", "reason", "timedOut", "profile"}
     diag = {k: v for k, v in diag.items() if k in allowed}
     print("FILE_DISPATCH_STATUS=" + str(diag["status"]))
