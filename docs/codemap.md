@@ -3749,6 +3749,13 @@ tests/
 
 > Tests the real AgentService dispatch path to the file executor using WebSocket envelope types, file receipts, replay and denials.
 
+### `scripts/diagnose_file_submit.py`
+
+> Read-only authorization diagnostic for Gateway TEST-mode submission. Publishes a sanitized authorization snapshot through development-evidences; it does not run the feature's unit tests.
+
+- `publish_diagnostic(result)` — Publish a filtered authorization result using the shared evidence publisher.
+- `main()` — Query effective permissions through SSH and report diagnostic status.
+
 ### `scripts/run_file_ws_evidence.py`
 
 > Runs a bounded command with private logs and writes a sanitized manifest for success, failed exit, timeout, and spawn failure; queues the envelope through the existing development-evidences publisher.
