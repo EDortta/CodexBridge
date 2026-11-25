@@ -232,3 +232,36 @@ async def test_control_replay_still_happens_within_max_age(factory) -> None:
     await hub.register("E1", websocket)
 
     assert [payload["payload"]["task_id"] for payload in websocket.sent] == [pausing_id]
+
+
+@pytest.mark.asyncio
+async def test_reconnect_replays_only_running_file_task_and_preserves_slot(factory) -> None:
+    """Only an outstanding deterministic TEST file task is redelivered."""
+    running_file = await _make_task(
+        factory, instruction='{"schemaVersion":1,"requestId":"reconnect-001"}',
+        state=TaskState.RUNNING,
+    )
+    running_codex = await _make_task(
+        factory, instruction="not safe to replay", state=TaskState.RUNNING
+    )
+    await _make_task(factory, instruction="already completed", state=TaskState.COMPLETED)
+    async with factory() as session:
+        file_task = await session.get(store.TaskModel, running_file)
+        file_task.engine = "file"
+        file_task.mode = "test"
+        await session.commit()
+
+    hub = AgentHub(factory)
+    ws = DummyWebSocket()
+    await hub.register("E1", ws)
+
+    assert len(ws.sent) == 1
+    dispatched = ws.sent[0]
+    assert dispatched["type"] == "task.dispatch"
+    assert dispatched["payload"]["task_id"] == running_file
+    assert dispatched["payload"]["engine"] == "file"
+    assert dispatched["payload"]["mode"] == "test"
+    assert dispatched["payload"]["instruction"] == file_task.instruction
+    assert running_file in hub.running_tasks["E1"]
+    assert running_codex not in hub.running_tasks["E1"]
+    assert await hub.dispatch_next("E1") is None
