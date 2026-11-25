@@ -3749,6 +3749,12 @@ tests/
 
 > Tests the real AgentService dispatch path to the file executor using WebSocket envelope types, file receipts, replay and denials.
 
+### `scripts/diagnose_file_dispatch.py`
+
+> Read-only validation of the live user Agent's file-executor configuration, with sanitized results published to development-evidences.
+
+- `main()` — Inspect project allowlist, test capability, config, inbox permissions and workspace binding without running commands.
+
 ### `scripts/enable_file_test_mvp.py`
 
 > Controlled pre-MVP Gateway authorization of TEST mode for codexbridge/devel3. Reads the active Gateway process database, grants only TEST, and publishes sanitized evidence.
