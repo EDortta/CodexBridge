@@ -90,7 +90,8 @@ def main() -> int:
             print("STATUS=pytest_dependency_install_failed")
             return 2
         installed = True
-    if argv[0] != str(interpreter):
+    profile_changed = argv[0] != str(interpreter)
+    if profile_changed:
         config["profiles"]["unit-tests"]["argv"][0] = str(interpreter)
         # Atomic replacement; strictly preserve original private file mode.
         fd, temporary = tempfile.mkstemp(prefix=".file-executor-", dir=path.parent)
@@ -107,7 +108,7 @@ def main() -> int:
                 os.unlink(temporary)
     print("STATUS=ready")
     print("ISOLATED_INTERPRETER_VERIFIED=true")
-    print("PROFILE_CHANGED=" + str(argv[0] != str(interpreter)).lower())
+    print("PROFILE_CHANGED=" + str(profile_changed).lower())
     print("TEST_ENV_CREATED=" + str(installed).lower())
     return 0
 
