@@ -21,6 +21,8 @@ from agent.codex_bridge_agent.config import (
 )
 from agent.codex_bridge_agent.forge.base import ForgeOutcome
 from agent.codex_bridge_agent.forge.github import run_forge_operation
+from agent.codex_bridge_agent.file_ws_adapter import FileDispatchDenied, dispatch_file_task
+from agent.codex_bridge_agent.evidence_reader import list_evidence
 from agent.codex_bridge_agent.git_delivery import deliver_changes
 from agent.codex_bridge_agent.git_tools import run_git
 from agent.codex_bridge_agent.instructions import IssueResolutionError, build_task_instruction, resolve_issue_text
@@ -140,6 +142,7 @@ class AgentService:
         # defaulting to "codex" for a payload that predates the `engine`
         # field so an unmodified gateway keeps dispatching correctly.
         self.runners = RunnerPool(settings)
+        self._file_tasks_in_flight: set[str] = set()
 
     async def run_forever(self) -> None:
         delay = self.settings.reconnect_min_seconds
@@ -197,6 +200,8 @@ class AgentService:
                     envelope = AgentEnvelope.model_validate_json(raw)
                     if envelope.type == AgentMessageType.TASK_DISPATCH:
                         asyncio.create_task(self._handle_dispatch(websocket, envelope))
+                    elif envelope.type == AgentMessageType.EVIDENCE_QUERY:
+                        asyncio.create_task(self._handle_evidence_query(websocket, envelope))
                     elif envelope.type == AgentMessageType.ISSUE_MATERIALIZE:
                         asyncio.create_task(self._handle_materialize(websocket, envelope))
                     elif envelope.type == AgentMessageType.FORGE_OPERATION:
@@ -411,6 +416,10 @@ class AgentService:
         # runner abstraction, so an unmodified gateway keeps dispatching
         # correctly against an upgraded executor.
         engine = envelope.payload.get("engine", "codex")
+        # Deterministic test instructions do not enter a coding LLM runner.
+        if engine == "file":
+            await self._handle_file_dispatch(websocket, envelope)
+            return
         # Replayed dispatches while a task is active must not launch a
         # second local process. Restart-safe deduplication is separate.
         if self.runners.is_known(task_id):
@@ -765,6 +774,30 @@ class AgentService:
         except Exception:
             logger.warning("Failed to build full node announcement; sending minimal fallback", exc_info=True)
             return NodeAnnouncement(agent_version=AGENT_VERSION)
+    async def _handle_evidence_query(self, websocket, envelope: AgentEnvelope) -> None:
+        """Manifest-only query; no subprocess and no arbitrary filesystem path."""
+        payload = envelope.payload
+        request_id = payload.get("request_id")
+        project_id = payload.get("project_id")
+        feature = payload.get("feature")
+        limit = payload.get("limit", 5)
+        data: dict = {"status": "denied", "items": []}
+        if (isinstance(request_id, str) and len(request_id) == 36 and
+                isinstance(project_id, str) and project_id in self.projects and
+                isinstance(feature, str) and type(limit) is int and 1 <= limit <= 20):
+            try:
+                data = await asyncio.to_thread(
+                    list_evidence,
+                    state_root=Path(self.settings.evidence_state_root),
+                    project_id=project_id, feature=feature, limit=limit
+                )
+            except (OSError, ValueError):
+                data = {"status": "evidence_read_failed", "items": []}
+        if isinstance(request_id, str) and len(request_id) == 36:
+            await websocket.send(self._envelope(AgentMessageType.EVIDENCE_RESULT, {
+                "request_id": request_id, "data": data
+            }).model_dump_json())
+
     async def _handle_materialize(self, websocket, envelope: AgentEnvelope) -> None:
         """Writes one epic's rendered markdown to disk -- issue #78, Commit 2c.
 
@@ -959,6 +992,77 @@ class AgentService:
                 repo_identity=operation.repo_identity,
             )
         await send_result(outcome)
+
+    async def _handle_file_dispatch(self, websocket, envelope: AgentEnvelope) -> None:
+        """Handle the existing authenticated task.dispatch, not a second socket."""
+        payload = envelope.payload
+        task_id = payload.get("task_id")
+        project_id = payload.get("project_id")
+        if not isinstance(task_id, str) or not task_id:
+            return
+        if task_id in self._file_tasks_in_flight:
+            await websocket.send(self._envelope(AgentMessageType.TASK_ACK, {
+                "task_id": task_id, "accepted": True, "state": TaskState.RUNNING.value
+            }).model_dump_json())
+            return
+        self._file_tasks_in_flight.add(task_id)
+        try:
+            # Mirror the machine-side and per-project gate before accepting.
+            project = self.projects.get(project_id)
+            if (project is None or payload.get("mode") != TaskMode.TEST.value
+                    or TaskMode.TEST not in capabilities_to_modes(_configured_capabilities(self.settings))):
+                raise ValueError("file_task_project_or_capability_denied")
+            await websocket.send(self._envelope(AgentMessageType.TASK_ACK, {
+                "task_id": task_id, "accepted": True, "state": TaskState.RUNNING.value
+            }).model_dump_json())
+            receipt = await dispatch_file_task(
+                payload, config_path=self.settings.file_executor_config_file,
+                inbox_path=self.settings.file_executor_inbox,
+                approved_project_root=project.path,
+            )
+            succeeded = receipt.get("status") == "success"
+            result = {
+                "task_id": task_id,
+                "final_state": TaskState.COMPLETED.value if succeeded else TaskState.FAILED.value,
+                "return_code": receipt.get("exitCode"),
+                "last_message": "file_instruction:" + str(receipt.get("requestId", "")),
+                "file_receipt": {key: receipt.get(key) for key in (
+                    "requestId", "status", "exitCode", "instructionSha256",
+                    "startedAt", "finishedAt", "timedOut", "reason"
+                )},
+                "no_changes": True,
+                "tests_ran": [receipt.get("profile")] if receipt.get("profile") else [],
+            }
+        except Exception as exc:
+            # FileDispatchDenied carries fixed reason tokens from the adapter;
+            # never forward arbitrary exception messages or filesystem paths.
+            safe_denials = {
+                "file_executor_not_configured", "file_engine_requires_test",
+                "file_engine_excludes_delivery_and_sessions",
+                "invalid_file_instruction", "unsafe_operator_config",
+                "bad_operator_config", "project_mismatch", "workspace_mismatch",
+                "unsafe_inbox_permissions", "invalid_instruction_type",
+                "missing_request_id", "request_id_collision",
+                "project_or_branch_mismatch", "profile_not_allowed",
+                "completed_without_receipt", "execution_not_recorded",
+            }
+            failure = (
+                str(exc) if isinstance(exc, FileDispatchDenied)
+                and str(exc) in safe_denials else type(exc).__name__
+            )
+            result = {
+                "task_id": task_id, "final_state": TaskState.FAILED.value,
+                "error": "file_dispatch:" + type(exc).__name__,
+                "return_code": -1,
+                "file_receipt": {
+                    "status": "failed",
+                    "reason": failure,
+                    "exitCode": -1,
+                },
+            }
+        finally:
+            self._file_tasks_in_flight.discard(task_id)
+        await websocket.send(self._envelope(AgentMessageType.TASK_RESULT, result).model_dump_json())
 
     def _envelope(self, message_type: AgentMessageType, payload: dict) -> AgentEnvelope:
         return AgentEnvelope(
