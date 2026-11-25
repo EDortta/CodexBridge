@@ -16,7 +16,7 @@ import stat
 import subprocess
 import sys
 
-def main() -> int:
+def inspect_config() -> tuple[list[str], bool, bool]:
     env = subprocess.run(
         ["systemctl", "--user", "show", "codex-bridge-agent.service",
          "--property=Environment", "--value"],
@@ -69,13 +69,25 @@ def main() -> int:
         check(inbox.is_dir() and not inbox.is_symlink(), "inbox_missing_or_link")
         if inbox.is_dir():
             check(not (inbox.stat().st_mode & 0o077), "inbox_not_private")
+    return problems, bool(env), project is not None
+
+
+def main() -> int:
+    try:
+        problems, service_detected, project_allowlisted = inspect_config()
+        exception_type = None
+    except Exception as exc:
+        # Never publish exception messages, which may contain local paths or secrets.
+        problems, service_detected, project_allowlisted = ["diagnostic_exception"], False, False
+        exception_type = type(exc).__name__
     report = {
         "schema": 1, "project": "CodexBridge", "feature": "file-dispatch-config",
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "status": "success" if not problems else "failed",
         "diagnostic": {"checks_failed": problems,
-                       "service_config_detected": bool(env),
-                       "project_allowlisted": project is not None}
+                       "exception_type": exception_type,
+                       "service_config_detected": service_detected,
+                       "project_allowlisted": project_allowlisted}
     }
     relative = ("CodexBridge/file-dispatch-config/"
                 + datetime.now(timezone.utc).strftime("%Y-%m-%d/%Y%m%dT%H%M%SZ-")
