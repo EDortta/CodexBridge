@@ -83,7 +83,16 @@ def main() -> int:
     ]):
         print("STATUS=tests_missing")
         return 2
-    if allowlist.stat().st_mode & 0o022:
+    # Only repair permissions on the *effective* allowlist loaded by the
+    # running service. Never chmod an assumed ~/.config path or a symlink.
+    owner = allowlist.stat()
+    if owner.st_uid != os.getuid() or owner.st_nlink != 1:
+        print("STATUS=allowlist_ownership_unverified")
+        return 2
+    if owner.st_mode & 0o077:
+        allowlist.chmod(0o600)
+        print("ALLOWLIST_PERMISSIONS=restricted_to_owner")
+    if allowlist.stat().st_mode & 0o077:
         print("STATUS=unsafe_allowlist_permissions")
         return 2
     data = json.loads(allowlist.read_text())
