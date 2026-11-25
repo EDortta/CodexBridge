@@ -158,3 +158,32 @@ Example MCP arguments (after Gateway and Agent are deployed):
 be reloaded by the connected plugin. No production restart or deployment
 was performed by this branch commit. CI exercises a captured WebSocket
 and reader but cannot prove the live frida/devel3 network roundtrip.
+
+## Interruption during a deterministic file run (reconnect recovery)
+
+A live devel3 test on 25 November 2026 interrupted the user Agent while
+`unit-tests` was active. The observer confirmed a systemd restart but found
+the instruction stuck at `<requestId>.running` without a receipt, while the
+Gateway persisted the task as `running`. The original build failed recovery.
+
+The recovery contract is **fail-closed**, not transparent rerun:
+
+1. On reconnect, the Gateway resends only outstanding `engine=file`,
+   `mode=test`, `state=running` envelopes, preserving the task ID.
+2. If the Agent has the original completed receipt, it sends that receipt
+   again (success or failure) without executing.
+3. If the Agent instead finds an orphaned `.running` instruction, it
+   atomically finalizes an `interrupted` failure receipt, retaining the
+   original instruction hash, and reports the failure to the Gateway.
+4. A different instruction with the same request ID is rejected.
+5. No untrusted instruction can command a rerun. A human may submit a *new*
+   request ID after investigating the interrupted result.
+
+A test interrupted during execution is **not** considered passed. Acceptance
+requires the Gateway task to leave `running`, the Agent to reconnect, and
+the same original request ID to have only one execution attempt.
+Other engines and terminal task states are not replayed.
+
+This change needs coordinated Agent and Gateway deployment and a new live
+systemd-interruption acceptance test. Unit/integration tests alone do not
+prove the live deployment or that the original stuck task was reconciled.
