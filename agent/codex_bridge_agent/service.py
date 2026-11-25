@@ -21,7 +21,7 @@ from agent.codex_bridge_agent.config import (
 )
 from agent.codex_bridge_agent.forge.base import ForgeOutcome
 from agent.codex_bridge_agent.forge.github import run_forge_operation
-from agent.codex_bridge_agent.file_ws_adapter import dispatch_file_task
+from agent.codex_bridge_agent.file_ws_adapter import FileDispatchDenied, dispatch_file_task
 from agent.codex_bridge_agent.evidence_reader import list_evidence
 from agent.codex_bridge_agent.git_delivery import deliver_changes
 from agent.codex_bridge_agent.git_tools import run_git
@@ -1034,16 +1034,29 @@ class AgentService:
                 "tests_ran": [receipt.get("profile")] if receipt.get("profile") else [],
             }
         except Exception as exc:
-            # Do not leak paths, secrets or untrusted command output over WS.
+            # FileDispatchDenied carries fixed reason tokens from the adapter;
+            # never forward arbitrary exception messages or filesystem paths.
+            safe_denials = {
+                "file_executor_not_configured", "file_engine_requires_test",
+                "file_engine_excludes_delivery_and_sessions",
+                "invalid_file_instruction", "unsafe_operator_config",
+                "bad_operator_config", "project_mismatch", "workspace_mismatch",
+                "unsafe_inbox_permissions", "invalid_instruction_type",
+                "missing_request_id", "request_id_collision",
+                "project_or_branch_mismatch", "profile_not_allowed",
+                "completed_without_receipt", "execution_not_recorded",
+            }
+            failure = (
+                str(exc) if isinstance(exc, FileDispatchDenied)
+                and str(exc) in safe_denials else type(exc).__name__
+            )
             result = {
                 "task_id": task_id, "final_state": TaskState.FAILED.value,
                 "error": "file_dispatch:" + type(exc).__name__,
                 "return_code": -1,
-                # Safe failure category, surfaced by the existing MCP receipt projection.
-                # Never include exception messages, source paths, or process output.
                 "file_receipt": {
                     "status": "failed",
-                    "reason": "file_dispatch:" + type(exc).__name__,
+                    "reason": failure,
                     "exitCode": -1,
                 },
             }
