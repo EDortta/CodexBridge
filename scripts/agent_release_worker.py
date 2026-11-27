@@ -21,6 +21,8 @@ import time
 
 STATE = Path.home() / ".local/state/codexbridge/agent-deploy"
 UNIT = "codex-bridge-agent.service"
+ACTIVE_ROOT = Path("/home/esteban/Sync/Projects/AI/CodexBridge-agent")
+OPERATOR_CONFIG = Path("/home/esteban/.config/codexbridge/file-executor.json")
 FILES = ("agent/codex_bridge_agent/file_executor.py",
          "agent/codex_bridge_agent/file_ws_adapter.py")
 
@@ -96,7 +98,7 @@ def apply(stage: Path) -> dict:
         return result
     root = Path(manifest["active_root"]).resolve(strict=True)
     # Only deploy to the exact originally authorized worktree, never symlinks.
-    if str(root) != "/home/esteban/Sync/Projects/AI/CodexBridge-agent":
+    if root != ACTIVE_ROOT.resolve(strict=True):
         result["reason"] = "root_mismatch"
         return result
     if git(root, "branch", "--show-current") != "feature/file-instruction-ws-bridge":
@@ -115,7 +117,7 @@ def apply(stage: Path) -> dict:
     if Path(os.readlink(Path("/proc") / str(old_pid) / "cwd")).resolve() != root:
         result["reason"] = "service_worktree_mismatch"
         return result
-    config = Path("/home/esteban/.config/codexbridge/file-executor.json")
+    config = OPERATOR_CONFIG
     if config.is_symlink() or not config.is_file():
         result["reason"] = "config_invalid"
         return result
