@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Explicit operator-controlled live application of a staged release on Frida.
+# LEGACY — do not use for ordinary Gateway code deploys. Canonical operator entrypoint: python3 scripts/deploy_gateway.py.
 # Run ON FRIDA with sudo, after staging from devel3. No git dependency.
 set -euo pipefail
 if [[ "$EUID" -ne 0 || "$#" -ne 2 || "$1" != "--apply" ]]; then
