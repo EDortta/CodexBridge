@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "target": "frida",
+  "profile": "code-only",
+  "files": [
+    {
+      "path": "gateway/app/services/agent_hub.py",
+      "previous_sha256": "24b8a7b51b55ca37a521b957be0cbc7d76bd434a341a344bc3e4574890bd860e",
+      "target_sha256": "055d5cf6c0f110359ffc42b2c51e7b8638fcad40ae357f62c1fc700ca57afc8f"
+    },
+    {
+      "path": "gateway/app/services/store.py",
+      "previous_sha256": "04bf558d25f149c54d81efc072825facd22dc090f424bd1fef60e866234d1487",
+      "target_sha256": "291d353a0e26c23a5ca31b1f212e245f0c907253f5f728379e14ff33de9ca9f3"
+    }
+  ]
+}

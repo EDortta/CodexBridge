@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Idempotent Gateway code updater: package -> transfer -> check -> apply -> verify -> publish.
 
-One operator-facing command on devel3:
-    python3 scripts/update_frida_gateway.py
+LEGACY OAuth-138 updater, retained for historical compatibility.
+Canonical operator entrypoint for new releases:
+    python3 scripts/deploy_gateway.py
 
 The remote interpreter only uses Python stdlib; no Git on frida. On the first
 rollout this updater has a narrow, explicit scope (four OAuth files), while

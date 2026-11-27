@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PR #145: deploy only the two approved Gateway modules, with evidence.
+"""LEGACY PR-specific deploy. Use scripts/deploy_gateway.py for every new code-only Gateway release.
 
 Run on devel3 from a checked-out CodexBridge branch containing PR #145:
   python3 scripts/deploy_pr145_gateway_with_evidence.py --apply
