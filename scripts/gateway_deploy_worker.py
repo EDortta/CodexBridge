@@ -6,6 +6,7 @@ local on frida, and only bounded sanitized outcome fields travel to devel3.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -235,12 +236,30 @@ def main() -> int:
     stage = Path(sys.argv[1])
     if not IDENT.fullmatch(stage.name):
         return 2
+    lock_path = Path("/run/lock/codexbridge-gateway-deploy.lock")
     try:
-        result = apply(stage)
-    except Exception:
+        with lock_path.open("a+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                result = {
+                    "id": stage.name, "status": "failed",
+                    "reason": "deploy_locked", "rollback": "not_needed",
+                    "healthy": False,
+                }
+            else:
+                try:
+                    result = apply(stage)
+                except Exception:
+                    result = {
+                        "id": stage.name, "status": "failed",
+                        "reason": "fatal_error", "rollback": "failed",
+                        "healthy": False,
+                    }
+    except OSError:
         result = {
             "id": stage.name, "status": "failed", "reason": "fatal_error",
-            "rollback": "failed", "healthy": False,
+            "rollback": "not_needed", "healthy": False,
         }
     try:
         write_receipt(stage, result)
