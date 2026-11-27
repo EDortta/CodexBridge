@@ -122,7 +122,8 @@ def apply(stage: Path) -> dict:
         result["reason"] = "config_invalid"
         return result
     cfg = json.loads(config.read_text())
-    if (cfg.get("branch") != "feature/file-instruction-ws-bridge" or
+    if (cfg.get("project") != "codexbridge" or
+            cfg.get("branch") != "feature/file-instruction-ws-bridge" or
             Path(cfg.get("root", "")).resolve() != root):
         result["reason"] = "config_mismatch"
         return result
@@ -148,6 +149,7 @@ def apply(stage: Path) -> dict:
         shutil.copy2(root / name, path)
     modified = False
     committed = False
+    release_head = None
     try:
         for name in FILES:
             dest = root / name
@@ -160,6 +162,7 @@ def apply(stage: Path) -> dict:
         git(root, "add", "--", *FILES)
         git(root, "commit", "-m", "release(agent): apply PR145 reconciliation modules")
         committed = True
+        release_head = git(root, "rev-parse", "HEAD")
         if git(root, "status", "--porcelain"):
             raise RuntimeError("post_commit_dirty")
         if not restart() or not ready(old_pid):
@@ -173,8 +176,9 @@ def apply(stage: Path) -> dict:
         if modified:
             try:
                 if committed:
-                    if git(root, "status", "--porcelain"):
-                        raise RuntimeError("dirty_during_rollback")
+                    if (git(root, "status", "--porcelain") or
+                            git(root, "rev-parse", "HEAD") != release_head):
+                        raise RuntimeError("drift_during_rollback")
                     git(root, "revert", "--no-edit", "HEAD")
                 else:
                     for name in FILES:
