@@ -138,8 +138,13 @@ def apply(stage: Path) -> dict:
         outcome["reason"] = "backup_collision"
         return outcome
     backup.mkdir(parents=True, mode=0o700)
+    ownership = {}
     for name in FILES:
-        shutil.copy2(TARGET / name, backup / name)
+        source = TARGET / name
+        metadata = source.stat()
+        ownership[name] = (metadata.st_uid, metadata.st_gid, stat.S_IMODE(metadata.st_mode))
+        shutil.copy2(source, backup / name)
+        os.chown(backup / name, metadata.st_uid, metadata.st_gid)
     outcome["backup_created"] = True
     changed = False
     try:
@@ -177,6 +182,9 @@ def apply(stage: Path) -> dict:
                     source = backup / name
                     temporary = dest.with_name("." + name + ".rollback.tmp")
                     shutil.copy2(source, temporary)
+                    uid, gid, mode = ownership[name]
+                    os.chown(temporary, uid, gid)
+                    os.chmod(temporary, mode)
                     os.replace(temporary, dest)
                 restored = tuple(digest(TARGET / name) for name in FILES) == OLD
                 outcome["rollback"] = (
