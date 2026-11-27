@@ -67,7 +67,7 @@ def run_evidenced(command: list[str], *, feature: str, timeout: int,
                     for line in iter(process.stdout.readline, b""):
                         output.write(line)
                         output.flush()
-                        if LIVE_MARKERS.fullmatch(line.rstrip(b"\\r\\n")):
+                        if LIVE_MARKERS.fullmatch(line.rstrip(b"\r\n")):
                             print(line.decode("ascii").rstrip(), flush=True)
                     process.stdout.close()
                 reader = threading.Thread(target=capture, daemon=True)
@@ -80,7 +80,7 @@ def run_evidenced(command: list[str], *, feature: str, timeout: int,
                     process.wait()
                 reader.join(timeout=5)
                 if failure == "timeout":
-                    output.write(b"\\nTIMEOUT\\n")
+                    output.write(b"\nTIMEOUT\n")
             else:
                 process = subprocess.run(
                     command, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT,
@@ -92,7 +92,7 @@ def run_evidenced(command: list[str], *, feature: str, timeout: int,
             output.write(b"\\nTIMEOUT\\n")
         except OSError:
             rc, failure = 125, "spawn_failed"
-            output.write(b"\\nSPAWN_FAILED\\n")
+            output.write(b"\nSPAWN_FAILED\n")
     raw = log.read_bytes()
     text = raw.decode("utf-8", errors="replace")
     counts: dict[str, int] = {}
