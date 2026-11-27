@@ -16,10 +16,16 @@ from pathlib import Path
 import re
 import secrets
 import subprocess
+import threading
 import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+LIVE_MARKERS = re.compile(
+    rb"^(?:ARMED|INTERRUPTION_TRIGGERED|LOCAL_OUTCOME|AGENT_RESTARTED|"
+    rb"GATEWAY_VERIFICATION_REQUIRED|ACCEPTANCE|REASON)="
+    rb"[A-Za-z0-9._=-]{1,128}$"
+)
 SUMMARY = re.compile(r"(\d+) (passed|failed|skipped|errors?|warnings?)\b")
 FAILED = re.compile(r"^FAILED (tests/[A-Za-z0-9_./:\[\]-]+)", re.MULTILINE)
 
@@ -31,7 +37,8 @@ def _git(*args: str) -> str:
 
 
 def run_evidenced(command: list[str], *, feature: str, timeout: int,
-                  state_root: Path, publisher: Path | None) -> tuple[int, dict, Path]:
+                  state_root: Path, publisher: Path | None,
+                  live_markers: bool = False) -> tuple[int, dict, Path]:
     if not command:
         raise ValueError("command required")
     started = datetime.now(timezone.utc)
@@ -46,14 +53,43 @@ def run_evidenced(command: list[str], *, feature: str, timeout: int,
     with log.open("wb") as output:
         os.chmod(log, 0o600)
         try:
-            process = subprocess.run(
-                command, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL, timeout=timeout, check=False,
-            )
-            rc = process.returncode
+            if live_markers:
+                # Read the child's output as it arrives. Only a strict
+                # allowlist of progress markers is echoed to the console;
+                # all other data remains in the private evidence log.
+                process = subprocess.Popen(
+                    command, cwd=ROOT, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                    bufsize=0,
+                )
+                def capture() -> None:
+                    assert process.stdout is not None
+                    for line in iter(process.stdout.readline, b""):
+                        output.write(line)
+                        output.flush()
+                        if LIVE_MARKERS.fullmatch(line.rstrip(b"\r\n")):
+                            print(line.decode("ascii").rstrip(), flush=True)
+                    process.stdout.close()
+                reader = threading.Thread(target=capture, daemon=True)
+                reader.start()
+                try:
+                    rc = process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    rc, failure = 124, "timeout"
+                    process.kill()
+                    process.wait()
+                reader.join(timeout=5)
+                if failure == "timeout":
+                    output.write(b"\nTIMEOUT\n")
+            else:
+                process = subprocess.run(
+                    command, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL, timeout=timeout, check=False,
+                )
+                rc = process.returncode
         except subprocess.TimeoutExpired:
             rc, failure = 124, "timeout"
-            output.write(b"\nTIMEOUT\n")
+            output.write(b"\\nTIMEOUT\\n")
         except OSError:
             rc, failure = 125, "spawn_failed"
             output.write(b"\nSPAWN_FAILED\n")
@@ -62,7 +98,7 @@ def run_evidenced(command: list[str], *, feature: str, timeout: int,
     counts: dict[str, int] = {}
     for value, label in SUMMARY.findall(text):
         counts[label] = int(value)
-    branch = _git("branch", "--show-current")
+    branch = _git("branch", "--show-current") or "detached"
     commit = _git("rev-parse", "HEAD")
     status = "success" if rc == 0 else "failed"
     report = {
@@ -80,7 +116,7 @@ def run_evidenced(command: list[str], *, feature: str, timeout: int,
         },
         "detail": "Sanitized evidence; raw execution output stays private on executor.",
     }
-    safe_branch = re.sub(r"[^A-Za-z0-9_.-]", "-", branch)
+    safe_branch = re.sub(r"[^A-Za-z0-9_.-]", "-", branch) or "detached"
     relative = f"CodexBridge/{feature}/{safe_branch}/{started:%Y-%m-%d}/{run_id}/manifest.json"
     envelope = {"relative_path": relative, "report": report}
     (directory / "manifest.json").write_text(
@@ -125,6 +161,7 @@ def main(argv=None):
     p.add_argument("--feature", default="file-instruction-ws-bridge")
     p.add_argument("--timeout", type=int, default=300)
     p.add_argument("--no-publish", action="store_true", help="CI only; local manifest remains mandatory")
+    p.add_argument("--live-markers", action="store_true", help="Show only allowlisted test progress markers; keep raw output private")
     p.add_argument("command", nargs=argparse.REMAINDER)
     args = p.parse_args(argv)
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", args.feature):
@@ -139,7 +176,8 @@ def main(argv=None):
         ))) / "publisher.py"
     )
     exit_code, _, _ = run_evidenced(command, feature=args.feature, timeout=args.timeout,
-                                  state_root=root, publisher=publisher)
+                                  state_root=root, publisher=publisher,
+                                  live_markers=args.live_markers)
     return exit_code
 
 
