@@ -206,7 +206,7 @@ def fetch_receipt(job: dict) -> dict | None:
         "none", "invalid_manifest", "source_mismatch", "baseline_unknown",
         "preflight_unhealthy", "backup_exists", "apply_failed",
         "restart_failed", "post_apply_unhealthy", "rollback_failed",
-        "invalid_stage", "invalid_target", "fatal_error",
+        "invalid_stage", "invalid_target", "deploy_locked", "fatal_error",
     }:
         raise ValueError("invalid_remote_reason")
     return {key: data[key] for key in ("id", "status", "rollback", "healthy", "reason")}
