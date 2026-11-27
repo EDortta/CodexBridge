@@ -3810,3 +3810,32 @@ tests/
 ### `tests/unit/test_evidence_query.py`
 
 > Verifies manifest sanitization, traversal denial, evidence.query roundtrip, and matching gateway correlation.
+
+### `scripts/apply_pr145_gateway.py`
+
+> Privileged fail-closed two-module Gateway deployment with SHA-256 checks, atomic replacement, health polling, private backup and verified rollback.
+
+- `digest(path)`
+- `service_running()`
+- `healthy()`
+- `wait_healthy(seconds)`
+- `restart()`
+- `diagnosis(backup)`
+- `apply(stage)`
+- `main()`
+
+### `scripts/deploy_pr145_gateway_with_evidence.py`
+
+> Operator-side SSH deployment orchestration; publishes sanitized outcome to development-evidences through publisher.py.
+
+- `sha256(data)`
+- `git(*arguments)`
+- `verify_sources()`
+- `run(args, **kwargs)`
+- `publish(report, relative)`
+- `read_receipt(path)`
+- `main(argv)`
+
+### `tests/unit/test_pr145_gateway_deploy.py`
+
+> Deterministic tests for safe PR145 Gateway application, baseline denial, idempotency and rollback outcomes.
