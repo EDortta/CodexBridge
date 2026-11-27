@@ -3933,3 +3933,31 @@ tests/
 ### `tests/unit/test_accept_pr145_interruption.py`
 
 > Mocked tests for the live Agent interruption observer's request-ID reuse, wrong-profile denial, restart trigger, durable failed receipt and safety.
+
+### `scripts/verify_agent_deploy_resume.py`
+
+> Read-only verification of published Agent deploy recovery: existing deployment ID, receipt, Git commit, release hashes, service PID and no mutation after `--resume`.
+
+- `checked(*args)`
+- `snapshot(job_id)`
+- `verify(job_id)`
+- `main(argv)`
+
+### `tests/unit/test_agent_resume_recovery.py`
+
+> Deterministic disconnected-client simulation with a detached receipt writer; ensures `--resume` never re-launches the worker, plus no-mutation and failure-gate tests.
+
+### `scripts/probe_agent_detached_worker.py`
+
+> Non-mutating real user-systemd detached-worker test: terminates only a client process after launch acknowledgment and requires a durable worker receipt, without restarting the live Agent.
+
+- `atomically_write(path, data)`
+- `validated_stage(stage)`
+- `probe_worker(stage)`
+- `probe_client(stage)`
+- `drill()`
+- `main(argv)`
+
+### `tests/unit/test_agent_detach_probe.py`
+
+> No-systemd safety tests for probe receipt, duplicate receipt refusal, stage path confinement and failed detached start.
