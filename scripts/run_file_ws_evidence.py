@@ -98,7 +98,7 @@ def run_evidenced(command: list[str], *, feature: str, timeout: int,
     counts: dict[str, int] = {}
     for value, label in SUMMARY.findall(text):
         counts[label] = int(value)
-    branch = _git("branch", "--show-current")
+    branch = _git("branch", "--show-current") or "detached"
     commit = _git("rev-parse", "HEAD")
     status = "success" if rc == 0 else "failed"
     report = {
