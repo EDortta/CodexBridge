@@ -3919,3 +3919,17 @@ tests/
 ### `tests/unit/test_deploy_agent.py`
 
 > Deterministic tests for deployment recovery, commit/revert, configuration and baseline gates, readiness and evidence publication failures.
+
+### `scripts/accept_pr145_interruption.py`
+
+> Controlled one-shot live Agent interruption observer; only restarts the user Agent for the specifically preauthorized running test request; checks fail-closed durable local interrupted receipt, and requires independent Gateway verification.
+
+- `systemctl(*args)`
+- `pid()`
+- `preflight(request_id, inbox, config, expected_root)`
+- `observe(request_id, old_pid, inbox, *, timeout, poll)`
+- `main(argv)`
+
+### `tests/unit/test_accept_pr145_interruption.py`
+
+> Mocked tests for the live Agent interruption observer's request-ID reuse, wrong-profile denial, restart trigger, durable failed receipt and safety.
