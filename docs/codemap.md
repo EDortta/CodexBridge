@@ -3883,13 +3883,39 @@ tests/
 
 ### `scripts/deploy_agent.py`
 
-> Fail-closed Agent deployment preflight; checks live systemd process worktree and operator-approved file executor branch/root. Deployment intentionally blocked until a transactional release is implemented.
+> Canonical Agent deployment on devel3. Preflight active systemd workspace, stage pinned code, launch detached user service, recover receipt by ID and publish sanitized evidence.
 
-- `command(*args)`
-- `systemd_property(name)`
-- `check_current_agent()`
+- `cmd(*args, timeout)`
+- `required(*args)`
+- `git(path, *args)`
+- `sha(data)`
+- `service_property(name)`
+- `source_bytes(commit, name)`
+- `preflight()`
+- `path_for(job_id)`
+- `save(job)`
+- `load(job_id)`
+- `stage(job, manifest)`
+- `start(job, directory)`
+- `fetch(job)`
+- `publish(job)`
+- `reconcile(job)`
 - `main(argv)`
+
+### `scripts/agent_release_worker.py`
+
+> Independent systemd-user worker updating precisely two Agent modules in the approved feature worktree via release commit; rollback by revert and service restart; local durable receipt.
+
+- `cmd(*args, cwd, timeout)`
+- `digest(path)`
+- `service_pid()`
+- `restart()`
+- `ready(previous_pid, seconds)`
+- `git(root, *args)`
+- `receipt(stage, payload)`
+- `apply(stage)`
+- `main()`
 
 ### `tests/unit/test_deploy_agent.py`
 
-> Deterministic read-only Agent deployment preflight tests; checks explicit refusal to apply until safe release mechanics exist.
+> Deterministic tests for deployment recovery, commit/revert, configuration and baseline gates, readiness and evidence publication failures.
