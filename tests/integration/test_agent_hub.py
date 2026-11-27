@@ -232,3 +232,129 @@ async def test_control_replay_still_happens_within_max_age(factory) -> None:
     await hub.register("E1", websocket)
 
     assert [payload["payload"]["task_id"] for payload in websocket.sent] == [pausing_id]
+
+
+@pytest.mark.asyncio
+async def test_reconnect_replays_only_running_file_task_and_preserves_slot(factory) -> None:
+    """Only an outstanding deterministic TEST file task is redelivered."""
+    running_file = await _make_task(
+        factory, instruction='{"schemaVersion":1,"requestId":"reconnect-001"}',
+        state=TaskState.RUNNING,
+    )
+    running_codex = await _make_task(
+        factory, instruction="not safe to replay", state=TaskState.RUNNING
+    )
+    await _make_task(factory, instruction="already completed", state=TaskState.COMPLETED)
+    async with factory() as session:
+        file_task = await session.get(store.TaskModel, running_file)
+        file_task.engine = "file"
+        file_task.mode = "test"
+        await session.commit()
+
+    hub = AgentHub(factory)
+    ws = DummyWebSocket()
+    await hub.register("E1", ws)
+
+    assert len(ws.sent) == 1
+    dispatched = ws.sent[0]
+    assert dispatched["type"] == "task.dispatch"
+    assert dispatched["payload"]["task_id"] == running_file
+    assert dispatched["payload"]["engine"] == "file"
+    assert dispatched["payload"]["mode"] == "test"
+    assert dispatched["payload"]["instruction"] == file_task.instruction
+    assert running_file in hub.running_tasks["E1"]
+    assert running_codex not in hub.running_tasks["E1"]
+    assert await hub.dispatch_next("E1") is None
+
+
+@pytest.mark.asyncio
+async def test_reconnect_orphan_finishes_gateway_task_without_second_execution(
+    factory, tmp_path
+) -> None:
+    """Gateway replay + real Agent handler + durable receipt + terminal DB state."""
+    import json
+    import subprocess
+    import sys
+
+    from agent.codex_bridge_agent.config import AgentSettings
+    from agent.codex_bridge_agent.service import AgentService
+    from shared.protocol import AgentEnvelope
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "feature/test"],
+                   check=True)
+    marker = tmp_path / "must-not-execute"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "project": "p1", "branch": "feature/test", "root": str(root),
+        "profiles": {"verify": {"argv": [sys.executable, "-c",
+            "from pathlib import Path; Path(" + repr(str(marker)) + ").touch()"],
+            "timeout_seconds": 10}},
+    }))
+    config_path.chmod(0o600)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir(mode=0o700)
+    request = json.dumps({
+        "schemaVersion": 1, "requestId": "orphan-001",
+        "project": "p1", "branch": "feature/test", "profile": "verify",
+    })
+    (inbox / "orphan-001.running").write_text(request)
+    task_id = await _make_task(factory, instruction=request, state=TaskState.RUNNING)
+    async with factory() as session:
+        task = await session.get(store.TaskModel, task_id)
+        task.engine = "file"
+        task.mode = "test"
+        await session.commit()
+
+    hub = AgentHub(factory)
+    gateway_ws = DummyWebSocket()
+    await hub.register("E1", gateway_ws)
+    assert len(gateway_ws.sent) == 1
+    assert gateway_ws.sent[0]["payload"]["task_id"] == task_id
+
+    class AgentSocket:
+        def __init__(self):
+            self.sent = []
+        async def send(self, message):
+            self.sent.append(AgentEnvelope.model_validate_json(message))
+
+    service = AgentService(AgentSettings(
+        executor_id="E1",
+        file_executor_config_file=str(config_path),
+        file_executor_inbox=str(inbox),
+    ))
+    service.projects = {"p1": ProjectRegistration(
+        project_id="p1", name="Project", path=str(root),
+    )}
+    agent_ws = AgentSocket()
+    await service._handle_dispatch(
+        agent_ws, AgentEnvelope.model_validate(gateway_ws.sent[0])
+    )
+
+    assert [item.type.value for item in agent_ws.sent] == [
+        "task.ack", "task.result"
+    ]
+    result = agent_ws.sent[-1].payload
+    assert result["task_id"] == task_id
+    assert result["final_state"] == "failed"
+    assert result["file_receipt"]["reason"] == "interrupted"
+    assert not marker.exists()
+    assert (inbox / "orphan-001[DONE].json").exists()
+
+    async with factory() as session:
+        updated = await store.store_result(
+            session, task_id, result, TaskState.FAILED
+        )
+        assert updated.state == TaskState.FAILED.value
+        assert json.loads(updated.result_json)["file_receipt"]["reason"] == "interrupted"
+    await hub.mark_task_finished("E1", task_id)
+    assert task_id not in hub.running_tasks["E1"]
+
+    repeated = AgentSocket()
+    await service._handle_dispatch(
+        repeated, AgentEnvelope.model_validate(gateway_ws.sent[0])
+    )
+    assert repeated.sent[-1].payload["file_receipt"] == result["file_receipt"]
+    assert not marker.exists()

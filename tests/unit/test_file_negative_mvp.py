@@ -148,7 +148,39 @@ def test_interrupted_running_request_is_not_reexecuted(harness):
     assert result["status"] == "failed"
     assert result["reason"] == "interrupted"
     assert not harness["marker"].exists()
-    # A retry cannot restart an interrupted run.
-    with pytest.raises(FileDispatchDenied, match="request_id_collision"):
-        dispatch(harness, request)
+    # An identical retry reports the same interrupted result, with no rerun.
+    assert dispatch(harness, request) == result
     assert not harness["marker"].exists()
+
+
+def test_reconnect_recovers_orphan_running_without_reexecution(harness):
+    request = payload(ident="reconnect-orphan")
+    path = harness["inbox"] / "reconnect-orphan.running"
+    path.write_text(request["instruction"])
+    receipt = dispatch(harness, request)
+    assert receipt["status"] == "failed"
+    assert receipt["reason"] == "interrupted"
+    assert receipt["instructionSha256"] == hashlib.sha256(
+        request["instruction"].encode()
+    ).hexdigest()
+    assert (harness["inbox"] / "reconnect-orphan[DONE].json").is_file()
+    assert not list(harness["inbox"].glob("*.running"))
+    assert not (harness["inbox"] / "reconnect-orphan.json").exists()
+    assert not harness["marker"].exists()
+    assert dispatch(harness, request) == receipt
+    assert not harness["marker"].exists()
+
+
+def test_reconnect_rejects_changed_orphan_instruction(harness):
+    request = payload(ident="reconnect-changed")
+    (harness["inbox"] / "reconnect-changed.running").write_text(
+        request["instruction"]
+    )
+    changed = dict(request)
+    changed["instruction"] = json.dumps(
+        json.loads(request["instruction"]), separators=(",", ":")
+    )
+    with pytest.raises(FileDispatchDenied, match="request_id_collision"):
+        dispatch(harness, changed)
+    assert not harness["marker"].exists()
+    assert (harness["inbox"] / "reconnect-changed.running").is_file()

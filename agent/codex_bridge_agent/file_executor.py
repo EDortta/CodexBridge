@@ -119,7 +119,10 @@ def process_once(inbox: Path, config: dict, *, only_id: str | None = None) -> li
                     continue
                 outcome = {
                     "requestId": ident, "status": "failed", "reason": "interrupted",
-                    "finishedAt": _utc(), "exitCode": None
+                    "finishedAt": _utc(), "exitCode": None,
+                    # Preserve request identity for safe retry of the same
+                    # instruction, but never execute an orphaned .running.
+                    "instructionSha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                 }
                 _record(inbox, outcome, ident)
                 os.replace(path, inbox / (ident + "[DONE].json"))

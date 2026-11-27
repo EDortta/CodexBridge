@@ -73,6 +73,27 @@ class AgentHub:
             control_replay = await store.list_tasks_requiring_control_replay(
                 session, executor_id, max_age_seconds=self.control_replay_max_age_seconds
             )
+            file_replay = await store.list_running_file_tasks_for_replay(
+                session, executor_id
+            )
+        if file_replay:
+            self.running_tasks.setdefault(executor_id, set()).update(task.id for task in file_replay)
+            for task in file_replay:
+                # Only replay an already-running TEST task. The Agent will
+                # consult the durable requestId receipt or fail an orphaned
+                # .running closed, never execute that instruction twice.
+                await self.send(executor_id, hub_envelope(
+                    executor_id, AgentMessageType.TASK_DISPATCH.value, {
+                        "task_id": task.id,
+                        "project_id": task.project_id,
+                        "instruction": task.instruction,
+                        "mode": task.mode,
+                        "timeout_seconds": task.timeout_seconds,
+                        "continue_session_id": task.session_id,
+                        "engine": task.engine,
+                        "issue_ref": task.issue_ref,
+                    },
+                ))
         if replay:
             self.running_tasks.setdefault(executor_id, set()).update(task.id for task in replay)
             for task in replay:

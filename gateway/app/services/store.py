@@ -3300,6 +3300,27 @@ async def get_recent_logs(
     return list(reversed(list(result.scalars())))
 
 
+async def list_running_file_tasks_for_replay(
+    session: AsyncSession, executor_id: str
+) -> list[TaskModel]:
+    """Outstanding deterministic TEST tasks, replayed on reconnect.
+
+    Never requeue LLM tasks or revive terminal/cancelled tasks. The Agent's
+    durable requestId receipt determines whether a file instruction already
+    ran; replaying the envelope must never execute a finished request twice.
+    """
+    result = await session.execute(
+        select(TaskModel)
+        .where(TaskModel.executor_id == executor_id)
+        .where(TaskModel.engine == "file")
+        .where(TaskModel.mode == "test")
+        .where(TaskModel.state == TaskState.RUNNING.value)
+        .order_by(TaskModel.created_at.asc())
+        .limit(100)
+    )
+    return list(result.scalars())
+
+
 async def list_tasks_requiring_cancel_replay(
     session: AsyncSession,
     executor_id: str,
