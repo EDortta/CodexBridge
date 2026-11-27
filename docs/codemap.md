@@ -3880,3 +3880,16 @@ tests/
 ### `tests/unit/test_canonical_gateway_deploy.py`
 
 > Isolation-based tests for canonical deploy, rollback, baseline denial, disconnected client, durable IDs, and unconfirmed publication.
+
+### `scripts/deploy_agent.py`
+
+> Fail-closed Agent deployment preflight; checks live systemd process worktree and operator-approved file executor branch/root. Deployment intentionally blocked until a transactional release is implemented.
+
+- `command(*args)`
+- `systemd_property(name)`
+- `check_current_agent()`
+- `main(argv)`
+
+### `tests/unit/test_deploy_agent.py`
+
+> Deterministic read-only Agent deployment preflight tests; checks explicit refusal to apply until safe release mechanics exist.
