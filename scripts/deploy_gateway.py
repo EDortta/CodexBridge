@@ -225,6 +225,7 @@ def publish(job: dict) -> bool:
         "rollback": job.get("rollback", "not_needed"),
         "health_checked": job.get("healthy", False),
         "files": job["files"],
+        "release_hashes": job.get("release_hashes", []),
         "logs_local_only": True, "secrets_included": False,
     }
     with tempfile.TemporaryDirectory() as scratch:
@@ -309,6 +310,7 @@ def main() -> int:
         job = {
             "id": ident, "state": "preparing", "branch": branch, "commit": commit,
             "files": [entry["path"] for entry in manifest["files"]],
+            "release_hashes": [dict(entry) for entry in manifest["files"]],
             "evidence": "pending",
         }
         save(job)
