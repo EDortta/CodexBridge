@@ -57,3 +57,37 @@ do release commit e comprovante imutável, confirmar pelo Gateway que o
 executor se reconectou. Submeter tarefa nova e provocar interrupção do
 Agent durante execução: recibo terminal interrupted, nenhuma repetição.
 Somente então concluir o PR #145.
+
+## Homologação de recuperação sem novo deploy (issue #149)
+
+O `--apply` só aceita uma transição de versão; depois de uma implantação
+bem-sucedida, deve bloquear novas aplicações com os mesmos arquivos.
+Para não reimplantar o Agent apenas para testar o cliente desconectado:
+
+1. Rodar o teste determinístico em que um processo separado grava o recibo
+   enquanto o cliente está ausente. O `--resume` reconstitui o estado sem
+   chamar `systemd-run` nem reiniciar o worker.
+2. Validar a recuperação do deployment REAL já publicado: o verificador
+   captura PID, HEAD, hashes dos dois módulos e SHA-256 do recibo e do job,
+   chama `--resume` e exige que todas as observações permaneçam idênticas.
+3. Executar com o publicador de evidências para registrar PASS/FAIL. Não
+   publicar segredos nem logs brutos.
+
+Exemplo no checkout de `development` atualizado que contenha o verificador:
+
+```bash
+cd /tmp/codexbridge-agent-recovery
+python3 scripts/run_file_ws_evidence.py \
+  --feature agent-deploy-recovery --timeout 60 -- \
+  python3 scripts/verify_agent_deploy_resume.py \
+  --deploy-id ag-20261127T181509Z-52d0af5a
+```
+
+Este procedimento não reinicia o Agent. Ele demonstra (a) que um cliente
+que perdeu a resposta pode recuperar um recibo persistido sem reiniciar o
+worker em teste determinístico e (b) que `--resume` de uma implantação
+bem-sucedida não causa alterações no ambiente real.
+
+**Limite de evidência:** não é um ensaio de matar um cliente durante um
+deploy real *in progress*. Não declarar esse cenário homologado até haver
+um candidato de release distinto e uma janela de implantação controlada.
