@@ -91,3 +91,29 @@ bem-sucedida não causa alterações no ambiente real.
 **Limite de evidência:** não é um ensaio de matar um cliente durante um
 deploy real *in progress*. Não declarar esse cenário homologado até haver
 um candidato de release distinto e uma janela de implantação controlada.
+
+### Teste real sem alteração no Agent: encerramento do cliente
+
+O `scripts/probe_agent_detached_worker.py` cria um worker temporário
+`systemd-run --user` que grava um recibo privado após breve atraso.
+O orquestrador encerra intencionalmente **somente o processo cliente**
+quando recebe o ACK de lançamento; prova então que o worker concluiu
+independentemente dele. **Não altera a release, não reinicia o Agent,
+não testa rollback nem representa uma implantação de produção.**
+
+Executar pelo publicador oficial:
+
+```bash
+cd /tmp/codexbridge-agent-recovery
+python3 scripts/run_file_ws_evidence.py \
+  --feature agent-deploy-detach-probe --timeout 60 -- \
+  python3 scripts/probe_agent_detached_worker.py
+```
+
+Resultados esperados: `CLIENT_TERMINATED=true`,
+`DETACHED_WORKER=COMPLETED`, `AGENT_RESTARTED=false`,
+`PROBE=PASS` no log privado; evidência sanitizada publicada
+no `development-evidences`.
+
+O teste não encerra o terminal do usuário: mata apenas o cliente filho
+dedicado ao ensaio, sem efeitos sobre a sessão do operador.
