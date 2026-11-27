@@ -3839,3 +3839,44 @@ tests/
 ### `tests/unit/test_pr145_gateway_deploy.py`
 
 > Deterministic tests for safe PR145 Gateway application, baseline denial, idempotency and rollback outcomes.
+
+### `scripts/deploy_gateway.py`
+
+> Canonical deploy entrypoint. Validates declarative release, stages over SSH, launches detached remote worker, reconciles receipts, publishes sanitized evidence.
+
+- `sha(raw)`
+- `run(argv, *, stdin, timeout)`
+- `ssh(command, *, stdin, timeout)`
+- `file_path(job_id)`
+- `read_manifest()`
+- `git(*args)`
+- `save(record)`
+- `load(job_id)`
+- `remote_dir(job_id)`
+- `preflight()`
+- `stage(job)`
+- `start_detached(job)`
+- `fetch_receipt(job)`
+- `publish(job)`
+- `reconcile(job)`
+- `main()`
+
+### `scripts/gateway_deploy_worker.py`
+
+> Detached root worker on frida. Verifies code-only manifest and baseline; applies patch with backup, readiness and rollback, persists receipt independent of terminal.
+
+- `digest(path)`
+- `active()`
+- `health()`
+- `ready(seconds)`
+- `restart()`
+- `journal_local(backup)`
+- `validate(stage)`
+- `install(source, destination, marker)`
+- `apply(stage)`
+- `write_receipt(stage, payload)`
+- `main()`
+
+### `tests/unit/test_canonical_gateway_deploy.py`
+
+> Isolation-based tests for canonical deploy, rollback, baseline denial, disconnected client, durable IDs, and unconfirmed publication.
