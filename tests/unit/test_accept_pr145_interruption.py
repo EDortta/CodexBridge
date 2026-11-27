@@ -86,3 +86,25 @@ def test_rejects_unexpected_profile_before_restart(tmp_path, monkeypatch):
     monkeypatch.setattr(acceptance, "systemctl", lambda *_a: pytest.fail("restart forbidden"))
     with pytest.raises(acceptance.Refuse, match="unexpected_running_instruction"):
         acceptance.observe(request_id, 123, inbox, timeout=1)
+
+
+def test_live_markers_visible_and_detached_evidence_path(tmp_path, monkeypatch, capsys):
+    import sys
+    from scripts import run_file_ws_evidence as evidence
+    monkeypatch.setattr(evidence, "_git", lambda *args: "" if "branch" in args else "a" * 40)
+    code = (
+        "import time; print('ARMED=pr145-visible',flush=True); "
+        "print('PRIVATE=do-not-display',flush=True); time.sleep(0.02)"
+    )
+    rc, report, folder = evidence.run_evidenced(
+        [sys.executable, "-u", "-c", code], feature="pr145-live-interruption",
+        timeout=5, state_root=tmp_path, publisher=None, live_markers=True,
+    )
+    assert rc == 0
+    shown = capsys.readouterr().out
+    assert "ARMED=pr145-visible" in shown
+    assert "PRIVATE=do-not-display" not in shown
+    assert "PRIVATE=do-not-display" in (folder / "execution.log").read_text()
+    assert "detached" in json.loads((folder / "manifest.json").read_text()).get("branch", "") or report["branch"] == ""
+    publication = json.loads((folder / "publication.json").read_text())
+    assert "/detached/" in publication["relative_path"]
