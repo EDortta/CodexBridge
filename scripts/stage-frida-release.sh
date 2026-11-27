@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Package a tested checkout on devel3, transfer via SSH; NO git on Frida.
+# LEGACY — retained for historical full-release staging only. Canonical operator entrypoint: python3 scripts/deploy_gateway.py.
 # This command STAGES ONLY. No database writes, restart or live file changes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
